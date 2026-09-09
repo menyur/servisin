@@ -1,0 +1,35 @@
+import { createClient } from "@/lib/supabase/server";
+import { getAllBookingsAdmin, getAllServicesAdmin } from "@/app/actions/admin";
+import AdminDashboard from "@/components/AdminDashboard";
+import Link from "next/link";
+
+export default async function AdminPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return (
+      <div className="max-w-md mx-auto px-5 py-20 text-center">
+        <p className="text-ink-soft mb-4">Kamu harus masuk sebagai admin untuk membuka halaman ini.</p>
+        <Link href="/login" className="btn-primary">Masuk</Link>
+      </div>
+    );
+  }
+
+  const [bookingsRes, servicesRes] = await Promise.all([getAllBookingsAdmin(), getAllServicesAdmin()]);
+
+  if (bookingsRes.error) {
+    return (
+      <div className="max-w-md mx-auto px-5 py-20 text-center">
+        <p className="text-coral font-medium">{bookingsRes.error}</p>
+        <p className="text-ink-soft text-sm mt-2">
+          Untuk mengaktifkan akses admin, ubah kolom <code>role</code> pada tabel <code>profiles</code> akun kamu menjadi <code>'admin'</code> lewat Supabase Table Editor.
+        </p>
+      </div>
+    );
+  }
+
+  return <AdminDashboard initialBookings={bookingsRes.bookings} initialServices={servicesRes.services || []} />;
+}
