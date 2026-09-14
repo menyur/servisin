@@ -114,10 +114,18 @@ create policy "user can view own profile" on profiles for select using (auth.uid
 drop policy if exists "user can update own profile" on profiles;
 create policy "user can update own profile" on profiles for update using (auth.uid() = id);
 
+-- Function terpisah untuk cek role admin. WAJIB pakai function ini (bukan subquery
+-- langsung ke "profiles" di dalam policy tabel "profiles" itu sendiri), karena subquery
+-- langsung akan memicu RLS lagi saat dievaluasi -> infinite recursion.
+create or replace function is_admin()
+returns boolean as $$
+  select exists (
+    select 1 from profiles where id = auth.uid() and role = 'admin'
+  );
+$$ language sql security definer set search_path = public;
+
 drop policy if exists "admin can view all profiles" on profiles;
-create policy "admin can view all profiles" on profiles for select using (
-  exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-);
+create policy "admin can view all profiles" on profiles for select using (is_admin());
 
 -- bookings: user hanya boleh lihat/insert booking miliknya, admin boleh lihat & ubah semua
 drop policy if exists "user can view own bookings" on bookings;
@@ -127,14 +135,10 @@ drop policy if exists "user can insert own bookings" on bookings;
 create policy "user can insert own bookings" on bookings for insert with check (auth.uid() = user_id);
 
 drop policy if exists "admin can view all bookings" on bookings;
-create policy "admin can view all bookings" on bookings for select using (
-  exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-);
+create policy "admin can view all bookings" on bookings for select using (is_admin());
 
 drop policy if exists "admin can update all bookings" on bookings;
-create policy "admin can update all bookings" on bookings for update using (
-  exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
-);
+create policy "admin can update all bookings" on bookings for update using (is_admin());
 
 -- booking juga boleh dicari publik lewat kode booking (untuk fitur "Lacak Pesanan" tanpa login)
 -- catatan: query publik dibatasi hanya lewat kolom "code" di level aplikasi (server action),
