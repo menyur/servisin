@@ -10,6 +10,7 @@ import {
 import { formatRupiah } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
 import { ClipboardList, Tags, Users } from "lucide-react";
+import { ServiceIcon } from "@/lib/icons";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
 const ALL_ROLES = ["customer", "technician", "admin"];
@@ -168,7 +169,10 @@ function PriceRow({ service, onSave }) {
 
   return (
     <div className="card">
-      <p className="font-semibold text-navy text-sm mb-1">{service.name}</p>
+      <p className="font-semibold text-navy text-sm mb-1 flex items-center gap-2">
+        <ServiceIcon name={service.icon} size={16} />
+        {service.name}
+      </p>
       <p className="text-xs text-ink-soft mb-3">{service.categories?.name}</p>
       <div className="flex gap-2">
         <input type="number" className="input" value={value} onChange={(e) => setValue(e.target.value)} />

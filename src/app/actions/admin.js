@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { sendTechnicianAssignmentEmail } from "@/lib/email";
 import { revalidatePath } from "next/cache";
 
 async function requireAdmin(supabase) {
@@ -101,6 +102,31 @@ export async function assignTechnicianAdmin(bookingId, technicianId) {
     .eq("id", bookingId);
 
   if (error) return { error: error.message };
+
+  if (technicianId) {
+    const [{ data: booking }, { data: technician }] = await Promise.all([
+      supabase
+        .from("bookings")
+        .select("*, services(name), profiles!bookings_user_id_fkey(name, phone)")
+        .eq("id", bookingId)
+        .single(),
+      supabase.from("profiles").select("name, email").eq("id", technicianId).single(),
+    ]);
+
+    if (booking && technician) {
+      await sendTechnicianAssignmentEmail(technician.email, {
+        code: booking.code,
+        service_name: booking.services?.name,
+        technician_name: technician.name,
+        customer_name: booking.profiles?.name || "",
+        customer_phone: booking.profiles?.phone || "",
+        booking_date: booking.booking_date,
+        booking_time: booking.booking_time,
+        address: booking.address,
+        notes: booking.notes,
+      });
+    }
+  }
 
   revalidatePath("/admin");
   return { ok: true };

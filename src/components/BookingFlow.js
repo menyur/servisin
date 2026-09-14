@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { CheckCircle2, ChevronLeft, Paperclip, QrCode, Wallet, Landmark, Banknote } from "lucide-react";
-import { CategoryIcon } from "@/lib/icons";
+import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { calculateTotal, formatRupiah } from "@/lib/pricing";
 import { createBooking, confirmSimulatedPayment } from "@/app/actions/bookings";
 import { createClient } from "@/lib/supabase/client";
@@ -198,11 +198,16 @@ function StepService({ categories, services, serviceId, setServiceId, onNext }) 
           <button
             key={s.id}
             onClick={() => setServiceId(s.id)}
-            className={`text-left card !p-4 border-2 ${serviceId === s.id ? "border-brand ring-4 ring-brand-tint" : "border-line"}`}
+            className={`text-left card !p-4 border-2 flex gap-3 ${serviceId === s.id ? "border-brand ring-4 ring-brand-tint" : "border-line"}`}
           >
-            <p className="font-semibold text-navy text-sm mb-1">{s.name}</p>
-            <p className="text-xs text-ink-soft mb-2">{s.description}</p>
-            <p className="text-brand font-bold text-sm">{formatRupiah(s.base_price)}</p>
+            <span className="w-9 h-9 rounded-lg bg-brand-tint text-brand flex items-center justify-center shrink-0">
+              <ServiceIcon name={s.icon} size={16} />
+            </span>
+            <span>
+              <p className="font-semibold text-navy text-sm mb-1">{s.name}</p>
+              <p className="text-xs text-ink-soft mb-2">{s.description}</p>
+              <p className="text-brand font-bold text-sm">{formatRupiah(s.base_price)}</p>
+            </span>
           </button>
         ))}
       </div>

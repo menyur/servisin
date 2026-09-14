@@ -3,7 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { calculateTotal, genBookingCode } from "@/lib/pricing";
 import { createPaymentTransaction } from "@/lib/payment";
-import { sendBookingConfirmationEmail } from "@/lib/email";
+import { sendBookingConfirmationEmail, sendAdminNewBookingEmail } from "@/lib/email";
 import { revalidatePath } from "next/cache";
 
 export async function createBooking(input) {
@@ -85,6 +85,21 @@ export async function createBooking(input) {
     address: booking.address,
     total_price: booking.total_price,
   });
+
+  const { data: adminEmails } = await supabase.rpc("get_admin_emails");
+  if (adminEmails?.length) {
+    await sendAdminNewBookingEmail(adminEmails, {
+      code: booking.code,
+      service_name: service.name,
+      customer_name: profile?.name || user.email,
+      customer_phone: profile?.phone || "",
+      booking_date: booking.booking_date,
+      booking_time: booking.booking_time,
+      address: booking.address,
+      payment_method: booking.payment_method,
+      total_price: booking.total_price,
+    });
+  }
 
   revalidatePath("/dashboard");
 

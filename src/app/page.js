@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Search, ArrowRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { CategoryIcon } from "@/lib/icons";
+import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { formatRupiah } from "@/lib/pricing";
 
 export default async function HomePage({ searchParams }) {
@@ -78,6 +78,9 @@ export default async function HomePage({ searchParams }) {
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {cat.services.map((s) => (
                   <div key={s.id} className="card flex flex-col">
+                    <div className="w-11 h-11 rounded-xl bg-brand-tint text-brand flex items-center justify-center mb-3">
+                      <ServiceIcon name={s.icon} size={20} />
+                    </div>
                     <h4 className="font-display font-semibold text-navy mb-1.5">{s.name}</h4>
                     <p className="text-sm text-ink-soft flex-1 min-h-[40px]">{s.description}</p>
                     <div className="flex items-baseline justify-between my-3">

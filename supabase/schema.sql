@@ -24,10 +24,14 @@ create table if not exists services (
   base_price numeric(12,0) not null,
   price_note text default 'mulai dari', -- 'mulai dari' | '/unit' | 'per jam' dst
   duration_estimate text,
+  icon text not null default 'wrench', -- nama ikon lucide-react untuk thumbnail
   is_active boolean not null default true,
   sort_order int not null default 0,
   created_at timestamptz not null default now()
 );
+
+-- Migrasi untuk database yang sudah pernah dibuat sebelum kolom ini ada.
+alter table services add column if not exists icon text not null default 'wrench';
 
 -- ---------- profiles (extends Supabase auth.users) ----------
 -- Supabase sudah punya tabel auth.users bawaan untuk login/password.
@@ -119,7 +123,13 @@ create policy "user can view own profile" on profiles for select using (auth.uid
 drop policy if exists "user can update own profile" on profiles;
 create policy "user can update own profile" on profiles for update using (auth.uid() = id);
 
--- Function terpisah untuk cek role admin. WAJIB pakai function ini (bukan subquery
+-- Function untuk ambil daftar email admin (dipakai server saat kirim notifikasi
+-- booking baru). Aman dipanggil oleh siapa saja yang sedang login karena hanya
+-- mengembalikan alamat email, bukan data profil lain.
+create or replace function get_admin_emails()
+returns setof text as $$
+  select email from profiles where role = 'admin';
+$$ language sql security definer set search_path = public;
 -- langsung ke "profiles" di dalam policy tabel "profiles" itu sendiri), karena subquery
 -- langsung akan memicu RLS lagi saat dievaluasi -> infinite recursion.
 create or replace function is_admin()
