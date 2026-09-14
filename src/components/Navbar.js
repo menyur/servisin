@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Wrench, ClipboardList, LogOut, LayoutDashboard, ShieldCheck } from "lucide-react";
+import { Wrench, ClipboardList, LogOut, LayoutDashboard, ShieldCheck, HardHat } from "lucide-react";
 import { signOut } from "@/app/actions/auth";
 
 export default function Navbar({ user, profile }) {
@@ -21,6 +21,11 @@ export default function Navbar({ user, profile }) {
           {profile?.role === "admin" && (
             <Link href="/admin" className="hover:text-brand flex items-center gap-1.5">
               <ShieldCheck size={16} /> Admin
+            </Link>
+          )}
+          {(profile?.role === "technician" || profile?.role === "admin") && (
+            <Link href="/technician" className="hover:text-brand flex items-center gap-1.5">
+              <HardHat size={16} /> Tugas Saya
             </Link>
           )}
         </nav>

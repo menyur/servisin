@@ -60,12 +60,17 @@ create table if not exists bookings (
   payment_method text
     check (payment_method in ('qris','virtual_account','e_wallet','cod')),
   payment_reference text,                  -- id transaksi dari payment gateway
+  technician_id uuid references profiles(id), -- teknisi yang ditugaskan (diisi admin)
   created_at timestamptz not null default now()
 );
 
 create index if not exists idx_bookings_user on bookings(user_id);
 create index if not exists idx_bookings_status on bookings(status);
 create index if not exists idx_bookings_code on bookings(code);
+
+-- Migrasi untuk database yang sudah pernah dibuat sebelum kolom ini ada.
+alter table bookings add column if not exists technician_id uuid references profiles(id);
+create index if not exists idx_bookings_technician on bookings(technician_id);
 
 -- ---------- auto-create profile saat user baru mendaftar ----------
 -- Catatan: "security definer set search_path = public" wajib ada di sini.
@@ -127,6 +132,9 @@ $$ language sql security definer set search_path = public;
 drop policy if exists "admin can view all profiles" on profiles;
 create policy "admin can view all profiles" on profiles for select using (is_admin());
 
+drop policy if exists "admin can update all profiles" on profiles;
+create policy "admin can update all profiles" on profiles for update using (is_admin());
+
 -- bookings: user hanya boleh lihat/insert booking miliknya, admin boleh lihat & ubah semua
 drop policy if exists "user can view own bookings" on bookings;
 create policy "user can view own bookings" on bookings for select using (auth.uid() = user_id);
@@ -139,6 +147,16 @@ create policy "admin can view all bookings" on bookings for select using (is_adm
 
 drop policy if exists "admin can update all bookings" on bookings;
 create policy "admin can update all bookings" on bookings for update using (is_admin());
+
+-- teknisi hanya boleh lihat & update booking yang ditugaskan ke mereka
+drop policy if exists "technician can view assigned bookings" on bookings;
+create policy "technician can view assigned bookings" on bookings for select using (technician_id = auth.uid());
+
+drop policy if exists "technician can update assigned bookings" on bookings;
+create policy "technician can update assigned bookings" on bookings for update using (technician_id = auth.uid());
+
+-- admin boleh melihat daftar semua profil untuk keperluan pilih/tugaskan teknisi
+-- (kebijakan "admin can view all profiles" di atas sudah mencakup ini)
 
 -- booking juga boleh dicari publik lewat kode booking (untuk fitur "Lacak Pesanan" tanpa login)
 -- catatan: query publik dibatasi hanya lewat kolom "code" di level aplikasi (server action),

@@ -21,7 +21,7 @@ export async function getAllBookingsAdmin() {
 
   const { data } = await supabase
     .from("bookings")
-    .select("*, services(name, category_id), profiles(name, phone, email)")
+    .select("*, services(name, category_id), profiles!bookings_user_id_fkey(name, phone, email), technician:profiles!bookings_technician_id_fkey(id, name)")
     .order("created_at", { ascending: false });
 
   return { bookings: data || [] };
@@ -64,4 +64,44 @@ export async function getAllServicesAdmin() {
 
   const { data } = await supabase.from("services").select("*, categories(name)").order("category_id");
   return { services: data || [] };
+}
+
+export async function getAllUsersAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
+  return { users: data || [] };
+}
+
+export async function updateUserRoleAdmin(userId, role) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const allowed = ["customer", "technician", "admin"];
+  if (!allowed.includes(role)) return { error: "Role tidak valid." };
+
+  const { error } = await supabase.from("profiles").update({ role }).eq("id", userId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+export async function assignTechnicianAdmin(bookingId, technicianId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { error } = await supabase
+    .from("bookings")
+    .update({ technician_id: technicianId || null })
+    .eq("id", bookingId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  return { ok: true };
 }

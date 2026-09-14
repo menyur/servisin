@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { getAllBookingsAdmin, getAllServicesAdmin } from "@/app/actions/admin";
+import { getAllBookingsAdmin, getAllServicesAdmin, getAllUsersAdmin } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import Link from "next/link";
 
@@ -18,7 +18,11 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes] = await Promise.all([getAllBookingsAdmin(), getAllServicesAdmin()]);
+  const [bookingsRes, servicesRes, usersRes] = await Promise.all([
+    getAllBookingsAdmin(),
+    getAllServicesAdmin(),
+    getAllUsersAdmin(),
+  ]);
 
   if (bookingsRes.error) {
     return (
@@ -31,5 +35,11 @@ export default async function AdminPage() {
     );
   }
 
-  return <AdminDashboard initialBookings={bookingsRes.bookings} initialServices={servicesRes.services || []} />;
+  return (
+    <AdminDashboard
+      initialBookings={bookingsRes.bookings}
+      initialServices={servicesRes.services || []}
+      initialUsers={usersRes.users || []}
+    />
+  );
 }
