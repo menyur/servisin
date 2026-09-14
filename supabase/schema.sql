@@ -68,10 +68,13 @@ create index if not exists idx_bookings_status on bookings(status);
 create index if not exists idx_bookings_code on bookings(code);
 
 -- ---------- auto-create profile saat user baru mendaftar ----------
+-- Catatan: "security definer set search_path = public" wajib ada di sini.
+-- Tanpa itu, trigger yang dipanggil oleh sistem Auth Supabase bisa gagal dengan
+-- error "relation profiles does not exist" walau tabelnya sudah ada di schema public.
 create or replace function handle_new_user()
 returns trigger as $$
 begin
-  insert into profiles (id, name, email, phone, role)
+  insert into public.profiles (id, name, email, phone, role)
   values (
     new.id,
     coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
@@ -81,7 +84,7 @@ begin
   );
   return new;
 end;
-$$ language plpgsql security definer;
+$$ language plpgsql security definer set search_path = public;
 
 drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
@@ -94,23 +97,41 @@ alter table bookings enable row level security;
 alter table services enable row level security;
 alter table categories enable row level security;
 
+-- catatan: setiap policy di-drop dulu sebelum dibuat ulang, supaya file ini
+-- aman dijalankan berkali-kali tanpa error "policy already exists".
+
 -- categories & services: siapa saja boleh membaca (untuk ditampilkan di landing page)
+drop policy if exists "categories readable by everyone" on categories;
 create policy "categories readable by everyone" on categories for select using (true);
+
+drop policy if exists "services readable by everyone" on services;
 create policy "services readable by everyone" on services for select using (true);
 
 -- profiles: user hanya boleh lihat/ubah profil sendiri, admin boleh lihat semua
+drop policy if exists "user can view own profile" on profiles;
 create policy "user can view own profile" on profiles for select using (auth.uid() = id);
+
+drop policy if exists "user can update own profile" on profiles;
 create policy "user can update own profile" on profiles for update using (auth.uid() = id);
+
+drop policy if exists "admin can view all profiles" on profiles;
 create policy "admin can view all profiles" on profiles for select using (
   exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
 );
 
 -- bookings: user hanya boleh lihat/insert booking miliknya, admin boleh lihat & ubah semua
+drop policy if exists "user can view own bookings" on bookings;
 create policy "user can view own bookings" on bookings for select using (auth.uid() = user_id);
+
+drop policy if exists "user can insert own bookings" on bookings;
 create policy "user can insert own bookings" on bookings for insert with check (auth.uid() = user_id);
+
+drop policy if exists "admin can view all bookings" on bookings;
 create policy "admin can view all bookings" on bookings for select using (
   exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
 );
+
+drop policy if exists "admin can update all bookings" on bookings;
 create policy "admin can update all bookings" on bookings for update using (
   exists (select 1 from profiles p where p.id = auth.uid() and p.role = 'admin')
 );
@@ -118,6 +139,7 @@ create policy "admin can update all bookings" on bookings for update using (
 -- booking juga boleh dicari publik lewat kode booking (untuk fitur "Lacak Pesanan" tanpa login)
 -- catatan: query publik dibatasi hanya lewat kolom "code" di level aplikasi (server action),
 -- bukan lewat select bebas, supaya data tidak bisa di-scan massal.
+drop policy if exists "public can view booking by exact code" on bookings;
 create policy "public can view booking by exact code" on bookings for select using (true);
 -- (kebijakan di atas cukup permisif untuk kesederhanaan demo; jika ingin lebih ketat,
 --  ganti dengan Postgres function security definer yang hanya menerima parameter "code".)
