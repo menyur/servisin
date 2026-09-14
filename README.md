@@ -16,7 +16,8 @@ Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platfor
 2. Buka **SQL Editor**, jalankan isi file `supabase/schema.sql` (buat tabel, relasi, RLS).
 3. Masih di SQL Editor, jalankan isi file `supabase/seed.sql` (mengisi kategori & layanan awal).
 4. (Opsional, untuk upload foto keluhan) Buka **Storage**, buat bucket baru bernama `attachments`, set ke **public**.
-5. Buka **Project Settings → API**, salin `Project URL` dan `anon public key`.
+5. (Opsional, untuk foto profil & banner) Buka **Storage**, buat bucket baru bernama `profile-media`, set ke **public**.
+6. Buka **Project Settings → API**, salin `Project URL` dan `anon public key`.
 
 ## 2. Jalankan aplikasi
 

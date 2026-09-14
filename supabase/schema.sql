@@ -41,9 +41,15 @@ create table if not exists profiles (
   name text not null,
   email text not null,
   phone text,
+  avatar_url text,
+  banner_url text,
   role text not null default 'customer' check (role in ('customer', 'technician', 'admin')),
   created_at timestamptz not null default now()
 );
+
+-- Migrasi untuk database yang sudah pernah dibuat sebelum kolom ini ada.
+alter table profiles add column if not exists avatar_url text;
+alter table profiles add column if not exists banner_url text;
 
 -- ---------- bookings ----------
 create table if not exists bookings (

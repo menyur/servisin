@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Wrench, ClipboardList, LogOut, LayoutDashboard, ShieldCheck, HardHat } from "lucide-react";
+import { Wrench, ClipboardList, LogOut, LayoutDashboard, ShieldCheck, HardHat, UserRound } from "lucide-react";
 import { signOut } from "@/app/actions/auth";
 
 export default function Navbar({ user, profile }) {
@@ -35,6 +35,13 @@ export default function Navbar({ user, profile }) {
             <>
               <Link href="/dashboard" className="btn-outline hidden sm:inline-flex !px-4 !py-2 text-sm">
                 <LayoutDashboard size={16} /> Dashboard
+              </Link>
+              <Link href="/profile" className="w-9 h-9 rounded-full bg-brand-tint text-brand flex items-center justify-center overflow-hidden border-2 border-line hover:border-brand transition shrink-0" aria-label="Profil saya">
+                {profile?.avatar_url ? (
+                  <img src={profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                ) : (
+                  <UserRound size={16} />
+                )}
               </Link>
               <form action={signOut}>
                 <button className="btn-outline !px-4 !py-2 text-sm" type="submit">

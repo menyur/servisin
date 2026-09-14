@@ -16,7 +16,7 @@ export default async function RootLayout({ children }) {
 
   let profile = null;
   if (user) {
-    const { data } = await supabase.from("profiles").select("name, role").eq("id", user.id).single();
+    const { data } = await supabase.from("profiles").select("name, role, avatar_url").eq("id", user.id).single();
     profile = data;
   }
 
