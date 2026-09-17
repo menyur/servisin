@@ -4,14 +4,14 @@
  * isinya hanya dicetak ke log server supaya alur booking tetap bisa diuji coba.
  */
 
-async function sendMail({ to, subject, html }) {
+async function sendMail({ to, subject, html, attachments }) {
   if (!to || (Array.isArray(to) && to.length === 0)) {
     return { simulated: true, skipped: "no-recipient" };
   }
 
   if (!process.env.RESEND_API_KEY) {
     console.log("[email disimulasikan — RESEND_API_KEY belum diisi]");
-    console.log(`To: ${Array.isArray(to) ? to.join(", ") : to}\nSubject: ${subject}`);
+    console.log(`To: ${Array.isArray(to) ? to.join(", ") : to}\nSubject: ${subject}${attachments?.length ? `\nAttachments: ${attachments.map((a) => a.filename).join(", ")}` : ""}`);
     return { simulated: true };
   }
 
@@ -23,12 +23,17 @@ async function sendMail({ to, subject, html }) {
       to,
       subject,
       html,
+      ...(attachments?.length ? { attachments } : {}),
     });
     return { simulated: false };
   } catch (err) {
     console.error("Gagal mengirim email:", err.message);
     return { simulated: true, error: err.message };
   }
+}
+
+function paymentLabel(m) {
+  return { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" }[m] || m || "-";
 }
 
 function detailRow(label, value) {
@@ -65,6 +70,32 @@ export async function sendBookingConfirmationEmail(booking) {
   return sendMail({ to: booking.customer_email, subject: `Booking ${booking.code} diterima — Servisin`, html });
 }
 
+/** Ke semua admin: pelanggan mengklaim pembayaran dengan bukti transfer — perlu verifikasi. */
+export async function sendAdminPaymentProofEmail(adminEmails, claim) {
+  const html = wrapper(
+    "Pelanggan mengirim bukti pembayaran",
+    `
+      <p>Pesanan berikut menunggu verifikasi pembayaran:</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Kode booking", `<strong>${claim.code}</strong>`)}
+        ${detailRow("Pelanggan", `${claim.customer_name} (${claim.customer_phone || "-"})`)}
+        ${detailRow("Metode", claim.method)}
+        ${detailRow("Klaim jumlah", `<strong>Rp${Number(claim.amount).toLocaleString("id-ID")}</strong>`)}
+        ${detailRow("Tagihan", `Rp${Number(claim.total).toLocaleString("id-ID")}`)}
+        ${detailRow("Bukti", claim.proofUrl ? `<a href="${claim.proofUrl}">Lihat gambar bukti transfer</a>` : "-")}
+      </table>
+      ${
+        Number(claim.amount) !== Number(claim.total)
+          ? `<p style="color:#C3492F;font-weight:bold;">⚠ Jumlah diklaim TIDAK sama dengan tagihan — periksa buktinya.</p>`
+          : `<p style="color:#2C8F63;">✓ Jumlah sesuai tagihan.</p>`
+      }
+      <p>Buka panel Admin → tab "Pesanan Masuk" → filter "Perlu konfirmasi bayar" untuk memverifikasi.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Bukti bayar ${claim.code} menunggu verifikasi — Servisin`, html });
+}
+
 /** Ke semua admin, setiap ada booking baru masuk. */
 export async function sendAdminNewBookingEmail(adminEmails, booking) {
   const html = wrapper(
@@ -85,6 +116,125 @@ export async function sendAdminNewBookingEmail(adminEmails, booking) {
   );
 
   return sendMail({ to: adminEmails, subject: `Pesanan baru ${booking.code} — Servisin`, html });
+}
+
+/** Ke semua admin, setiap ada laporan baru dari pelanggan/teknisi. */
+export async function sendAdminNewReportEmail(adminEmails, report) {
+  const roleLabel = report.author_role === "technician" ? "Teknisi" : "Pelanggan";
+  const excerpt = (report.content || "").length > 300 ? `${report.content.slice(0, 300)}…` : report.content || "-";
+  const html = wrapper(
+    "Ada laporan baru masuk",
+    `
+      <p>Laporan baru dari ${roleLabel.toLowerCase()} perlu ditinjau.</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Judul", `<strong>${report.title}</strong>`)}
+        ${detailRow("Pelapor", `${report.author_name} (${roleLabel})`)}
+        ${detailRow("Email pelapor", report.author_email || "-")}
+        ${report.booking_code ? detailRow("Pesanan terkait", report.booking_code) : ""}
+        ${detailRow("Isi laporan", excerpt.replace(/\n/g, "<br />"))}
+      </table>
+      <p>Buka panel Admin → tab "Laporan Masuk" untuk meninjau dan memproses laporan ini.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Laporan baru: ${report.title} — Servisin`, html });
+}
+
+/** Ke pelapor, saat admin menandai laporannya selesai ditindaklanjuti. */
+export async function sendReportResolvedEmail(reporterEmail, report) {
+  const html = wrapper(
+    "Laporanmu sudah ditindaklanjuti",
+    `
+      <p>Halo ${report.reporter_name || ""},</p>
+      <p>Laporan yang kamu kirim telah ditinjau dan ditandai <strong>selesai</strong> oleh tim Servisin.</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Judul laporan", `<strong>${report.title}</strong>`)}
+        ${report.booking_code ? detailRow("Pesanan terkait", report.booking_code) : ""}
+        ${detailRow("Status", "Selesai ditindaklanjuti")}
+      </table>
+      ${
+        report.admin_note
+          ? `<div style="background:#EAF4EC;border-radius:10px;padding:12px 16px;margin:16px 0;">
+               <p style="margin:0 0 4px;font-size:13px;color:#2E7D46;font-weight:bold;">Catatan dari tim kami:</p>
+               <p style="margin:0;white-space:pre-wrap;">${report.admin_note}</p>
+             </div>`
+          : "<p>Terima kasih atas laporanmu — masukanmu membantu kami memperbaiki layanan.</p>"
+      }
+      <p>Kalau kamu merasa masalahnya belum benar-benar selesai, buka lagi laporanmu di dashboard dan kirim laporan lanjutan.</p>
+    `
+  );
+
+  return sendMail({ to: reporterEmail, subject: `Laporanmu telah diselesaikan — Servisin`, html });
+}
+
+/** Ke pelanggan: struk PDF terlampir saat pesanan selesai. */
+export async function sendReceiptEmail(customerEmail, receipt) {
+  const html = wrapper(
+    "Pesananmu sudah selesai — ini struknya",
+    `
+      <p>Halo ${receipt.customer_name || ""},</p>
+      <p>Pesanan <strong>${receipt.code}</strong> telah ditandai <strong style="color:#2C8F63;">selesai</strong>. Terima kasih sudah mempercayakan kebutuhan servicemu pada Servisin!</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Layanan", receipt.service_name)}
+        ${detailRow("Jadwal", `${receipt.booking_date} · ${receipt.booking_time}`)}
+        ${receipt.technician_name ? detailRow("Teknisi", receipt.technician_name) : ""}
+        ${detailRow("Metode bayar", receipt.payment_method ? paymentLabel(receipt.payment_method) : "-")}
+        ${Number(receipt.discount_amount) > 0 ? detailRow("Diskon voucher", `<span style="color:#2C8F63;">- Rp${Number(receipt.discount_amount).toLocaleString("id-ID")}</span>`) : ""}
+        ${detailRow(`<strong>Total dibayar</strong>`, `<strong>Rp${Number(receipt.total_price).toLocaleString("id-ID")}</strong>`)}
+      </table>
+      <p>Struk lengkap terlampir dalam bentuk PDF (<strong>${receipt.filename}</strong>) — simpan sebagai bukti pesanan.</p>
+      <p style="color:#4C6272;font-size:13px;">Puas dengan layanannya? Pesan lagi kapan saja lewat halaman utama, atau bagikan Servisin ke tetangga yang butuh.</p>
+    `
+  );
+
+  return sendMail({
+    to: customerEmail,
+    subject: `Struk pesanan ${receipt.code} — Servisin`,
+    html,
+    attachments: [
+      {
+        filename: receipt.filename,
+        content: receipt.pdfBase64,
+        contentType: "application/pdf",
+      },
+    ],
+  });
+}
+
+/** Email laporan bulanan CSV ke semua admin (lampiran CSV). */
+export async function sendMonthlyReportEmail(adminEmails, report) {
+  const periodLabel = new Date(report.year, report.month - 1).toLocaleDateString("id-ID", {
+    month: "long",
+    year: "numeric",
+  });
+
+  const rupiah = (n) => `Rp${Number(n || 0).toLocaleString("id-ID")}`;
+
+  const html = `
+    <div style="font-family:sans-serif;color:#10202B;">
+      <h2 style="color:#0B3556;">Laporan bulanan Servisin — ${periodLabel}</h2>
+      <p>Rekap pesanan selesai bulan ${periodLabel}.</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Pesanan selesai", `<strong>${report.count}</strong>`)}
+        ${detailRow("Total pendapatan", `<strong>${rupiah(report.totalRevenue)}</strong>`)}
+        ${detailRow("Komisi platform", `<strong style="color:#2C8F63;">${rupiah(report.totalCommission)}</strong>`)}
+      </table>
+      <p>Laporan lengkap per pesanan (18 kolom) terlampir dalam bentuk CSV (<strong>${report.filename}</strong>) — siap dibuka di Excel/Google Sheets.</p>
+    </div>
+  `;
+
+  return sendMail({
+    to: adminEmails,
+    subject: `Laporan bulanan ${periodLabel} — ${report.count} pesanan selesai — Servisin`,
+    html,
+    attachments: [
+      {
+        filename: report.filename,
+        content: report.csvBase64,
+        contentType: "text/csv",
+      },
+    ],
+  });
 }
 
 /** Ke teknisi, saat admin menugaskan mereka ke sebuah booking. */

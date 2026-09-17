@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Camera, User as UserIcon, Save } from "lucide-react";
 import { updateMyProfile } from "@/app/actions/profile";
 import { createClient } from "@/lib/supabase/client";
+import { optimizeImage } from "@/components/ServiceImageUpload";
 import { StatusPill } from "@/components/StatusPipeline";
 
 const ROLE_LABEL = { customer: "Pelanggan", technician: "Teknisi", admin: "Admin" };
@@ -18,9 +19,14 @@ export default function ProfileEditor({ initialProfile }) {
 
   async function uploadImage(file, prefix) {
     const supabase = createClient();
-    const ext = file.name.split(".").pop();
+    // Avatar dibatasi 400px (cukup untuk tampilan lingkaran kecil), banner 1600px.
+    const { file: optimized } = await optimizeImage(file, {
+      maxDim: prefix === "avatar" ? 400 : 1600,
+      quality: prefix === "avatar" ? 0.85 : 0.82,
+    });
+    const ext = optimized.type === "image/webp" ? "webp" : optimized.name.split(".").pop();
     const fileName = `${prefix}-${profile.id}-${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from("profile-media").upload(fileName, file, { upsert: true });
+    const { error } = await supabase.storage.from("profile-media").upload(fileName, optimized, { upsert: true, contentType: optimized.type });
     if (error) throw error;
     const { data } = supabase.storage.from("profile-media").getPublicUrl(fileName);
     return data.publicUrl;

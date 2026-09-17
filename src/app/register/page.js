@@ -1,18 +1,21 @@
 "use client";
 
-import { useFormState } from "react-dom";
+import { useActionState } from "react";
 import Link from "next/link";
 import { signUp } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
+import { AuthIllustration } from "@/components/Illustrations";
 
 export default function RegisterPage() {
-  const [state, formAction] = useFormState(signUp, null);
+  const [state, formAction] = useActionState(signUp, null);
 
   return (
     <div className="max-w-md mx-auto px-5 py-16">
-      <div className="card">
-        <h1 className="font-display text-2xl text-navy mb-1.5">Buat akun Servisin</h1>
-        <p className="text-sm text-ink-soft mb-6">Sudah punya akun? <Link href="/login" className="text-brand font-semibold">Masuk di sini</Link></p>
+      <div className="card relative overflow-hidden">
+        <div className="absolute inset-x-0 top-0 h-28 bg-brand-tint/60 -z-10 pointer-events-none" />
+        <div className="w-40 mx-auto -mt-2 mb-3"><AuthIllustration /></div>
+        <h1 className="font-display text-2xl text-navy mb-1.5 text-center">Buat akun Servisin</h1>
+        <p className="text-sm text-ink-soft mb-6 text-center">Sudah punya akun? <Link href="/login" className="text-brand font-semibold">Masuk di sini</Link></p>
 
         <form action={formAction} className="space-y-4">
           <div>

@@ -16,6 +16,10 @@ import {
   Disc,
   LifeBuoy,
   SprayCan,
+  Brush,
+  Home,
+  Armchair,
+  Shirt,
 } from "lucide-react";
 
 // Key ditulis kebab-case supaya konsisten dengan nilai kolom "icon" di database.
@@ -37,6 +41,10 @@ export const ICONS = {
   disc: Disc,
   "life-buoy": LifeBuoy,
   "spray-can": SprayCan,
+  brush: Brush,
+  home: Home,
+  armchair: Armchair,
+  shirt: Shirt,
 };
 
 // Dipertahankan untuk kompatibilitas kode yang sudah ada (kategori).

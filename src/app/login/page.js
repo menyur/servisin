@@ -1,18 +1,21 @@
 "use client";
 
-import { useFormState } from "react-dom";
+import { useActionState } from "react";
 import Link from "next/link";
 import { signIn } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
+import { AuthIllustration } from "@/components/Illustrations";
 
 export default function LoginPage() {
-  const [state, formAction] = useFormState(signIn, null);
+  const [state, formAction] = useActionState(signIn, null);
 
   return (
     <div className="max-w-md mx-auto px-5 py-16">
-      <div className="card">
-        <h1 className="font-display text-2xl text-navy mb-1.5">Masuk ke Servisin</h1>
-        <p className="text-sm text-ink-soft mb-6">Belum punya akun? <Link href="/register" className="text-brand font-semibold">Daftar di sini</Link></p>
+      <div className="card relative overflow-hidden">
+        <div className="absolute inset-x-0 top-0 h-28 bg-brand-tint/60 -z-10 pointer-events-none" />
+        <div className="w-40 mx-auto -mt-2 mb-3"><AuthIllustration /></div>
+        <h1 className="font-display text-2xl text-navy mb-1.5 text-center">Masuk ke Servisin</h1>
+        <p className="text-sm text-ink-soft mb-6 text-center">Belum punya akun? <Link href="/register" className="text-brand font-semibold">Daftar di sini</Link></p>
 
         <form action={formAction} className="space-y-4">
           <div>
@@ -26,6 +29,9 @@ export default function LoginPage() {
           {state?.error && <p className="text-coral text-sm font-medium">{state.error}</p>}
           <SubmitButton>Masuk</SubmitButton>
         </form>
+        <p className="text-xs text-center mt-4">
+          <Link href="/lupa-password" className="text-ink-soft hover:text-brand">Lupa kata sandi?</Link>
+        </p>
       </div>
     </div>
   );

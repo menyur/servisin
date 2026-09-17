@@ -6,7 +6,8 @@
 insert into categories (id, name, description, icon, sort_order) values
   ('ac', 'Service AC', 'Perawatan dan perbaikan AC rumah & kantor', 'snowflake', 1),
   ('tukang', 'Jasa Tukang Rumah', 'Tukang listrik, ledeng, cat, dan bangunan', 'hammer', 2),
-  ('kendaraan', 'Service Kendaraan', 'Servis motor & mobil panggilan ke lokasi', 'car', 3)
+  ('kendaraan', 'Service Kendaraan', 'Servis motor & mobil panggilan ke lokasi', 'car', 3),
+  ('kebersihan', 'Kebersihan & Laundry', 'Bersih rumah, sofa/kasur, dan laundry setrika', 'brush', 4)
 on conflict (id) do nothing;
 
 insert into services (category_id, name, description, base_price, price_note, duration_estimate, icon, sort_order) values
@@ -30,7 +31,12 @@ insert into services (category_id, name, description, base_price, price_note, du
   ('kendaraan', 'Service Rem & Kaki-kaki', 'Pemeriksaan dan perbaikan sistem rem serta kaki-kaki.', 150000, 'mulai dari', '60-90 menit', 'disc', 3),
   ('kendaraan', 'Tambal Ban & Bantuan Darurat', 'Roadside assistance untuk ban bocor dan kendala darurat.', 50000, 'mulai dari', '30-45 menit', 'life-buoy', 4),
   ('kendaraan', 'Cuci & Detailing Panggilan', 'Cuci dan detailing kendaraan langsung di tempat kamu.', 75000, 'mulai dari', '60-90 menit', 'spray-can', 5),
-  ('kendaraan', 'Lainnya (Service Kendaraan)', 'Keluhan kendaraan lain di luar daftar di atas.', 100000, 'estimasi awal', '60 menit', 'help-circle', 6)
+  ('kendaraan', 'Lainnya (Service Kendaraan)', 'Keluhan kendaraan lain di luar daftar di atas.', 100000, 'estimasi awal', '60 menit', 'help-circle', 6),
+
+  -- Kebersihan & Laundry
+  ('kebersihan', 'Bersih Rumah / Apartemen', 'Menyapu, mengepel, merapikan, dan membersihkan kamar mandi.', 150000, 'mulai dari', '3-4 jam', 'home', 1),
+  ('kebersihan', 'Cuci Sofa & Kasur', 'Semprot-vakum, shampo, dan pengeringan sofa/kasur.', 175000, 'mulai dari', '2-3 jam', 'armchair', 2),
+  ('kebersihan', 'Laundry & Setrika Panggilan', 'Cuci, keringkan, lipat, dan setrika di tempat.', 50000, 'mulai dari', 'per kg / 1-2 hari', 'shirt', 3)
 on conflict do nothing;
 
 -- ---------- update ikon untuk database yang sudah pernah di-seed sebelumnya ----------
@@ -52,3 +58,7 @@ update services set icon = 'disc' where name = 'Service Rem & Kaki-kaki';
 update services set icon = 'life-buoy' where name = 'Tambal Ban & Bantuan Darurat';
 update services set icon = 'spray-can' where name = 'Cuci & Detailing Panggilan';
 update services set icon = 'help-circle' where name = 'Lainnya (Service Kendaraan)';
+update services set icon = 'home' where name = 'Bersih Rumah / Apartemen';
+update services set icon = 'armchair' where name = 'Cuci Sofa & Kasur';
+update services set icon = 'shirt' where name = 'Laundry & Setrika Panggilan';
+update categories set icon = 'brush' where id = 'kebersihan';

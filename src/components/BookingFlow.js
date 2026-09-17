@@ -1,11 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { CheckCircle2, ChevronLeft, Paperclip, QrCode, Wallet, Landmark, Banknote } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, ChevronLeft, Paperclip, QrCode, Wallet, Landmark, Banknote, Ticket } from "lucide-react";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { calculateTotal, formatRupiah } from "@/lib/pricing";
 import { createBooking, confirmSimulatedPayment } from "@/app/actions/bookings";
+import { getMyVouchers } from "@/app/actions/reviews";
 import { createClient } from "@/lib/supabase/client";
+import { optimizeImage } from "@/components/ServiceImageUpload";
+import { EmptyBoxIllustration } from "@/components/Illustrations";
 import Link from "next/link";
 
 const STEP_LABELS = ["Layanan", "Detail & Jadwal", "Rincian Biaya", "Pembayaran"];
@@ -25,9 +28,29 @@ export default function BookingFlow({ categories, services, preselectedServiceId
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const [result, setResult] = useState(null); // { booking, service, payment }
+  const [vouchers, setVouchers] = useState([]); // voucher aktif milik user
+  const [voucherId, setVoucherId] = useState("");
 
   const selectedService = useMemo(() => services.find((s) => s.id === serviceId), [services, serviceId]);
-  const totals = useMemo(() => calculateTotal(selectedService?.base_price || 0), [selectedService]);
+  const appliedVoucher = useMemo(
+    () => vouchers.find((v) => v.id === voucherId) || null,
+    [vouchers, voucherId]
+  );
+  const totals = useMemo(
+    () => calculateTotal(selectedService?.base_price || 0, appliedVoucher?.amount || 0),
+    [selectedService, appliedVoucher]
+  );
+
+  // muat voucher aktif saat alur booking dibuka (gagal diam — tabel mungkin belum ada)
+  useEffect(() => {
+    let alive = true;
+    getMyVouchers().then(({ vouchers: data }) => {
+      if (alive && data) setVouchers(data);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   function update(key, val) {
     setForm((f) => ({ ...f, [key]: val }));
@@ -52,9 +75,11 @@ export default function BookingFlow({ categories, services, preselectedServiceId
     if (!form.attachment) return null;
     try {
       const supabase = createClient();
-      const fileExt = form.attachment.name.split(".").pop();
+      // Foto kondisi/kerusakan dikompres dulu (1400px cukup untuk dokumentasi teknisi).
+      const { file: optimized } = await optimizeImage(form.attachment, { maxDim: 1400, quality: 0.85 });
+      const fileExt = optimized.type === "image/webp" ? "webp" : optimized.name.split(".").pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
-      const { error } = await supabase.storage.from("attachments").upload(fileName, form.attachment);
+      const { error } = await supabase.storage.from("attachments").upload(fileName, optimized, { contentType: optimized.type });
       if (error) throw error;
       const { data } = supabase.storage.from("attachments").getPublicUrl(fileName);
       return data.publicUrl;
@@ -83,6 +108,7 @@ export default function BookingFlow({ categories, services, preselectedServiceId
       notes: form.notes,
       attachmentUrl,
       paymentMethod,
+      voucherId: voucherId || null,
     });
 
     setSubmitting(false);
@@ -153,6 +179,9 @@ export default function BookingFlow({ categories, services, preselectedServiceId
         <StepCost
           service={selectedService}
           totals={totals}
+          vouchers={vouchers}
+          voucherId={voucherId}
+          setVoucherId={setVoucherId}
           onBack={() => goStep(2)}
           onNext={() => goStep(4)}
         />
@@ -163,6 +192,7 @@ export default function BookingFlow({ categories, services, preselectedServiceId
           paymentMethod={paymentMethod}
           setPaymentMethod={setPaymentMethod}
           totals={totals}
+          appliedVoucher={appliedVoucher}
           errors={errors}
           submitting={submitting}
           onBack={() => goStep(3)}
@@ -267,13 +297,37 @@ function StepDetails({ form, update, errors, onBack, onNext }) {
 }
 
 /* ---------- STEP 3 ---------- */
-function StepCost({ service, totals, onBack, onNext }) {
+function StepCost({ service, totals, vouchers, voucherId, setVoucherId, onBack, onNext }) {
   return (
     <div>
       <div className="card mb-6">
         <h3 className="font-display font-semibold text-navy mb-4">Rincian biaya</h3>
         <Row label={`Biaya jasa — ${service?.name || "-"}`} value={formatRupiah(totals.subtotal)} />
         <Row label="Biaya layanan aplikasi" value={formatRupiah(totals.appFee)} />
+
+        {vouchers.length > 0 && (
+          <div className="my-3 rounded-xl bg-mint-tint/60 px-3 py-3">
+            <label className="label !mb-1.5 flex items-center gap-1.5">
+              <Ticket size={13} className="text-mint" /> Pakai voucher diskon
+            </label>
+            <select
+              value={voucherId}
+              onChange={(e) => setVoucherId(e.target.value)}
+              className="input !py-2 text-sm"
+            >
+              <option value="">— Tidak pakai voucher —</option>
+              {vouchers.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.code} — diskon {formatRupiah(v.amount)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {totals.discount > 0 && (
+          <Row label="Diskon voucher" value={`- ${formatRupiah(totals.discount)}`} mint />
+        )}
         <div className="border-t border-line my-3" />
         <Row label="Total pembayaran" value={formatRupiah(totals.total)} bold />
         <p className="text-xs text-ink-soft mt-4">
@@ -288,17 +342,17 @@ function StepCost({ service, totals, onBack, onNext }) {
   );
 }
 
-function Row({ label, value, bold }) {
+function Row({ label, value, bold, mint }) {
   return (
     <div className="flex justify-between items-center py-1.5">
-      <span className={`text-sm ${bold ? "font-bold text-navy" : "text-ink-soft"}`}>{label}</span>
-      <span className={`text-sm ${bold ? "font-display font-bold text-brand text-lg" : "text-navy font-medium"}`}>{value}</span>
+      <span className={`text-sm ${bold ? "font-bold text-navy" : mint ? "text-mint font-semibold" : "text-ink-soft"}`}>{label}</span>
+      <span className={`text-sm ${bold ? "font-display font-bold text-brand text-lg" : mint ? "text-mint font-semibold" : "text-navy font-medium"}`}>{value}</span>
     </div>
   );
 }
 
 /* ---------- STEP 4 ---------- */
-function StepPayment({ paymentMethod, setPaymentMethod, totals, errors, submitting, onBack, onSubmit }) {
+function StepPayment({ paymentMethod, setPaymentMethod, totals, appliedVoucher, errors, submitting, onBack, onSubmit }) {
   return (
     <div>
       <h3 className="font-display font-semibold text-navy mb-4">Pilih metode pembayaran</h3>
@@ -324,7 +378,14 @@ function StepPayment({ paymentMethod, setPaymentMethod, totals, errors, submitti
       </div>
 
       <div className="card mb-6 flex justify-between items-center">
-        <span className="text-sm text-ink-soft">Total pembayaran</span>
+        <span className="text-sm text-ink-soft">
+          Total pembayaran
+          {appliedVoucher && (
+            <span className="block text-[11px] text-mint font-semibold">
+              termasuk diskon voucher {formatRupiah(appliedVoucher.amount)}
+            </span>
+          )}
+        </span>
         <span className="font-display font-bold text-brand text-xl">{formatRupiah(totals.total)}</span>
       </div>
 
@@ -349,6 +410,7 @@ function ConfirmationScreen({ result, paymentMethod, onConfirmPaid, submitting }
   return (
     <div className="max-w-md mx-auto px-5 py-16 text-center">
       <div className="card">
+        <div className="w-28 mx-auto mb-2"><EmptyBoxIllustration /></div>
         <div className="w-14 h-14 rounded-full bg-mint-tint text-mint flex items-center justify-center mx-auto mb-4">
           <CheckCircle2 size={28} />
         </div>
@@ -385,6 +447,12 @@ function ConfirmationScreen({ result, paymentMethod, onConfirmPaid, submitting }
         {isPaid && (
           <div className="bg-mint-tint rounded-xl p-3 mb-6">
             <p className="text-xs font-semibold text-mint">Pembayaran berhasil dikonfirmasi.</p>
+          </div>
+        )}
+
+        {result.voucherWarning && (
+          <div className="bg-amber-tint rounded-xl p-3 mb-4 text-left">
+            <p className="text-xs text-amber font-medium">{result.voucherWarning}</p>
           </div>
         )}
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { trackBookingByCode } from "@/app/actions/bookings";
 import { formatRupiah } from "@/lib/pricing";
 import { STATUS_LABELS, STATUS_STEPS, StatusPipeline, StatusPill } from "@/components/StatusPipeline";
+import { EmptyBoxIllustration } from "@/components/Illustrations";
 
 export default function TrackPage() {
   const [code, setCode] = useState("");
@@ -39,7 +40,12 @@ export default function TrackPage() {
           {loading ? "Mencari..." : "Cari"}
         </button>
       </div>
-      {error && <p className="text-coral text-sm mb-4">{error}</p>}
+      {error && (
+        <div className="card mt-4 flex flex-col items-center gap-2 py-6">
+          <div className="w-40"><EmptyBoxIllustration /></div>
+          <p className="text-coral text-sm font-medium">{error}</p>
+        </div>
+      )}
 
       {booking && (
         <div className="card mt-6">

@@ -1,5 +1,11 @@
 import { createClient } from "@/lib/supabase/server";
-import { getAllBookingsAdmin, getAllServicesAdmin, getAllUsersAdmin } from "@/app/actions/admin";
+import {
+  getAllBookingsAdmin,
+  getAllServicesAdmin,
+  getAllUsersAdmin,
+  getAllReportsAdmin,
+  getAllVouchersAdmin,
+} from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import Link from "next/link";
 
@@ -18,10 +24,13 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
+    getAllReportsAdmin(),
+    getAllVouchersAdmin(),
+    supabase.from("categories").select("id, name").order("sort_order"),
   ]);
 
   if (bookingsRes.error) {
@@ -40,6 +49,10 @@ export default async function AdminPage() {
       initialBookings={bookingsRes.bookings}
       initialServices={servicesRes.services || []}
       initialUsers={usersRes.users || []}
+      initialReports={reportsRes.error ? [] : reportsRes.reports}
+      initialVouchers={vouchersRes.error ? [] : vouchersRes.vouchers || []}
+      vouchersError={vouchersRes.error || null}
+      categories={categoriesRes.data || []}
     />
   );
 }

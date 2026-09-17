@@ -17,7 +17,7 @@ body {
   @apply btn bg-transparent text-brand border-2 border-brand hover:bg-brand-tint;
 }
 .card {
-  @apply bg-white border border-line rounded-2xl p-5;
+  @apply bg-white border border-line rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow;
 }
 .input {
   @apply w-full rounded-xl border-2 border-line px-4 py-2.5 text-sm focus:outline-none focus:border-brand focus:ring-4 focus:ring-brand-tint transition;
@@ -27,4 +27,36 @@ body {
 }
 .pill {
   @apply inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold;
+}
+
+/* ===== CETAK STRUK =====
+   Saat window.print() dipanggil dari modal struk:
+   sembunyikan semua, tampilkan hanya isi struk. */
+@media print {
+  body.printing-receipt * {
+    visibility: hidden !important;
+  }
+  body.printing-receipt .print-area,
+  body.printing-receipt .print-area * {
+    visibility: visible !important;
+  }
+  body.printing-receipt .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 0;
+    overflow: visible !important;
+  }
+  /* sembunyikan elemen kontrol modal saat cetak */
+  body.printing-receipt .no-print {
+    display: none !important;
+  }
+  /* struk di kertas: latar putih, tanpa bayangan */
+  body.printing-receipt .print-area-wrapper {
+    box-shadow: none !important;
+    border: none !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+  }
 }

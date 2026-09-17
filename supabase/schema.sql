@@ -1,10 +1,29 @@
 -- =========================================================
 -- SERVISIN — Skema database (PostgreSQL / Supabase)
 -- Jalankan file ini di Supabase SQL Editor, urut dari atas.
+--
+-- CATATAN: file ini untuk MEMBUAT database baru dari nol.
+-- Kalau database kamu sudah jalan dan hanya butuh update terbaru
+-- (kolom commission_rate), jangan jalankan file ini — cukup jalankan
+-- supabase/migrate-commission-rate.sql saja.
 -- =========================================================
 
 -- ---------- extensions ----------
 create extension if not exists "pgcrypto";
+
+-- ---------- perbaikan izin schema (antisipasi error 42501) ----------
+-- Beberapa project Supabase (terutama setelah remediation Security Advisor)
+-- tidak lagi mengizinkan role `postgres` membuat tabel di schema public,
+-- sehingga file ini bisa gagal dengan "permission denied for schema public".
+-- Blok ini mencoba mengembalikan izin tersebut dan TIDAK AKAN menggagalkan
+-- file ini walau punha gagal (privilege cukup untuk alter table biasa).
+do $$
+begin
+  grant usage on schema public to postgres, anon, authenticated, service_role;
+  grant create on schema public to postgres;
+exception when insufficient_privilege then
+  raise notice 'Skip: tidak ada hak untuk grant schema public (tabel kemungkinan sudah ada semua).';
+end $$;
 
 -- ---------- categories ----------
 create table if not exists categories (
@@ -44,12 +63,35 @@ create table if not exists profiles (
   avatar_url text,
   banner_url text,
   role text not null default 'customer' check (role in ('customer', 'technician', 'admin')),
+  approval_status text not null default 'approved' check (approval_status in ('pending', 'approved', 'rejected')),
+  commission_rate numeric(5,2) not null default 10, -- % komisi platform yang dipotong dari nilai pekerjaan selesai (teknisi)
   created_at timestamptz not null default now()
 );
 
 -- Migrasi untuk database yang sudah pernah dibuat sebelum kolom ini ada.
 alter table profiles add column if not exists avatar_url text;
 alter table profiles add column if not exists banner_url text;
+alter table profiles add column if not exists approval_status text not null default 'approved';
+alter table profiles add column if not exists commission_rate numeric(5,2) not null default 10;
+
+-- Teknisi baru selalu mulai 'pending' menunggu persetujuan admin;
+-- customer & admin langsung 'approved'. (idempoten: fungsi di-replace, trigger di-drop dulu)
+create or replace function set_initial_approval_status()
+returns trigger as $$
+begin
+  if new.role = 'technician' then
+    new.approval_status := 'pending';
+  else
+    new.approval_status := 'approved';
+  end if;
+  return new;
+end;
+$$ language plpgsql set search_path = public;
+
+drop trigger if exists trg_set_approval_status on profiles;
+create trigger trg_set_approval_status
+  before insert on profiles
+  for each row execute function set_initial_approval_status();
 
 -- ---------- bookings ----------
 create table if not exists bookings (
@@ -95,7 +137,7 @@ begin
     coalesce(new.raw_user_meta_data->>'name', split_part(new.email, '@', 1)),
     new.email,
     new.raw_user_meta_data->>'phone',
-    'customer'
+    coalesce(new.raw_user_meta_data->>'role', 'customer')
   );
   return new;
 end;

@@ -2,8 +2,12 @@ import Link from "next/link";
 import { Search, ArrowRight } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
-import { HeroIllustration, CategoryThumb } from "@/components/Illustrations";
+import { HeroIllustration, CategoryThumb, ServiceThumb, TrustFast, TrustPro, TrustPrice, EmptyBoxIllustration, AcHeaderIllustration } from "@/components/Illustrations";
 import { formatRupiah } from "@/lib/pricing";
+
+const CATEGORY_HEADERS = {
+  ac: AcHeaderIllustration,
+};
 
 export default async function HomePage({ searchParams }) {
   const supabase = await createClient();
@@ -49,8 +53,8 @@ export default async function HomePage({ searchParams }) {
             </form>
 
             <div className="flex gap-6 mt-8 text-sm text-ink-soft">
-              <span><strong className="text-navy">3</strong> kategori layanan</span>
-              <span><strong className="text-navy">16+</strong> jenis servis</span>
+              <span><strong className="text-navy">4</strong> kategori layanan</span>
+              <span><strong className="text-navy">19+</strong> jenis servis</span>
               <span><strong className="text-navy">Hari yang sama</strong> teknisi datang</span>
             </div>
           </div>
@@ -58,6 +62,30 @@ export default async function HomePage({ searchParams }) {
           <div className="max-w-md mx-auto lg:max-w-none">
             <HeroIllustration />
           </div>
+        </div>
+      </section>
+
+      {/* KENAPA SERVISIN */}
+      <section className="max-w-6xl mx-auto px-5 py-14 grid sm:grid-cols-3 gap-5">
+        <div className="card flex flex-col items-center text-center gap-3">
+          <div className="w-24"><TrustFast /></div>
+          <h3 className="font-display font-semibold text-navy">Datang tepat waktu</h3>
+          <p className="text-sm text-ink-soft">Pilih jam kedatangan, teknisi siap datang di hari yang sama.</p>
+        </div>
+        <div className="card flex flex-col items-center text-center gap-3">
+          <div className="w-24"><TrustPro /></div>
+          <h3 className="font-display font-semibold text-navy">Teknisi terverifikasi</h3>
+          <p className="text-sm text-ink-soft">
+            Semua teknisi melewati kurasi &amp; penilaian dari pelanggan lain.{' '}
+            <Link href="/teknisi" className="text-brand font-semibold hover:underline">
+              Lihat rating mereka →
+            </Link>
+          </p>
+        </div>
+        <div className="card flex flex-col items-center text-center gap-3">
+          <div className="w-24"><TrustPrice /></div>
+          <h3 className="font-display font-semibold text-navy">Harga transparan</h3>
+          <p className="text-sm text-ink-soft">Harga tercantum jelas di awal, tanpa biaya tersembunyi.</p>
         </div>
       </section>
 
@@ -90,14 +118,23 @@ export default async function HomePage({ searchParams }) {
               <h3 className="font-display text-xl text-navy">{cat.name}</h3>
             </div>
 
+            {CATEGORY_HEADERS[cat.id] && (
+              <div className="rounded-2xl overflow-hidden border border-line shadow-sm mb-6">
+                {(() => { const Header = CATEGORY_HEADERS[cat.id]; return <Header />; })()}
+              </div>
+            )}
+
             {cat.services.length === 0 ? (
-              <p className="text-sm text-ink-soft">Tidak ada layanan yang cocok dengan pencarian.</p>
+              <div className="card flex flex-col items-center text-center py-8 gap-2">
+                <div className="w-44"><EmptyBoxIllustration /></div>
+                <p className="text-sm text-ink-soft">Tidak ada layanan yang cocok dengan pencarian.</p>
+              </div>
             ) : (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
                 {cat.services.map((s) => (
                   <div key={s.id} className="card !p-0 overflow-hidden flex flex-col">
                     <div className="h-24 relative">
-                      <CategoryThumb categoryId={s.category_id} className="w-full h-full" />
+                      <ServiceThumb categoryId={s.category_id} icon={s.icon} imageUrl={s.image_url} className="w-full h-full object-cover" />
                       <div className="absolute bottom-0 left-4 translate-y-1/2 w-11 h-11 rounded-xl bg-white shadow flex items-center justify-center text-brand border border-line">
                         <ServiceIcon name={s.icon} size={20} />
                       </div>

@@ -18,7 +18,8 @@ export default async function TechnicianPage() {
     );
   }
 
-  const { data: profile } = await supabase.from("profiles").select("role, name").eq("id", user.id).single();
+  // select * supaya aman sebelum migrasi commission_rate dijalankan (kolom opsional)
+  const { data: profile } = await supabase.from("profiles").select("*").eq("id", user.id).single();
 
   if (profile?.role !== "technician" && profile?.role !== "admin") {
     return (
@@ -31,7 +32,14 @@ export default async function TechnicianPage() {
     );
   }
 
-  const { bookings } = await getMyAssignments();
+  const { bookings, myRating } = await getMyAssignments();
 
-  return <TechnicianDashboard initialBookings={bookings} technicianName={profile?.name} />;
+  return (
+    <TechnicianDashboard
+      initialBookings={bookings}
+      technicianName={profile?.name}
+      commissionRate={Number(profile?.commission_rate ?? 10)}
+      myRating={myRating}
+    />
+  );
 }

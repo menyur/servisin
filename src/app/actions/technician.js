@@ -10,7 +10,7 @@ export async function getMyAssignments() {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) return { bookings: [] };
+  if (!user) return { bookings: [], myRating: null };
 
   const { data } = await supabase
     .from("bookings")
@@ -18,7 +18,21 @@ export async function getMyAssignments() {
     .eq("technician_id", user.id)
     .order("booking_date", { ascending: true });
 
-  return { bookings: data || [] };
+  // rating pribadi teknisi dari tabel reviews (kalau tabelnya sudah ada)
+  let myRating = null;
+  const { data: myReviews } = await supabase
+    .from("reviews")
+    .select("rating")
+    .eq("technician_id", user.id);
+  if (myReviews && myReviews.length > 0) {
+    const sum = myReviews.reduce((s, r) => s + r.rating, 0);
+    myRating = {
+      avg: Math.round((sum / myReviews.length) * 10) / 10,
+      count: myReviews.length,
+    };
+  }
+
+  return { bookings: data || [], myRating };
 }
 
 export async function updateJobStatus(bookingId, status) {
