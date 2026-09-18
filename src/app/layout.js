@@ -31,10 +31,11 @@ export default async function RootLayout({ children }) {
   let pendingBookings = 0;
   let openReports = 0;
   if (user) {
+    // Profil dulu (butuh role-nya untuk memutuskan fetch badge)…
     const { data } = await supabase.from("profiles").select("name, role, avatar_url").eq("id", user.id).single();
     profile = data;
 
-    // badge admin (pendaftar teknisi & booking menunggu) — hanya dihitung untuk admin
+    // …lalu ketiga badge admin dihitung PARALEL ( hemat 2 RTT vs berurutan)
     if (profile?.role === "admin") {
       const [{ count: techCount }, { count: bookingCount }, { count: reportCount }] = await Promise.all([
         supabase
@@ -60,11 +61,24 @@ export default async function RootLayout({ children }) {
   return (
     <html lang="id">
       <head>
+        {/* Font: preconnect + stylesheet non-blocking (print→media trick) — CSS
+            Google Fonts tak lagi menghalangi render pertama. Preload woff2
+            tidak mungkin statis karena URL hash-nya dikelola Google. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
-          href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
           rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
+          media="print"
+          // @ts-ignore — atribut onLoad valid di runtime, Next merender apa adanya
+          onLoad="this.media='all'"
         />
+        <noscript>
+          <link
+            rel="stylesheet"
+            href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
+          />
+        </noscript>
       </head>
       <body className="font-body min-h-screen flex flex-col">
         <Navbar user={user} profile={profile} pendingTechnicians={pendingTechnicians} pendingBookings={pendingBookings} openReports={openReports} />

@@ -1,4 +1,5 @@
 // Ilustrasi SVG orisinal (bukan foto), memakai palet warna brand Servisin.
+import Image from "next/image";
 // Dipakai di hero landing page, thumbnail kartu layanan, halaman auth, empty-state, dll.
 
 const COLORS = {
@@ -1174,9 +1175,17 @@ export const SERVICE_THUMBS = {
 /** Thumbnail untuk satu layanan; foto kustom (jika ada) menang atas ilustrasi, fallback ke thumbnail kategori bila kombinasi tak dikenal. */
 export function ServiceThumb({ categoryId, icon, imageUrl, ...props }) {
   if (imageUrl) {
+    // Foto kustom: next/image (lazy + optimasi ukuran/FORMAT otomatis dari Supabase Storage)
+    const { className, ...rest } = props;
     return (
-      /* eslint-disable-next-line @next/next/no-img-element */
-      <img src={imageUrl} alt="" loading="lazy" decoding="async" {...props} />
+      <Image
+        src={imageUrl}
+        alt=""
+        fill
+        sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+        className={`object-cover ${className || ""}`}
+        {...rest}
+      />
     );
   }
   const Thumb = SERVICE_THUMBS[`${categoryId}:${icon}`] || CATEGORY_THUMBS[categoryId] || AcThumb;

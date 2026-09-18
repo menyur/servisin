@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Search, ArrowRight } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { getLandingData } from "@/lib/queries";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { HeroIllustration, CategoryThumb, ServiceThumb, TrustFast, TrustPro, TrustPrice, EmptyBoxIllustration, AcHeaderIllustration } from "@/components/Illustrations";
 import { formatRupiah } from "@/lib/pricing";
@@ -10,17 +10,12 @@ const CATEGORY_HEADERS = {
 };
 
 export default async function HomePage({ searchParams }) {
-  const supabase = await createClient();
   const params = await searchParams;
   const q = params?.q?.trim() || "";
 
-  const { data: categories } = await supabase.from("categories").select("*").order("sort_order");
+  const { categories, services } = await getLandingData(q);
 
-  let servicesQuery = supabase.from("services").select("*").eq("is_active", true).order("sort_order");
-  if (q) servicesQuery = servicesQuery.ilike("name", `%${q}%`);
-  const { data: services } = await servicesQuery;
-
-  const grouped = (categories || []).map((cat) => ({
+  const grouped = categories.map((cat) => ({
     ...cat,
     services: (services || []).filter((s) => s.category_id === cat.id),
   }));

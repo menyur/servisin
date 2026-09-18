@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
 import { computeSplit } from "@/lib/pricing";
@@ -226,6 +227,7 @@ export async function updateServicePriceAdmin(serviceId, basePrice) {
   if (error) return { error: error.message };
 
   revalidatePath("/admin");
+  revalidateTag("services"); // harga juga tampil di landing page
   return { ok: true };
 }
 
@@ -273,6 +275,7 @@ export async function createServiceAdmin(input) {
 
   revalidatePath("/admin");
   revalidatePath("/"); // layanan baru langsung tampil di landing page & booking
+  revalidateTag("services"); // segarkan cache landing data
   return { service: data };
 }
 
@@ -314,6 +317,7 @@ export async function updateServiceDetailAdmin(serviceId, input) {
 
   revalidatePath("/admin");
   revalidatePath("/"); // nama/deskripsi baru langsung tampil di landing page
+  revalidateTag("services");
   return { service: data[0] };
 }
 
@@ -333,6 +337,7 @@ export async function toggleServiceActiveAdmin(serviceId, isActive) {
 
   revalidatePath("/admin");
   revalidatePath("/");
+  revalidateTag("services");
   return { ok: true };
 }
 
