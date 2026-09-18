@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { debitTechnicianCommission } from "@/lib/balance";
+import { sendAdminNewDepositEmail, sendAdminNewWithdrawalEmail } from "@/lib/email";
 
 const TECHNICIAN_ALLOWED_STATUSES = ["in_progress", "completed"];
 
@@ -67,6 +68,21 @@ export async function updateJobStatus(bookingId, status) {
 /* ========================= SALDO: SETOR / TOP-UP ========================= */
 
 /**
+ * Kirim email notifikasi pengajuan saldo ke semua admin.
+ * Fire-and-forget: kegagalan email tidak menggagalkan pengajuan.
+ */
+async function notifyAdminsBalanceRequest(supabase, kind, payload) {
+  try {
+    const { data: adminEmails } = await supabase.rpc("get_admin_emails");
+    if (!adminEmails?.length) return;
+    if (kind === "deposit") await sendAdminNewDepositEmail(adminEmails, payload);
+    else await sendAdminNewWithdrawalEmail(adminEmails, payload);
+  } catch (err) {
+    console.error("Gagal notifikasi saldo ke admin:", err?.message);
+  }
+}
+
+/**
  * Teknisi mengajukan setor saldo: upload bukti transfer + jumlah.
  * Saldo BARU bertambah setelah admin menyetujui bukti ini.
  * (Client mengunggah gambar ke bucket balance-proofs dulu, lalu
@@ -92,6 +108,12 @@ export async function submitBalanceDeposit({ amount, proofUrl }) {
     return { error: "Hanya teknisi yang bisa menyetor saldo." };
   }
 
+  const { data: techProfile } = await supabase
+    .from("profiles")
+    .select("name, email, balance")
+    .eq("id", user.id)
+    .single();
+
   const { error } = await supabase.from("balance_deposits").insert({
     technician_id: user.id,
     amount: amt,
@@ -105,6 +127,14 @@ export async function submitBalanceDeposit({ amount, proofUrl }) {
     }
     return { error: error.message };
   }
+
+  notifyAdminsBalanceRequest(supabase, "deposit", {
+    tech_name: techProfile?.name || "Teknisi",
+    tech_email: techProfile?.email || user.email,
+    current_balance: techProfile?.balance || 0,
+    amount: amt,
+    proofUrl,
+  });
 
   revalidatePath("/technician");
   return { ok: true };
@@ -134,7 +164,7 @@ export async function requestWithdrawal({ amount, bankName, accountNumber, accou
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("role, balance")
+    .select("role, balance, name, email")
     .eq("id", user.id)
     .single();
   if (profile?.role !== "technician" && profile?.role !== "admin") {
@@ -190,6 +220,16 @@ export async function requestWithdrawal({ amount, bankName, accountNumber, accou
     .update({ balance: Number(profile.balance || 0) - amt })
     .eq("id", user.id);
   if (updErr) return { error: updErr.message };
+
+  notifyAdminsBalanceRequest(supabase, "withdrawal", {
+    tech_name: profile.name || "Teknisi",
+    tech_email: profile.email || user.email,
+    current_balance: Number(profile.balance || 0) - amt,
+    amount: amt,
+    bank_name: bank,
+    account_number: accNo,
+    account_holder: accHolder,
+  });
 
   revalidatePath("/technician");
   return { ok: true };

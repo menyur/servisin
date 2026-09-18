@@ -258,3 +258,43 @@ export async function sendTechnicianAssignmentEmail(technicianEmail, booking) {
 
   return sendMail({ to: technicianEmail, subject: `Tugas baru ${booking.code} — Servisin`, html });
 }
+
+/* ============ NOTIFIKASI SALDO: SETOR & TARIK ============ */
+
+/** Ke semua admin: teknisi mengajukan setor saldo dengan bukti transfer — perlu verifikasi. */
+export async function sendAdminNewDepositEmail(adminEmails, dep) {
+  const html = wrapper(
+    "Teknisi mengajukan setor saldo",
+    `
+      <p>Pengajuan setor berikut menunggu verifikasi bukti transfer:</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Teknisi", `<strong>${dep.tech_name}</strong> (${dep.tech_email})`)}
+        ${detailRow("Jumlah setor", `<strong>Rp${Number(dep.amount).toLocaleString("id-ID")}</strong>`)}
+        ${detailRow("Saldo aktif saat ini", `Rp${Number(dep.current_balance).toLocaleString("id-ID")}`)}
+        ${detailRow("Bukti transfer", dep.proofUrl ? `<a href="${dep.proofUrl}">Lihat gambar bukti</a>` : "-")}
+      </table>
+      <p>Buka panel Admin → tab "Saldo Teknisi" untuk menyetujui atau menolak bukti ini.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Setor saldo ${dep.tech_name} menunggu verifikasi — Servisin`, html });
+}
+
+/** Ke semua admin: teknisi mengajukan penarikan saldo ke rekening pribadi. */
+export async function sendAdminNewWithdrawalEmail(adminEmails, wd) {
+  const html = wrapper(
+    "Teknisi mengajukan penarikan saldo",
+    `
+      <p>Saldo teknisi telah ditahan menunggu keputusanmu:</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Teknisi", `<strong>${wd.tech_name}</strong> (${wd.tech_email})`)}
+        ${detailRow("Jumlah tarik", `<strong>Rp${Number(wd.amount).toLocaleString("id-ID")}</strong>`)}
+        ${detailRow("Rekening tujuan", `${wd.bank_name} · ${wd.account_number} · a.n. ${wd.account_holder}`)}
+        ${detailRow("Saldo aktif saat ini", `Rp${Number(wd.current_balance).toLocaleString("id-ID")}`)}
+      </table>
+      <p>Buka panel Admin → tab "Saldo Teknisi" → section Penarikan Saldo untuk memproses.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Penarikan saldo ${wd.tech_name} menunggu persetujuan — Servisin`, html });
+}
