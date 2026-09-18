@@ -9,15 +9,17 @@ import OrderReport from "@/components/OrderReport";
 import ReportForm from "@/components/ReportForm";
 import MyReportsList from "@/components/MyReportsList";
 import DepositModal from "@/components/DepositModal";
+import WithdrawModal from "@/components/WithdrawModal";
 import { formatRupiah } from "@/lib/pricing";
-import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2 } from "lucide-react";
+import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2, Banknote } from "lucide-react";
 
-export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null, balance = 0, transactions = [], deposits = [] }) {
+export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null, balance = 0, transactions = [], deposits = [], withdrawals = [] }) {
   const [bookings, setBookings] = useState(initialBookings);
   const [busyId, setBusyId] = useState(null);
   const [tab, setTab] = useState("jobs");
   const [reportBookingId, setReportBookingId] = useState("");
   const [showDeposit, setShowDeposit] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
 
   async function markStatus(id, status) {
     setBusyId(id);
@@ -36,6 +38,8 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
   const totalTopup = transactions.filter((t) => t.type === "topup").reduce((s, t) => s + Number(t.amount), 0);
   const totalCommission = transactions.filter((t) => t.type === "earning").reduce((s, t) => s + Number(t.commission_amount || 0), 0);
   const pendingDeposits = deposits.filter((d) => d.status === "pending").length;
+  const pendingWithdrawals = withdrawals.filter((w) => w.status === "pending");
+  const onHoldAmount = pendingWithdrawals.reduce((s, w) => s + Number(w.amount), 0);
 
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
@@ -74,24 +78,47 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
             <p className="text-xs text-white/70 flex items-center gap-1 justify-end">
               <TrendingDown size={12} /> Total komisi terpotong: <strong>{formatRupiah(totalCommission)}</strong>
             </p>
-            <button
-              onClick={() => setShowDeposit(true)}
-              className="btn-outline !bg-white !border-white !text-brand-deep !py-2 text-sm mt-1 font-semibold hover:!bg-white/90"
-            >
-              <Wallet size={15} /> Setor Saldo
-            </button>
+            <div className="flex gap-2 mt-1 justify-end flex-wrap">
+              <button
+                onClick={() => setShowDeposit(true)}
+                className="btn-outline !bg-white !border-white !text-brand-deep !py-2 text-sm font-semibold hover:!bg-white/90"
+              >
+                <Wallet size={15} /> Setor
+              </button>
+              <button
+                onClick={() => setShowWithdraw(true)}
+                disabled={balance <= 0}
+                className="btn-outline !bg-white !border-white !text-brand-deep !py-2 text-sm font-semibold hover:!bg-white/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Banknote size={15} /> Tarik
+              </button>
+            </div>
           </div>
         </div>
-        {pendingDeposits > 0 && (
-          <p className="text-xs text-white/80 mt-3 flex items-center gap-1.5 border-t border-white/20 pt-2.5">
-            <Loader2 size={12} className="animate-spin" />
-            {pendingDeposits} pengajuan setor menunggu verifikasi admin
-          </p>
+        {(pendingDeposits > 0 || onHoldAmount > 0) && (
+          <div className="text-xs text-white/80 mt-3 space-y-1 border-t border-white/20 pt-2.5">
+            {pendingDeposits > 0 && (
+              <p className="flex items-center gap-1.5">
+                <Loader2 size={12} className="animate-spin" />
+                {pendingDeposits} pengajuan setor menunggu verifikasi admin
+              </p>
+            )}
+            {onHoldAmount > 0 && (
+              <p className="flex items-center gap-1.5">
+                <Banknote size={12} />
+                {formatRupiah(onHoldAmount)} sedang dalam proses penarikan ke rekeningmu
+              </p>
+            )}
+          </div>
         )}
       </div>
 
       {showDeposit && (
         <DepositModal balance={balance} onClose={() => setShowDeposit(false)} onSubmitted={() => setTimeout(() => window.location.reload(), 1200)} />
+      )}
+
+      {showWithdraw && (
+        <WithdrawModal balance={balance} onClose={() => setShowWithdraw(false)} onSubmitted={() => setTimeout(() => window.location.reload(), 1200)} />
       )}
 
       {myRating && (
@@ -149,7 +176,7 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
       </div>
 
       {tab === "balance" && (
-        <BalanceHistory transactions={transactions} deposits={deposits} balance={balance} />
+        <BalanceHistory transactions={transactions} deposits={deposits} withdrawals={withdrawals} balance={balance} />
       )}
 
       {tab === "create-report" && (
@@ -220,7 +247,7 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
   );
 }
 
-function BalanceHistory({ transactions, deposits, balance }) {
+function BalanceHistory({ transactions, deposits, withdrawals, balance }) {
   const rejectedDeposits = deposits.filter((d) => d.status === "rejected");
   return (
     <div>
@@ -236,6 +263,29 @@ function BalanceHistory({ transactions, deposits, balance }) {
             {rejectedDeposits.map((d) => (
               <li key={d.id}>
                 <strong className="text-navy">{formatRupiah(d.amount)}</strong> — {d.rejection_reason || "tanpa alasan"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {withdrawals.length > 0 && (
+        <div className="card !p-4 mb-4">
+          <p className="text-sm font-semibold text-navy mb-2">Penarikan ke rekening</p>
+          <ul className="text-xs space-y-1.5">
+            {withdrawals.map((w) => (
+              <li key={w.id} className="flex items-center justify-between gap-2 flex-wrap">
+                <span>
+                  <strong className="text-navy">{formatRupiah(w.amount)}</strong> → {w.bank_name} {w.account_number}
+                  <span className="text-ink-soft"> · {new Date(w.created_at).toLocaleDateString("id-ID")}</span>
+                  {w.status === "pending" && <span className="ml-1 pill !px-1.5 !py-0 text-[10px] bg-amber/tint text-amber">diproses</span>}
+                  {w.status === "approved" && <span className="ml-1 pill !px-1.5 !py-0 text-[10px] bg-mint/tint text-mint">terkirim</span>}
+                  {w.status === "rejected" && (
+                    <span className="ml-1 pill !px-1.5 !py-0 text-[10px] bg-coral/tint text-coral" title={w.rejection_reason || ""}>
+                      ditolak — saldo kembali
+                    </span>
+                  )}
+                </span>
               </li>
             ))}
           </ul>

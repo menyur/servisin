@@ -54,6 +54,15 @@ export default async function TechnicianPage() {
     .limit(20);
   if (!depErr && deps) deposits = deps;
 
+  let withdrawals = [];
+  const { data: wds, error: wdErr } = await supabase
+    .from("balance_withdrawals")
+    .select("id, amount, status, bank_name, account_number, rejection_reason, created_at")
+    .eq("technician_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (!wdErr && wds) withdrawals = wds;
+
   return (
     <TechnicianDashboard
       initialBookings={bookings}
@@ -63,6 +72,7 @@ export default async function TechnicianPage() {
       balance={balance}
       transactions={transactions}
       deposits={deposits}
+      withdrawals={withdrawals}
     />
   );
 }

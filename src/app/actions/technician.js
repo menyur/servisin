@@ -109,3 +109,88 @@ export async function submitBalanceDeposit({ amount, proofUrl }) {
   revalidatePath("/technician");
   return { ok: true };
 }
+
+/**
+ * Teknisi mengajukan penarikan saldo ke rekening pribadi.
+ * Saldo langsung DITAHAN (dikurangi) saat pengajuan supaya tidak
+ * dipakai dobel; kalau admin menolak, saldo dikembalikan penuh.
+ */
+export async function requestWithdrawal({ amount, bankName, accountNumber, accountHolder }) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Belum login." };
+
+  const amt = Math.round(Number(amount));
+  if (!amt || amt <= 0) return { error: "Isi jumlah penarikan yang valid." };
+
+  const bank = (bankName || "").trim();
+  const accNo = (accountNumber || "").trim();
+  const accHolder = (accountHolder || "").trim();
+  if (!bank) return { error: "Isi nama bank / e-wallet tujuan." };
+  if (!accNo || accNo.length < 6) return { error: "Isi nomor rekening yang valid (min. 6 karakter)." };
+  if (!accHolder) return { error: "Isi nama pemilik rekening." };
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role, balance")
+    .eq("id", user.id)
+    .single();
+  if (profile?.role !== "technician" && profile?.role !== "admin") {
+    return { error: "Hanya teknisi yang bisa menarik saldo." };
+  }
+  if (Number(profile.balance || 0) < amt) {
+    return { error: `Saldo tidak cukup. Saldo aktifmu ${Math.round(Number(profile.balance || 0)).toLocaleString("id-ID")}.` };
+  }
+
+  // Ada pengajuan pending lain? Tunggu diproses dulu (satu kanal hold).
+  const { data: pendingWd } = await supabase
+    .from("balance_withdrawals")
+    .select("id")
+    .eq("technician_id", user.id)
+    .eq("status", "pending")
+    .maybeSingle();
+  if (pendingWd) {
+    return { error: "Kamu masih punya pengajuan penarikan yang menunggu verifikasi admin." };
+  }
+
+  // Catat transaksi hold (amount negatif)
+  const { data: tx, error: txErr } = await supabase
+    .from("balance_transactions")
+    .insert({
+      technician_id: user.id,
+      type: "withdrawal",
+      amount: -amt,
+      note: `Pengajuan tarik ke ${bank} ${accNo.slice(0, 4)}••••`,
+    })
+    .select("id")
+    .single();
+  if (txErr) {
+    if (/relation|does not exist|check constraint/i.test(txErr.message || "")) {
+      return { error: "Fitur penarikan belum aktif — jalankan supabase/migrate-technician-withdrawals.sql di SQL Editor." };
+    }
+    return { error: txErr.message };
+  }
+
+  const { error: insErr } = await supabase.from("balance_withdrawals").insert({
+    technician_id: user.id,
+    amount: amt,
+    bank_name: bank,
+    account_number: accNo,
+    account_holder: accHolder,
+    status: "pending",
+    transaction_id: tx.id,
+  });
+  if (insErr) return { error: insErr.message };
+
+  // Kurangi saldo profil
+  const { error: updErr } = await supabase
+    .from("profiles")
+    .update({ balance: Number(profile.balance || 0) - amt })
+    .eq("id", user.id);
+  if (updErr) return { error: updErr.message };
+
+  revalidatePath("/technician");
+  return { ok: true };
+}

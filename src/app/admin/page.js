@@ -6,6 +6,7 @@ import {
   getAllReportsAdmin,
   getAllVouchersAdmin,
   getBalanceDepositsAdmin,
+  getWithdrawalsAdmin,
 } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import Link from "next/link";
@@ -25,7 +26,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
@@ -33,6 +34,7 @@ export default async function AdminPage() {
     getAllVouchersAdmin(),
     supabase.from("categories").select("id, name").order("sort_order"),
     getBalanceDepositsAdmin().catch(() => ({ error: "Gagal memuat pengajuan setor." })),
+    getWithdrawalsAdmin().catch(() => ({ error: "Gagal memuat pengajuan penarikan." })),
   ]);
 
   if (bookingsRes.error) {
@@ -57,6 +59,8 @@ export default async function AdminPage() {
       categories={categoriesRes.data || []}
       balanceDeposits={depositsRes.deposits || []}
       balanceDepositsError={depositsRes.error || null}
+      withdrawals={withdrawalsRes.withdrawals || []}
+      withdrawalsError={withdrawalsRes.error || null}
     />
   );
 }

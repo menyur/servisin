@@ -944,3 +944,119 @@ export async function addTechnicianBalanceAdmin(technicianId, amount, note) {
   revalidatePath("/technician");
   return { ok: true, balance: res.balance };
 }
+
+/* ========================= PENARIKAN SALDO (WITHDRAWAL) ========================= */
+
+/**
+ * Daftar pengajuan penarikan saldo teknisi (semua status).
+ */
+export async function getWithdrawalsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("balance_withdrawals")
+    .select("*, technician:profiles!balance_withdrawals_technician_id_fkey(id, name, email, balance)")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) {
+    if (/relation|does not exist/i.test(error.message || "")) {
+      return { error: "Tabel penarikan belum ada — jalankan supabase/migrate-technician-withdrawals.sql dulu." };
+    }
+    return { error: error.message };
+  }
+  return { withdrawals: data || [] };
+}
+
+/**
+ * Setujui penarikan: admin transfer dana ke rekening teknisi
+ * di luar aplikasi; saldo teknisi SUDAH dipotong saat pengajuan.
+ */
+export async function approveWithdrawalAdmin(withdrawalId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: wd } = await supabase
+    .from("balance_withdrawals")
+    .select("id, status")
+    .eq("id", withdrawalId)
+    .single();
+  if (!wd) return { error: "Pengajuan tidak ditemukan." };
+  if (wd.status !== "pending") return { error: "Pengajuan ini sudah diproses sebelumnya." };
+
+  const { error } = await supabase
+    .from("balance_withdrawals")
+    .update({ status: "approved", reviewed_by: admin.id, reviewed_at: new Date().toISOString() })
+    .eq("id", withdrawalId)
+    .eq("status", "pending");
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return { ok: true };
+}
+
+/**
+ * Tolak penarikan + alasan → saldo teknisi dikembalikan penuh
+ * (transaksi 'refund' amount positif).
+ */
+export async function rejectWithdrawalAdmin(withdrawalId, reason) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const clean = (reason || "").trim();
+  if (clean.length < 5) return { error: "Tulis alasan penolakan (minimal 5 karakter)." };
+
+  const { data: wd } = await supabase
+    .from("balance_withdrawals")
+    .select("id, status, technician_id, amount, transaction_id, bank_name, account_number")
+    .eq("id", withdrawalId)
+    .single();
+  if (!wd) return { error: "Pengajuan tidak ditemukan." };
+  if (wd.status !== "pending") return { error: "Pengajuan ini sudah diproses sebelumnya." };
+
+  // Refund penuh: transaksi positif + saldo profil naik
+  const { data: tech } = await supabase
+    .from("profiles")
+    .select("balance")
+    .eq("id", wd.technician_id)
+    .single();
+
+  const { data: refundTx, error: refundErr } = await supabase
+    .from("balance_transactions")
+    .insert({
+      technician_id: wd.technician_id,
+      type: "refund",
+      amount: wd.amount,
+      note: `Penarikan ditolak admin: ${clean}`.slice(0, 200),
+    })
+    .select("id")
+    .single();
+  if (refundErr) return { error: refundErr.message };
+
+  const { error: balErr } = await supabase
+    .from("profiles")
+    .update({ balance: Number(tech?.balance || 0) + Number(wd.amount) })
+    .eq("id", wd.technician_id);
+  if (balErr) return { error: balErr.message };
+
+  const { error } = await supabase
+    .from("balance_withdrawals")
+    .update({
+      status: "rejected",
+      rejection_reason: clean,
+      reviewed_by: admin.id,
+      reviewed_at: new Date().toISOString(),
+      transaction_id: refundTx.id, // arahkan ke transaksi refund
+    })
+    .eq("id", withdrawalId)
+    .eq("status", "pending");
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return { ok: true };
+}
