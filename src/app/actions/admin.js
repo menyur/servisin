@@ -1060,3 +1060,60 @@ export async function rejectWithdrawalAdmin(withdrawalId, reason) {
   revalidatePath("/technician");
   return { ok: true };
 }
+
+/**
+ * Ringkasan keuangan platform untuk admin:
+ * - totalBalance   : jumlah saldo aktif semua teknisi (kewajiban platform)
+ * - totalTopup     : semua setor disetujui (uang masuk)
+ * - totalCommission: komisi platform dari pesanan selesai (pendapatan)
+ * - totalWithdrawn : penarikan terkirim (uang keluar)
+ * - pendingHold    : dana tertahan di pengajuan penarikan pending
+ * - month          : versi bulan berjalan
+ */
+export async function getFinanceSummaryAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const [txRes, wdRes, balRes] = await Promise.all([
+    supabase.from("balance_transactions").select("type, amount, commission_amount, created_at").order("created_at", { ascending: false }).limit(5000),
+    supabase.from("balance_withdrawals").select("amount, status, created_at").limit(5000),
+    supabase.from("profiles").select("balance").eq("role", "technician"),
+  ]);
+
+  if (txRes.error && /relation|does not exist/i.test(txRes.error.message || "")) {
+    return { error: "Tabel saldo belum ada — jalankan supabase/migrate-technician-balance.sql dulu." };
+  }
+
+  const txs = txRes.data || [];
+  const wds = wdRes.data || [];
+  const balances = balRes.data || [];
+
+  const sum = (arr, f = (x) => x) => arr.reduce((s, x) => s + Number(f(x) || 0), 0);
+  const inMonth = (row) => new Date(row.created_at) >= startOfMonth;
+
+  const topups = txs.filter((t) => t.type === "topup");
+  const earnings = txs.filter((t) => t.type === "earning");
+  const approvedWd = wds.filter((w) => w.status === "approved");
+  const pendingWd = wds.filter((w) => w.status === "pending");
+
+  const summary = {
+    totalBalance: sum(balances, (b) => b.balance),
+    totalTopup: sum(topups, (t) => t.amount),
+    totalCommission: sum(earnings, (t) => t.commission_amount),
+    totalWithdrawn: sum(approvedWd, (w) => w.amount),
+    pendingHold: sum(pendingWd, (w) => w.amount),
+    techCount: balances.length,
+    month: {
+      topup: sum(topups.filter(inMonth), (t) => t.amount),
+      commission: sum(earnings.filter(inMonth), (t) => t.commission_amount),
+      withdrawn: sum(approvedWd.filter(inMonth), (w) => w.amount),
+    },
+  };
+
+  return { summary };
+}

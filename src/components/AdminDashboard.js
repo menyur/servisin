@@ -38,7 +38,7 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null }) {
   const [tab, setTab] = useState("bookings");
   const [bookings, setBookings] = useState(initialBookings);
   const [services, setServices] = useState(initialServices);
@@ -206,7 +206,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "vouchers"} onClick={() => setTab("vouchers")} icon={Ticket} label="Voucher" />
         <TabButton active={tab === "prices"} onClick={() => setTab("prices")} icon={Tags} label="Harga Layanan" />
         <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={Users} label="Pengguna & Teknisi" />
-        <TabButton active={tab === "balance"} onClick={() => setTab("balance")} icon={Wallet} label={`Saldo Teknisi${balanceDeposits.filter((d) => d.status === "pending").length ? ` (${balanceDeposits.filter((d) => d.status === "pending").length})` : ""}`} />
+        <TabButton active={tab === "balance"} onClick={() => setTab("balance")} icon={Wallet} label={`Saldo Teknisi${(() => { const n = balanceDeposits.filter((d) => d.status === "pending").length + withdrawals.filter((w) => w.status === "pending").length; return n ? ` (${n})` : ""; })()}`} />
         <TabButton active={tab === "applicants"} onClick={() => setTab("applicants")} icon={UserCheck} label={`Pendaftar Teknisi${pendingTechs.length ? ` (${pendingTechs.length})` : ""}`} />
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
@@ -487,7 +487,14 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       )}
 
       {tab === "balance" && (
-        <BalanceAdminTab initialDeposits={balanceDeposits} initialError={balanceDepositsError} technicians={technicians} />
+        <BalanceAdminTab
+          initialDeposits={balanceDeposits}
+          initialError={balanceDepositsError}
+          technicians={technicians}
+          initialWithdrawals={withdrawals}
+          withdrawalsError={withdrawalsError}
+          financeSummary={financeSummary}
+        />
       )}
 
       {tab === "reports" && <ReportsView reports={reports} onUpdate={handleReportUpdate} />}

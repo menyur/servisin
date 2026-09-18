@@ -10,13 +10,14 @@ import {
 } from "@/app/actions/admin";
 import { formatRupiah } from "@/lib/pricing";
 import { Wallet, CheckCircle2, XCircle, Loader2, Plus, AlertTriangle, Banknote, ArrowUpFromLine } from "lucide-react";
+import FinanceSummary from "@/components/FinanceSummary";
 
 /**
  * Tab Saldo Teknisi di panel admin:
  * 1. Verifikasi bukti setor teknisi (setujui → saldo naik / tolak → alasan)
  * 2. Tambah saldo manual ke teknisi mana pun (koreksi/bonus)
  */
-export default function BalanceAdminTab({ initialDeposits, initialError, technicians, initialWithdrawals = [], withdrawalsError = null }) {
+export default function BalanceAdminTab({ initialDeposits, initialError, technicians, initialWithdrawals = [], withdrawalsError = null, financeSummary = null }) {
   const [deposits, setDeposits] = useState(initialDeposits || []);
   const [withdrawals, setWithdrawals] = useState(initialWithdrawals || []);
   const [busyId, setBusyId] = useState(null);
@@ -84,6 +85,9 @@ export default function BalanceAdminTab({ initialDeposits, initialError, technic
 
   return (
     <div className="space-y-8">
+      {/* ===== RINGKASAN KEUANGAN ===== */}
+      <FinanceSummary summary={financeSummary} />
+
       {/* ===== VERIFIKASI BUKTI SETOR ===== */}
       <section>
         <h2 className="font-display font-semibold text-navy mb-1 flex items-center gap-2">
