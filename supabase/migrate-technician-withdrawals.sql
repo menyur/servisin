@@ -17,26 +17,10 @@
 
 -- 1. Tambah tipe transaksi 'withdrawal' & 'refund' di balance_transactions
 --    (constraint lama hanya mengizinkan earning/topup/adjustment)
-DO $$
-DECLARE
-  con_name text;
-BEGIN
-  SELECT c.conname INTO con_name
-  FROM pg_constraint c
-  JOIN pg_class t ON t.oid = c.conrelid
-  WHERE t.relname = 'balance_transactions'
-    AND c.contype = 'c'
-    AND pg_get_constraintdef(c.oid) LIKE '%type%';
-
-  IF con_name IS NOT NULL AND position('withdrawal' in pg_get_constraintdef(c.oid)) = 0 THEN
-    EXECUTE format('ALTER TABLE balance_transactions DROP CONSTRAINT %I', con_name);
-  END IF;
-END $$;
-
--- V1: cari constraint lama dengan cara sederhana (idempoten manual)
+--    Idempoten: drop by name lalu tambah versi baru; kalau versi baru
+--    sudah ada, duplikasi di-skip.
 DO $$
 BEGIN
-  -- drop jika masih ada constraint check lama tanpa 'withdrawal'
   BEGIN
     ALTER TABLE balance_transactions DROP CONSTRAINT balance_transactions_type_check;
   EXCEPTION WHEN undefined_object THEN NULL; END;
@@ -44,7 +28,7 @@ BEGIN
   ALTER TABLE balance_transactions ADD CONSTRAINT balance_transactions_type_check
     CHECK (type IN ('earning', 'topup', 'adjustment', 'withdrawal', 'refund'));
 EXCEPTION
-  WHEN duplicate_object THEN NULL; -- sudah ada versi baru
+  WHEN duplicate_object THEN NULL; -- versi baru sudah terpasang
   WHEN insufficient_privilege THEN
     RAISE NOTICE 'SKIP: ganti constraint manual via Table Editor (type: earning/topup/adjustment/withdrawal/refund)';
 END $$;
