@@ -7,3 +7,10 @@ node_modules/
 # log & artefak runtime
 *.log
 *.log.err
+
+.vercel
+.env*
+
+# Freebuff workspace lokal (berisi secret & log preview)
+.freebuff/
+freebuff-cleanup-tmp/

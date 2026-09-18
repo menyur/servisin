@@ -76,10 +76,7 @@ export default function Navbar({ user, profile, pendingTechnicians = 0, pendingB
               </form>
             </>
           ) : (
-            <>
-              <Link href="/login" className="btn-outline !px-4 !py-2 text-sm">Masuk</Link>
-              <Link href="/register" className="btn-primary !px-4 !py-2 text-sm hidden sm:inline-flex">Daftar</Link>
-            </>
+            <Link href="/login" className="btn-primary !px-4 !py-2 text-sm">Masuk</Link>
           )}
         </div>
       </div>
