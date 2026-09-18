@@ -5,6 +5,8 @@
   "description": "Servisin — platform pemesanan jasa serba bisa: Service AC, Tukang Rumah, Service Kendaraan.",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true}); console.log('.next dihapus')\"",
+    "cleanup": "node scripts/weekly-cleanup.mjs",
+    "cleanup:run": "node scripts/weekly-cleanup.mjs --yes",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
