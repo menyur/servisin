@@ -87,15 +87,15 @@ end $$;
 
 -- =========================================================
 -- 2. Riwayat mutasi saldo (audit trail)
---    amount > 0 = top-up (setor disetujui)
---    amount < 0 = potongan komisi pesanan selesai
+--    amount > 0 = top-up (setor disetujui) / refund penarikan
+--    amount < 0 = potongan komisi pesanan selesai / penarikan
 -- =========================================================
 create table if not exists balance_transactions (
   id uuid primary key default gen_random_uuid(),
   technician_id uuid not null references profiles(id) on delete cascade,
   booking_id uuid references bookings(id) on delete set null,
   deposit_id uuid references balance_deposits(id) on delete set null,
-  type text not null check (type in ('earning', 'topup', 'adjustment')),
+  type text not null check (type in ('earning', 'topup', 'adjustment', 'withdrawal', 'refund')),
   amount numeric(14,2) not null,
   commission_amount numeric(14,2),
   note text,
@@ -132,17 +132,15 @@ create index if not exists idx_balance_dep_tech on balance_deposits (technician_
 -- =========================================================
 -- 3. Idempotensi earning: satu booking = satu transaksi
 -- =========================================================
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'bt_booking_earning_unique'
-  ) then
-    -- partial unique index: hanya baris earning dengan booking_id
-    create unique index bt_booking_earning_unique
-      on balance_transactions (booking_id)
-      where booking_id is not null and type = 'earning';
-  end if;
-end $$;
+DO $$
+BEGIN
+  -- cek via to_regclass: unique INDEX tidak tercatat di pg_constraint
+  IF to_regclass('public.bt_booking_earning_unique') IS NULL THEN
+    CREATE UNIQUE INDEX bt_booking_earning_unique
+      ON balance_transactions (booking_id)
+      WHERE booking_id IS NOT NULL AND type = 'earning';
+  END IF;
+END $$;
 
 -- =========================================================
 -- 4. Backfill: pesanan selesai lama → catat earning (komisi
