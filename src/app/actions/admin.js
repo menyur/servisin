@@ -5,6 +5,7 @@ import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
 import { computeSplit } from "@/lib/pricing";
+import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
 
@@ -148,8 +149,10 @@ export async function updateBookingStatusAdmin(bookingId, status) {
   if (error) return { error: error.message };
 
   // struk PDF otomatis ke pelanggan saat pesanan ditandai selesai (fire-and-forget)
+  // + potong komisi dari saldo teknisi — keduanya tak pernah menggagalkan update status
   if (status === "completed") {
     sendReceiptForBooking(supabase, bookingId).catch(() => {});
+    debitTechnicianCommission(supabase, bookingId).catch(() => {});
   }
 
   revalidatePath("/admin");
@@ -832,4 +835,112 @@ export async function deleteVoucherAdmin(voucherId) {
 
   revalidatePath("/admin");
   return { ok: true };
+}
+
+/* ========================= SALDO TEKNISI (TAB ADMIN) ========================= */
+
+/**
+ * Daftar pengajuan setor saldo teknisi (semua status) + profil ringkas.
+ */
+export async function getBalanceDepositsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("balance_deposits")
+    .select("*, technician:profiles!balance_deposits_technician_id_fkey(id, name, email, balance, commission_rate)")
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) {
+    if (/relation|does not exist/i.test(error.message || "")) {
+      return { error: "Tabel belum ada — jalankan supabase/migrate-technician-balance.sql dulu." };
+    }
+    return { error: error.message };
+  }
+  return { deposits: data || [] };
+}
+
+/**
+ * Setujui bukti setor: saldo teknisi bertambah sebesar jumlah setor.
+ */
+export async function approveBalanceDepositAdmin(depositId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: dep } = await supabase
+    .from("balance_deposits")
+    .select("id, technician_id, amount, status")
+    .eq("id", depositId)
+    .single();
+  if (!dep) return { error: "Pengajuan setor tidak ditemukan." };
+  if (dep.status !== "pending") return { error: "Pengajuan ini sudah diproses sebelumnya." };
+
+  const res = await creditTechnicianBalance(
+    supabase,
+    dep.technician_id,
+    dep.amount,
+    "Setor saldo disetujui admin",
+    dep.id
+  );
+  if (!res.ok) return { error: res.error };
+
+  const { error: upErr } = await supabase
+    .from("balance_deposits")
+    .update({ status: "approved", reviewed_at: new Date().toISOString() })
+    .eq("id", depositId)
+    .eq("status", "pending"); // guard race: hanya pending yang bisa disetujui
+  if (upErr) return { error: upErr.message };
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return { ok: true, balance: res.balance };
+}
+
+/**
+ * Tolak bukti setor dengan alasan — teknisi bisa kirim ulang bukti baru.
+ */
+export async function rejectBalanceDepositAdmin(depositId, reason) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const clean = (reason || "").trim();
+  if (clean.length < 5) return { error: "Tulis alasan penolakan (minimal 5 karakter)." };
+
+  const { error } = await supabase
+    .from("balance_deposits")
+    .update({ status: "rejected", rejection_reason: clean, reviewed_at: new Date().toISOString() })
+    .eq("id", depositId)
+    .eq("status", "pending");
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+/**
+ * Admin menambah saldo teknisi langsung (tanpa bukti setor) —
+ * mis. koreksi manual atau bonus.
+ */
+export async function addTechnicianBalanceAdmin(technicianId, amount, note) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const amt = Math.round(Number(amount));
+  if (!amt || amt <= 0) return { error: "Jumlah harus lebih dari 0." };
+
+  const res = await creditTechnicianBalance(
+    supabase,
+    technicianId,
+    amt,
+    note?.trim() || "Ditambahkan manual oleh admin"
+  );
+  if (!res.ok) return { error: res.error };
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return { ok: true, balance: res.balance };
 }

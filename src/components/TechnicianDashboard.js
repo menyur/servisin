@@ -8,13 +8,16 @@ import { StatusPill } from "@/components/StatusPipeline";
 import OrderReport from "@/components/OrderReport";
 import ReportForm from "@/components/ReportForm";
 import MyReportsList from "@/components/MyReportsList";
-import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle } from "lucide-react";
+import DepositModal from "@/components/DepositModal";
+import { formatRupiah } from "@/lib/pricing";
+import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2 } from "lucide-react";
 
-export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null }) {
+export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null, balance = 0, transactions = [], deposits = [] }) {
   const [bookings, setBookings] = useState(initialBookings);
   const [busyId, setBusyId] = useState(null);
   const [tab, setTab] = useState("jobs");
   const [reportBookingId, setReportBookingId] = useState("");
+  const [showDeposit, setShowDeposit] = useState(false);
 
   async function markStatus(id, status) {
     setBusyId(id);
@@ -30,6 +33,10 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
   const active = bookings.filter((b) => !["completed", "cancelled"].includes(b.status));
   const done = bookings.filter((b) => ["completed", "cancelled"].includes(b.status));
 
+  const totalTopup = transactions.filter((t) => t.type === "topup").reduce((s, t) => s + Number(t.amount), 0);
+  const totalCommission = transactions.filter((t) => t.type === "earning").reduce((s, t) => s + Number(t.commission_amount || 0), 0);
+  const pendingDeposits = deposits.filter((d) => d.status === "pending").length;
+
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -44,6 +51,48 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
           <HelpCircle size={14} /> Butuh bantuan? Baca panduan
         </Link>
       </div>
+
+      {/* KARTU SALDO AKTIF */}
+      <div
+        className="card !p-5 mb-6 text-white border-0"
+        style={{ background: "linear-gradient(135deg, #1C86C7 0%, #135F94 100%)" }}
+      >
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-white/70 flex items-center gap-1.5">
+              <Wallet size={14} /> Saldo Aktif
+            </p>
+            <p className="font-display text-3xl font-bold mt-1.5">{formatRupiah(balance)}</p>
+            <p className="text-xs text-white/60 mt-1">
+              Komisi {commissionRate}% otomatis dipotong dari saldo saat pesanan selesai.
+            </p>
+          </div>
+          <div className="text-right space-y-1.5">
+            <p className="text-xs text-white/70 flex items-center gap-1 justify-end">
+              <TrendingUp size={12} /> Total setor disetujui: <strong>{formatRupiah(totalTopup)}</strong>
+            </p>
+            <p className="text-xs text-white/70 flex items-center gap-1 justify-end">
+              <TrendingDown size={12} /> Total komisi terpotong: <strong>{formatRupiah(totalCommission)}</strong>
+            </p>
+            <button
+              onClick={() => setShowDeposit(true)}
+              className="btn-outline !bg-white !border-white !text-brand-deep !py-2 text-sm mt-1 font-semibold hover:!bg-white/90"
+            >
+              <Wallet size={15} /> Setor Saldo
+            </button>
+          </div>
+        </div>
+        {pendingDeposits > 0 && (
+          <p className="text-xs text-white/80 mt-3 flex items-center gap-1.5 border-t border-white/20 pt-2.5">
+            <Loader2 size={12} className="animate-spin" />
+            {pendingDeposits} pengajuan setor menunggu verifikasi admin
+          </p>
+        )}
+      </div>
+
+      {showDeposit && (
+        <DepositModal balance={balance} onClose={() => setShowDeposit(false)} onSubmitted={() => setTimeout(() => window.location.reload(), 1200)} />
+      )}
 
       {myRating && (
         <div className="card !p-4 mb-6 flex items-center gap-3 border-amber/40 w-fit">
@@ -83,6 +132,14 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
         >
           <FilePlus2 size={16} /> Laporan Pekerjaan
         </button>
+        <button
+          onClick={() => setTab("balance")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 transition ${
+            tab === "balance" ? "border-brand bg-brand-tint text-brand-deep" : "border-line text-ink-soft hover:bg-brand-tint/50"
+          }`}
+        >
+          <History size={16} /> Riwayat Saldo
+        </button>
         <Link
           href="/panduan-teknisi"
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 border-line text-ink-soft hover:bg-brand-tint/50 transition"
@@ -90,6 +147,10 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
           <HelpCircle size={16} /> Panduan
         </Link>
       </div>
+
+      {tab === "balance" && (
+        <BalanceHistory transactions={transactions} deposits={deposits} balance={balance} />
+      )}
 
       {tab === "create-report" && (
         <div className="space-y-8">
@@ -155,6 +216,74 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
           )}
         </>
       )}
+    </div>
+  );
+}
+
+function BalanceHistory({ transactions, deposits, balance }) {
+  const rejectedDeposits = deposits.filter((d) => d.status === "rejected");
+  return (
+    <div>
+      <h2 className="font-display font-semibold text-navy mb-1">Riwayat Saldo</h2>
+      <p className="text-sm text-ink-soft mb-4">
+        Setoran yang disetujui menambah saldo; komisi pesanan selesai memotongnya.
+      </p>
+
+      {rejectedDeposits.length > 0 && (
+        <div className="card !p-4 mb-4 border-coral/40 bg-coral-tint/40">
+          <p className="text-sm font-semibold text-coral mb-2">Pengajuan setor ditolak — perbaiki lalu kirim ulang:</p>
+          <ul className="text-xs space-y-1.5">
+            {rejectedDeposits.map((d) => (
+              <li key={d.id}>
+                <strong className="text-navy">{formatRupiah(d.amount)}</strong> — {d.rejection_reason || "tanpa alasan"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {transactions.length === 0 ? (
+        <div className="card text-center py-8">
+          <Wallet size={32} className="text-ink-soft mx-auto mb-2" />
+          <p className="text-ink-soft text-sm">
+            Belum ada mutasi. Klik <strong>Setor Saldo</strong> di kartu di atas untuk mengisi saldo pertamamu.
+          </p>
+        </div>
+      ) : (
+        <div className="card !p-0 overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-brand-tint/60">
+              <tr className="text-left text-navy">
+                <th className="px-4 py-2.5 font-semibold">Tanggal</th>
+                <th className="px-4 py-2.5 font-semibold">Keterangan</th>
+                <th className="px-4 py-2.5 font-semibold text-right">Jumlah</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((t) => {
+                const positive = Number(t.amount) > 0;
+                return (
+                  <tr key={t.id} className="border-t border-line">
+                    <td className="px-4 py-2.5 text-ink-soft whitespace-nowrap">
+                      {new Date(t.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                    </td>
+                    <td className="px-4 py-2.5 text-navy">{t.note || t.type}</td>
+                    <td className={`px-4 py-2.5 text-right font-semibold whitespace-nowrap ${positive ? "text-mint" : "text-coral"}`}>
+                      {positive ? "+" : ""}
+                      {formatRupiah(t.amount)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="card !p-4 mt-4 flex items-center justify-between">
+        <p className="text-sm text-navy font-semibold">Saldo aktif sekarang</p>
+        <p className="font-display font-bold text-navy text-lg">{formatRupiah(balance)}</p>
+      </div>
     </div>
   );
 }

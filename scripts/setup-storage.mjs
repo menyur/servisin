@@ -32,6 +32,7 @@ const supabase = createClient(url, serviceKey, { auth: { persistSession: false }
 const BUCKETS = [
   ["service-images", true],   // thumbnail layanan (tampil di landing page)
   ["payment-proofs", true],   // bukti transfer (dilihat admin & struk)
+  ["balance-proofs", true],   // bukti setor saldo teknisi (dilihat admin)
   ["attachments", true],      // foto kondisi/kerusakan booking
   ["profile-media", true],    // avatar & banner profil
   ["receipts", false],        // PDF struk ter-arsip (akses via UI)

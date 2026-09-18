@@ -34,12 +34,35 @@ export default async function TechnicianPage() {
 
   const { bookings, myRating } = await getMyAssignments();
 
+  // saldo aktif + riwayat mutasi + pengajuan setor (aman bila migrasi belum dijalankan)
+  let balance = Number(profile?.balance ?? 0);
+  let transactions = [];
+  const { data: tx, error: txErr } = await supabase
+    .from("balance_transactions")
+    .select("id, type, amount, commission_amount, note, created_at")
+    .eq("technician_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (!txErr && tx) transactions = tx;
+
+  let deposits = [];
+  const { data: deps, error: depErr } = await supabase
+    .from("balance_deposits")
+    .select("id, amount, status, rejection_reason, created_at")
+    .eq("technician_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (!depErr && deps) deposits = deps;
+
   return (
     <TechnicianDashboard
       initialBookings={bookings}
       technicianName={profile?.name}
       commissionRate={Number(profile?.commission_rate ?? 10)}
       myRating={myRating}
+      balance={balance}
+      transactions={transactions}
+      deposits={deposits}
     />
   );
 }
