@@ -152,7 +152,12 @@ export async function updateBookingStatusAdmin(bookingId, status) {
   // + potong komisi dari saldo teknisi — keduanya tak pernah menggagalkan update status
   if (status === "completed") {
     sendReceiptForBooking(supabase, bookingId).catch(() => {});
-    debitTechnicianCommission(supabase, bookingId).catch(() => {});
+    debitTechnicianCommission(supabase, bookingId)
+      .then((r) => {
+        if (r && r.ok === false) console.error("Gagal debit komisi:", r.error || JSON.stringify(r));
+        else if (r?.skipped) console.error("Debit komisi dilewati:", JSON.stringify(r));
+      })
+      .catch((e) => console.error("Gagal debit komisi:", e?.message));
   }
 
   revalidatePath("/admin");

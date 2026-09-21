@@ -58,7 +58,9 @@ export async function updateJobStatus(bookingId, status) {
 
   // pesanan selesai → potong komisi dari saldo teknisi
   if (status === "completed") {
-    await debitTechnicianCommission(supabase, bookingId);
+    const r = await debitTechnicianCommission(supabase, bookingId);
+    if (r && r.ok === false) console.error("Gagal debit komisi:", r.error || JSON.stringify(r));
+    else if (r?.skipped) console.error("Debit komisi dilewati:", JSON.stringify(r));
   }
 
   revalidatePath("/technician");
