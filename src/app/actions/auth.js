@@ -40,7 +40,19 @@ export async function signUp(prevState, formData) {
   });
 
   if (error) {
-    return { error: error.message };
+    const msg = error.message || "";
+    let friendly = msg;
+    if (/rate limit/i.test(msg)) {
+      friendly =
+        "Terlalu banyak percobaan pendaftaran dalam waktu singkat — server menahan sementara pengiriman email verifikasi. Coba lagi sekitar 1 jam ke depan. Jika kamu merasa sudah pernah mendaftar dengan email ini, coba Masuk atau fitur lupa kata sandi.";
+    } else if (/already registered|already exists/i.test(msg)) {
+      friendly = "Email ini sudah terdaftar. Silakan Masuk dengan kata sandimu, atau gunakan email lain.";
+    } else if (/invalid email/i.test(msg)) {
+      friendly = "Format email tidak valid — periksa lagi penulisannya.";
+    } else if (/password.*least|short/i.test(msg)) {
+      friendly = "Kata sandi terlalu pendek — minimal 6 karakter.";
+    }
+    return { error: friendly };
   }
 
   // Pendaftar teknisi baru → email ke semua admin (fire-and-forget:
