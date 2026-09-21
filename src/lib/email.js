@@ -298,3 +298,24 @@ export async function sendAdminNewWithdrawalEmail(adminEmails, wd) {
 
   return sendMail({ to: adminEmails, subject: `Penarikan saldo ${wd.tech_name} menunggu persetujuan — Servisin`, html });
 }
+
+/** Ke semua admin: ada pendaftar teknisi baru menunggu kurasi (dengan KTP). */
+export async function sendAdminNewApplicantEmail(adminEmails, a) {
+  const html = wrapper(
+    "Pendaftar teknisi baru menunggu kurasi",
+    `
+      <p>Ada calon teknisi baru mendaftar lewat halaman "Gabung jadi Teknisi":</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Nama", `<strong>${a.name}</strong>`)}
+        ${detailRow("Email", a.email)}
+        ${detailRow("No. HP (WhatsApp)", a.phone || "-")}
+        ${detailRow("Alamat domisili", (a.address || "-").replace(/\n/g, "<br />"))}
+        ${detailRow("Keahlian utama", a.skill || "-")}
+        ${detailRow("Foto KTP", a.ktpUrl ? "Terunggah (lihat di panel Admin → tab Pendaftar Teknisi)" : "Tidak ada")}
+      </table>
+      <p>Buka panel Admin → tab "Pendaftar Teknisi" untuk memverifikasi identitas, melihat KTP-nya, lalu menyetujui atau menolak pendaftarannya.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Pendaftar teknisi baru: ${a.name} — Servisin`, html });
+}

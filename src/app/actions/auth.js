@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
+import { sendAdminNewApplicantEmail } from "@/lib/email";
 
 export async function signUp(prevState, formData) {
   const name = formData.get("name");
@@ -40,6 +41,26 @@ export async function signUp(prevState, formData) {
 
   if (error) {
     return { error: error.message };
+  }
+
+  // Pendaftar teknisi baru → email ke semua admin (fire-and-forget:
+  // kegagalan email tidak boleh menggagalkan pendaftaran).
+  if (role === "technician") {
+    try {
+      const { data: adminEmails } = await supabase.rpc("get_admin_emails");
+      if (adminEmails?.length) {
+        await sendAdminNewApplicantEmail(adminEmails, {
+          name,
+          email,
+          phone,
+          address,
+          skill: skill || "-",
+          ktpUrl,
+        });
+      }
+    } catch (err) {
+      console.error("Gagal email pendaftar baru:", err?.message || err);
+    }
   }
 
   redirect("/dashboard");
