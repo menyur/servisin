@@ -1,14 +1,16 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
 import { HardHat, BadgeCheck, Wallet, CalendarClock } from "lucide-react";
 import { signUp } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
 import { AuthIllustration, AvatarBima } from "@/components/Illustrations";
+import KtpUpload from "@/components/KtpUpload";
 
 export default function GabungPage() {
   const [state, formAction] = useActionState(signUp, null);
+  const [ktpPath, setKtpPath] = useState(null);
 
   const benefits = [
     { icon: CalendarClock, text: "Atur sendiri jadwal & area kerja kamu" },
@@ -59,6 +61,18 @@ export default function GabungPage() {
             <label className="label">Nomor HP (WhatsApp)</label>
             <input className="input" type="tel" name="phone" placeholder="0812xxxxxxxx" required />
           </div>
+          <div>
+            <label className="label">Alamat domisili</label>
+            <textarea
+              className="input"
+              name="address"
+              rows={2}
+              required
+              placeholder="Nama jalan, nomor rumah, kelurahan, kecamatan, kota"
+            />
+          </div>
+          <KtpUpload value={ktpPath} onChange={setKtpPath} />
+          <input type="hidden" name="ktp_url" value={ktpPath || ""} />
           <div>
             <label className="label">Keahlian utama</label>
             <select className="input" name="skill" defaultValue="">

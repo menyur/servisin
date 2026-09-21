@@ -1122,3 +1122,29 @@ export async function getFinanceSummaryAdmin() {
 
   return { summary };
 }
+
+/* ========================= VERIFIKASI KTP PENDAFTAR ========================= */
+
+/**
+ * Buat signed URL (berlaku 30 menit) untuk foto KTP pendaftar teknisi.
+ * Bucket ktp-documents PRIVAT — hanya admin yang boleh membaca via action ini.
+ */
+export async function getKtpSignedUrlAdmin(path) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!path || typeof path !== "string" || path.includes("..")) {
+    return { error: "Path KTP tidak valid." };
+  }
+
+  const { data, error } = await supabase.storage
+    .from("ktp-documents")
+    .createSignedUrl(path, 30 * 60);
+  if (error) {
+    if (/not found|does not exist/i.test(error.message || "")) {
+      return { error: "Bucket ktp-documents belum ada — jalankan supabase/migrate-technician-ktp.sql." };
+    }
+    return { error: error.message };
+  }
+  return { url: data.signedUrl };
+}

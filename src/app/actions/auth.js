@@ -14,6 +14,9 @@ export async function signUp(prevState, formData) {
   const requestedRole = formData.get("role");
   const role = requestedRole === "technician" ? "technician" : "customer";
   const skill = formData.get("skill") || null;
+  // Data kurasi teknisi: alamat domisili + path foto KTP di Storage (privat).
+  const address = (formData.get("address") || "").toString().trim() || null;
+  const ktpUrl = (formData.get("ktp_url") || "").toString().trim() || null;
 
   if (!name || !email || !password) {
     return { error: "Nama, email, dan kata sandi wajib diisi." };
@@ -21,12 +24,18 @@ export async function signUp(prevState, formData) {
   if (password.length < 6) {
     return { error: "Kata sandi minimal 6 karakter." };
   }
+  if (role === "technician" && !address) {
+    return { error: "Alamat domisili wajib diisi untuk pendaftaran teknisi." };
+  }
+  if (role === "technician" && !ktpUrl) {
+    return { error: "Foto KTP wajib diunggah untuk verifikasi identitas." };
+  }
 
   const supabase = await createClient();
   const { error } = await supabase.auth.signUp({
     email,
     password,
-    options: { data: { name, phone, role, skill } },
+    options: { data: { name, phone, role, skill, address, ktp_url: ktpUrl } },
   });
 
   if (error) {

@@ -19,10 +19,11 @@ import {
   getCompletedBookingsCsvAdmin,
   getMonthlyReportArchivesAdmin,
   getMonthlyReportDownloadUrlAdmin,
+  getKtpSignedUrlAdmin,
 } from "@/app/actions/admin";
 import { formatRupiah, computeSplit } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
@@ -758,8 +759,14 @@ function ApplicantList({ users, onReview }) {
               {u.name} <ApprovalBadge status={u.approval_status} />
             </p>
             <p className="text-xs text-ink-soft">{u.email} · {u.phone || "-"} · daftar {new Date(u.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</p>
+            {u.address && (
+              <p className="text-xs text-ink-soft mt-0.5 flex items-start gap-1">
+                <MapPin size={12} className="mt-0.5 shrink-0" /> {u.address}
+              </p>
+            )}
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
+            {u.ktp_url && <KtpViewer path={u.ktp_url} name={u.name} />}
             {u.approval_status !== "approved" && (
               <button className="btn-primary !px-4 !py-2 text-sm" disabled={onReview === null} onClick={() => onReview(u.id, "approved")}>
                 Setujui
@@ -774,6 +781,63 @@ function ApplicantList({ users, onReview }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * Tombol lihat foto KTP pendaftar — fetch signed URL on-demand dari
+ * server action (bucket ktp-documents privat) lalu tampilkan overlay.
+ */
+function KtpViewer({ path, name }) {
+  const [loading, setLoading] = useState(false);
+  const [url, setUrl] = useState(null);
+  const [error, setError] = useState("");
+
+  async function open() {
+    setLoading(true);
+    setError("");
+    const res = await getKtpSignedUrlAdmin(path);
+    setLoading(false);
+    if (res.error) {
+      setError(res.error);
+      setTimeout(() => setError(""), 4000);
+      return;
+    }
+    setUrl(res.url);
+  }
+
+  return (
+    <>
+      <div className="relative">
+        <button
+          onClick={open}
+          disabled={loading}
+          className="btn-outline !px-3 !py-2 text-xs flex items-center gap-1.5"
+          title="Lihat foto KTP"
+        >
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <IdCard size={14} />} KTP
+        </button>
+        {error && <p className="text-coral text-[10px] absolute top-full left-0 mt-1 w-40">{error}</p>}
+      </div>
+      {url && (
+        <div
+          className="fixed inset-0 z-[60] bg-navy/70 flex items-center justify-center p-6"
+          onClick={() => setUrl(null)}
+        >
+          <div className="bg-white rounded-2xl p-4 max-w-lg w-full" onClick={(e) => e.stopPropagation()}>
+            <p className="font-semibold text-navy text-sm mb-3 flex items-center gap-2">
+              <IdCard size={16} /> KTP {name}
+            </p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={url} alt={`KTP ${name}`} className="w-full rounded-xl border border-line" />
+            <p className="text-[11px] text-ink-soft mt-2">Tautan berlaku 30 menit lalu otomatis kedaluwarsa.</p>
+            <button className="btn-outline w-full mt-3 !py-2 text-sm" onClick={() => setUrl(null)}>
+              Tutup
+            </button>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
