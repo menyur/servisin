@@ -45,6 +45,9 @@ export async function signUp(prevState, formData) {
     if (/rate limit/i.test(msg)) {
       friendly =
         "Terlalu banyak percobaan pendaftaran dalam waktu singkat — server menahan sementara pengiriman email verifikasi. Coba lagi sekitar 1 jam ke depan. Jika kamu merasa sudah pernah mendaftar dengan email ini, coba Masuk atau fitur lupa kata sandi.";
+    } else if (/signups are disabled|signup.*disabled/i.test(msg)) {
+      friendly =
+        "Pendaftaran akun baru sedang dinonaktifkan sementara di server. Silakan coba beberapa saat lagi, atau hubungi kami melalui halaman kontak.";
     } else if (/already registered|already exists/i.test(msg)) {
       friendly = "Email ini sudah terdaftar. Silakan Masuk dengan kata sandimu, atau gunakan email lain.";
     } else if (/invalid email/i.test(msg)) {
