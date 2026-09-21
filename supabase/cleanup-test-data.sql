@@ -1,47 +1,65 @@
 -- =========================================================
--- CLEANUP: hapus seluruh data uji (booking SV uji, voucher,
--- review uji, file bukti bayar uji).
--- Jalankan di Supabase SQL Editor (perlu hak service/owner —
--- anon TIDAK bisa hapus karena RLS).
+-- PEMBERSIHAN DATA UJI — jalankan di Supabase SQL Editor.
+-- Menghapus:
+--   1. Booking uji SV-3982 + jejaknya (komisi, struk arsip, review)
+--   2. Transaksi saldo uji milik akun pendaftar uji
+--   3. Akun auth + profil pendaftar uji (cascade ke profil terkait)
+-- TIDAK menyentuh: SV-8828 (milik Rian), akun nyata lainnya.
+-- Setiap bagian mencetak NOTICE jumlah baris yang dihapus.
 -- =========================================================
 
--- 1) FILE BUCKET payment-proofs (4 file PNG uji — semua milik uji)
-delete from storage.objects
-where bucket_id = 'payment-proofs';
+-- 1) Booking uji SV-3982 + jejak terkait
+do $$
+declare n int;
+begin
+  delete from reviews where booking_id in (select id from bookings where code = 'SV-3982');
+  get diagnostics n = row_count; raise notice 'reviews uji dihapus: %', n;
 
--- 2) VOUCHER uji (kode TERIMAKASIH-* insentif + PROMO-* manual)
-delete from vouchers
-where code like 'TERIMAKASIH-%'
-   or code like 'PROMO-%'
-   or source in ('review_incentive', 'admin_manual');
+  delete from receipt_archives where booking_id in (select id from bookings where code = 'SV-3982');
+  get diagnostics n = row_count; raise notice 'struk arsip uji dihapus: %', n;
 
--- 3) REVIEW uji (semua review yang ada saat ini adalah hasil uji:
---    "Mantap" dan "kerja bagus" dari sesi uji)
-delete from reviews
-where comment ilike '%mantap%'
-   or comment ilike '%kerja bagus%';
+  delete from balance_transactions where booking_id in (select id from bookings where code = 'SV-3982');
+  get diagnostics n = row_count; raise notice 'transaksi komisi uji dihapus: %', n;
 
--- 4) BOOKING uji — SEMUA booking yang tercantum di bawah.
---    (SV-2008 dikeluarkan dari daftar karena milik user lain d04c01d3,
---     tapi lihat catatan di bawah — kemungkinan juga akun uji.)
-delete from bookings where code in (
-  'SV-4771', 'SV-7889', 'SV-8421',  -- sesi completed lama (COD)
-  'SV-7728',                         -- uji voucher COD
-  'SV-9759', 'SV-9190', 'SV-1729',  -- uji konfirmasi pembayaran
-  'SV-2202',                         -- uji voucher manual (disc 15rb)
-  'SV-5431', 'SV-8649'              -- uji bukti pembayaran + penolakan
-);
+  delete from bookings where code = 'SV-3982';
+  get diagnostics n = row_count; raise notice 'booking SV-3982 dihapus: %', n;
+end $$;
 
--- 5) BOOKING milik akun uji "d04c01d3..." (SV-2008 & sisanya) —
---    hapus SEMUA booking milik user itu kalau memang akun uji:
---    (uncomment kalau yakin akun itu uji)
--- delete from bookings where user_id = 'd04c01d3-048d-4fde-9c9e-70416689af54';
+-- 2) Transaksi saldo + pengajuan setor/tarik milik akun uji
+do $$
+declare n int; uid uuid;
+begin
+  select id into uid from profiles where email = 'teknisi-tuntas-uji@gmail.com';
+  if uid is not null then
+    delete from balance_transactions where technician_id = uid;
+    get diagnostics n = row_count; raise notice 'transaksi saldo uji dihapus: %', n;
+    delete from balance_deposits where technician_id = uid;
+    get diagnostics n = row_count; raise notice 'setoran uji dihapus: %', n;
+    delete from balance_withdrawals where technician_id = uid;
+    get diagnostics n = row_count; raise notice 'penarikan uji dihapus: %', n;
+  else
+    raise notice 'SKIP 2: akun uji tidak ditemukan';
+  end if;
+end $$;
 
--- =========================================================
--- VERIFIKASI setelah jalan (jalankan blok ini juga):
---   select code, status from bookings order by created_at;
---   select code, amount from vouchers;
---   select rating from reviews;
---   select name from storage.objects where bucket_id='payment-proofs';
--- Harapan: keempatnya kosong.
--- =========================================================
+-- 3) Akun auth pendaftar uji (hapus user → profil & data terkait ikut cascade)
+do $$
+declare n int; uid uuid;
+begin
+  select id into uid from auth.users where email = 'teknisi-tuntas-uji@gmail.com';
+  if uid is not null then
+    delete from profiles where id = uid;
+    get diagnostics n = row_count; raise notice 'profil uji dihapus: %', n;
+    delete from auth.users where id = uid;
+    get diagnostics n = row_count; raise notice 'akun auth uji dihapus: %', n;
+  else
+    raise notice 'SKIP 3: akun auth uji tidak ada';
+  end if;
+end $$;
+
+-- 4) VERIFIKASI AKHIR
+select 'booking SV-3982' as cek, count(*) as sisa from bookings where code = 'SV-3982'
+union all
+select 'profil uji', count(*) from profiles where email = 'teknisi-tuntas-uji@gmail.com'
+union all
+select 'auth uji', count(*) from auth.users where email = 'teknisi-tuntas-uji@gmail.com';
