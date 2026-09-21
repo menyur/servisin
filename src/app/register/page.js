@@ -31,6 +31,15 @@ export default function RegisterPage() {
             <input className="input" type="tel" name="phone" placeholder="0812xxxxxxxx" />
           </div>
           <div>
+            <label className="label">Alamat</label>
+            <textarea
+              className="input"
+              name="address"
+              rows={2}
+              placeholder="Nama jalan, nomor rumah, kelurahan, kecamatan, kota — mempermudah teknisi datang"
+            />
+          </div>
+          <div>
             <label className="label">Kata sandi</label>
             <input className="input" type="password" name="password" minLength={6} required />
           </div>
