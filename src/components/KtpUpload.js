@@ -44,9 +44,12 @@ export default function KtpUpload({ value, onChange }) {
       // Anon user belum punya uid — folder penampung; admin tetap bisa baca
       // lewat signed URL dari server action (policy read admin ada di migrasi).
       const path = `pendaftaran/ktp-${Date.now()}.${ext}`;
+      // upsert:false — path memakai timestamp (praktis tak mungkin bentrok),
+      // dan upsert:true ditolak RLS karena mekanisme upsert Storage menuntut
+      // policy read anon yang memang sengaja tidak kami berikan (dokumen privat).
       const { error: upErr } = await supabase.storage
         .from("ktp-documents")
-        .upload(path, optimized, { upsert: true, contentType: optimized.type });
+        .upload(path, optimized, { upsert: false, contentType: optimized.type });
       if (upErr) throw upErr;
       onChange(path, previewUrl);
       setError("");
