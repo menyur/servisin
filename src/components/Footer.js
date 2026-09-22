@@ -12,6 +12,7 @@ export default function Footer() {
           <Link href="/teknisi" className="hover:text-brand">Teknisi Kami</Link>
           <Link href="/panduan-pelanggan" className="hover:text-brand">Panduan Pelanggan</Link>
           <Link href="/panduan-teknisi" className="hover:text-brand">Panduan Teknisi</Link>
+          <Link href="/unduh" className="hover:text-brand font-semibold text-brand">Unduh Aplikasi</Link>
           
           
         </nav>
