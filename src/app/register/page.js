@@ -1,13 +1,18 @@
 "use client";
 
-import { useActionState } from "react";
+import { use, useActionState } from "react";
 import Link from "next/link";
 import { signUp } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
 import { AuthIllustration } from "@/components/Illustrations";
 
-export default function RegisterPage() {
+export default function RegisterPage({ searchParams }) {
   const [state, formAction] = useActionState(signUp, null);
+  // Tujuan setelah daftar (mis. kembali ke alur booking dengan layanan terpilih).
+  // Next 15+: searchParams berupa Promise — dibuka dengan use().
+  const params = searchParams instanceof Promise ? use(searchParams) : searchParams;
+  const next = typeof params?.next === "string" ? params.next : null;
+  const nextHidden = next && next.startsWith("/") ? next : null;
 
   return (
     <div className="max-w-md mx-auto px-5 py-16">
@@ -18,6 +23,7 @@ export default function RegisterPage() {
         <p className="text-sm text-ink-soft mb-6 text-center">Sudah punya akun? <Link href="/login" className="text-brand font-semibold">Masuk di sini</Link></p>
 
         <form action={formAction} className="space-y-4">
+          {nextHidden && <input type="hidden" name="next" value={nextHidden} />}
           <div>
             <label className="label">Nama lengkap</label>
             <input className="input" type="text" name="name" required />

@@ -19,6 +19,10 @@ export default async function BookingPage({ searchParams }) {
     .order("sort_order");
 
   if (!user) {
+    // Pertahankan layanan yang dipilih: setelah masuk/daftar, pengguna
+    // kembali ke alur booking dengan layanan yang sama (param ?next=).
+    const next = `/booking${params?.service ? `?service=${params.service}` : ""}`;
+    const nextParam = `?next=${encodeURIComponent(next)}`;
     return (
       <div className="max-w-md mx-auto px-5 py-20 text-center">
         <div className="card">
@@ -30,8 +34,8 @@ export default async function BookingPage({ searchParams }) {
             Supaya kamu bisa melacak status pesanan dan melihat riwayat booking, silakan masuk atau daftar akun terlebih dahulu.
           </p>
           <div className="flex gap-3 justify-center">
-            <Link href="/login" className="btn-primary">Masuk</Link>
-            <Link href="/register" className="btn-outline">Daftar</Link>
+            <Link href={`/login${nextParam}`} className="btn-primary">Masuk</Link>
+            <Link href={`/register${nextParam}`} className="btn-outline">Daftar</Link>
           </div>
         </div>
       </div>

@@ -11,6 +11,9 @@ export async function signUp(prevState, formData) {
   const email = formData.get("email");
   const phone = formData.get("phone");
   const password = formData.get("password");
+  // Tujuan setelah daftar (mis. kembali ke alur booking); hanya path internal.
+  const nextRaw = (formData.get("next") || "").toString();
+  const nextPath = nextRaw.startsWith("/") && !nextRaw.startsWith("//") ? nextRaw : null;
   // Form publik hanya boleh mendaftar sebagai customer atau technician.
   const requestedRole = formData.get("role");
   const role = requestedRole === "technician" ? "technician" : "customer";
@@ -78,7 +81,7 @@ export async function signUp(prevState, formData) {
     }
   }
 
-  redirect("/dashboard");
+  redirect(nextPath || "/dashboard");
 }
 
 export async function signIn(prevState, formData) {
@@ -98,6 +101,11 @@ export async function signIn(prevState, formData) {
 
   revalidatePath("/", "layout");
 
+  // Tujuan eksplisit dari gate booking (?next=) — hanya path internal,
+  // dan admin/teknisi tetap diarahkan ke panelnya masing-masing.
+  const nextRaw = (formData.get("next") || "").toString();
+  const nextPath = nextRaw.startsWith("/") && !nextRaw.startsWith("//") ? nextRaw : null;
+
   // landing dinamis sesuai role
   const { data: profile } = await supabase
     .from("profiles")
@@ -106,7 +114,7 @@ export async function signIn(prevState, formData) {
     .single();
   if (profile?.role === "admin") redirect("/admin");
   if (profile?.role === "technician") redirect("/technician");
-  redirect("/dashboard");
+  redirect(nextPath || "/dashboard");
 }
 
 /** Kirim email reset password. Selalu sukses dari sudut pandang user
