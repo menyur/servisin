@@ -62,6 +62,7 @@ export async function confirmBookingPaymentAdmin(bookingId) {
   // push ke pelanggan: pembayaran dikonfirmasi
   await sendPushToUser(b.user_id, {
     title: "Pembayaran dikonfirmasi ✅",
+    event: "payment_confirmed",
     body: `Pesanan ${b.code} sudah dikonfirmasi. Menunggu teknisi ditugaskan.`,
     url: "/dashboard",
     tag: `booking-${bookingId}`,
@@ -114,6 +115,7 @@ export async function rejectPaymentProofAdmin(bookingId, reason) {
   // push ke pelanggan: bukti ditolak, perlu kirim ulang
   await sendPushToUser(b.user_id, {
     title: "Bukti pembayaran ditolak",
+    event: "payment_rejected",
     body: `Pesanan ${b.code}: ${clean} — silakan kirim ulang bukti yang benar.`,
     url: "/dashboard",
     tag: `booking-${bookingId}`,
@@ -182,6 +184,7 @@ export async function updateBookingStatusAdmin(bookingId, status) {
         : null;
       await sendPushToUser(cur.user_id, {
         title: "Pengerjaan dimulai 🚀",
+        event: "work_started",
         body: techName
           ? `${techName} sedang mengerjakan pesanan ${cur.code} (${cur.services?.name || "layanan"}).`
           : `Pesanan ${cur.code} sedang dikerjakan.`,
@@ -191,6 +194,7 @@ export async function updateBookingStatusAdmin(bookingId, status) {
     } else if (status === "completed") {
       await sendPushToUser(cur.user_id, {
         title: "Pesanan selesai ✨",
+        event: "order_completed",
         body: `Pesanan ${cur.code} sudah selesai dikerjakan. Struk dikirim ke emailmu — jangan lupa beri penilaian!`,
         url: "/dashboard",
         tag: `booking-${bookingId}`,
@@ -199,6 +203,7 @@ export async function updateBookingStatusAdmin(bookingId, status) {
       if (cur.technician_id) {
         await sendPushToUser(cur.technician_id, {
           title: "Pekerjaan selesai 🎉",
+          event: "order_completed",
           body: `Pesanan ${cur.code} ditandai selesai. Terima kasih — komisi dipotong, pendapatan bersih masuk saldo kamu.`,
           url: "/technician",
           tag: `booking-${bookingId}`,
@@ -765,6 +770,7 @@ export async function assignTechnicianAdmin(bookingId, technicianId) {
       // push ke pelanggan: teknisi sudah ditugaskan
       await sendPushToUser(booking.user_id, {
         title: "Teknisi ditugaskan 🛠️",
+        event: "technician_assigned",
         body: `${technician.name} akan menangani pesanan ${booking.code} (${booking.services?.name || "layanan"}).`,
         url: "/dashboard",
         tag: `booking-${bookingId}`,
@@ -772,6 +778,7 @@ export async function assignTechnicianAdmin(bookingId, technicianId) {
       // push ke teknisi: tugas baru masuk
       await sendPushToUser(technicianId, {
         title: "Tugas baru masuk",
+        event: "technician_assigned",
         body: `${booking.code} — ${booking.services?.name || "Layanan"}, ${booking.booking_date} ${booking.booking_time}.`,
         url: "/technician",
         tag: `assign-${bookingId}`,

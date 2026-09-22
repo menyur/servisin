@@ -13,10 +13,11 @@ import MyVouchers from "@/components/MyVouchers";
 import ReceiptModal from "@/components/ReceiptModal";
 import PaymentConfirmModal from "@/components/PaymentConfirmModal";
 import PushManager from "@/components/PushManager";
+import NotificationSettings from "@/components/NotificationSettings";
 import ReviewModal from "@/components/ReviewModal";
 import ReviewForm from "@/components/ReviewForm";
 import { EmptyBoxIllustration } from "@/components/Illustrations";
-import { PlusCircle, List, FileBarChart, FilePlus2, Printer, Star, Gift, Wallet, Loader2, Hourglass, XCircle, RotateCcw, HelpCircle } from "lucide-react";
+import { PlusCircle, List, FileBarChart, FilePlus2, Printer, Star, Gift, Wallet, Loader2, Hourglass, XCircle, RotateCcw, HelpCircle, Bell } from "lucide-react";
 
 export default function DashboardClient({ initialBookings, customerName, customerPhone }) {
   const [bookings, setBookings] = useState(initialBookings);
@@ -64,6 +65,7 @@ export default function DashboardClient({ initialBookings, customerName, custome
         {tabBtn("create-report", FilePlus2, "Buat Laporan")}
         {tabBtn("review", Star, "Beri Penilaian")}
         {tabBtn("vouchers", Gift, "Voucher Saya")}
+        {tabBtn("notif", Bell, "Notifikasi")}
       </div>
 
       {tab === "review" && (
@@ -73,6 +75,12 @@ export default function DashboardClient({ initialBookings, customerName, custome
       )}
 
       {tab === "vouchers" && <MyVouchers />}
+
+      {tab === "notif" && (
+        <div className="max-w-md">
+          <NotificationSettings />
+        </div>
+      )}
 
       {tab === "history" && (
         <>

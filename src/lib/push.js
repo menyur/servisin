@@ -27,6 +27,29 @@ function pushClient() {
   return webpush;
 }
 
+/**
+ * Kunci peristiwa push + labelnya (untuk UI pengaturan & validasi server).
+ * Semua default aktif; user bisa mematikan per peristiwa lewat
+ * profiles.notification_prefs (jsonb) — key yang tidak ada dianggap aktif.
+ */
+export const PUSH_EVENTS = {
+  payment_confirmed: "Pembayaran dikonfirmasi",
+  payment_rejected: "Bukti pembayaran ditolak",
+  technician_assigned: "Teknisi ditugaskan / tugas baru",
+  work_started: "Pengerjaan dimulai",
+  order_completed: "Pesanan selesai",
+};
+
+/** Baca preferensi user dari profiles.notification_prefs (aman bila kolom belum ada). */
+async function getPrefs(admin, userId) {
+  const { data } = await admin
+    .from("profiles")
+    .select("notification_prefs")
+    .eq("id", userId)
+    .single();
+  return data?.notification_prefs || {};
+}
+
 /** Ambil semua subscription milik satu user. */
 async function getSubscriptions(userId) {
   // Service role menembus RLS bila tersedia; jika tidak, tanpa client Supabase
@@ -49,12 +72,20 @@ async function getSubscriptions(userId) {
  * Subscription kadaluarsa/410 otomatis dihapus.
  * Tidak pernah melempar error — gagal push tak boleh menggagalkan aksi utama.
  */
-export async function sendPushToUser(userId, { title, body, url = "/dashboard", tag = "servisin" }) {
+export async function sendPushToUser(userId, { title, body, url = "/dashboard", tag = "servisin", event = null }) {
   const wp = pushClient();
   if (!wp) return; // fitur mati tanpa error
 
   let subs = [];
   try {
+    if (SERVICE_URL && SERVICE_KEY) {
+      const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
+      // hormati preferensi user — peristiwa dimatikan → jangan kirim
+      if (event) {
+        const prefs = await getPrefs(admin, userId);
+        if (prefs[event] === false) return;
+      }
+    }
     subs = await getSubscriptions(userId);
   } catch (err) {
     console.warn("[push] gagal membaca subscription:", err.message);
@@ -62,7 +93,7 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
   }
   if (subs.length === 0) return;
 
-  const payload = JSON.stringify({ title, body, url, tag });
+  const payload = JSON.stringify({ title, body, url, tag, event });
   const deadIds = [];
 
   await Promise.allSettled(
@@ -90,4 +121,21 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
 /** Public key untuk client (subscribe). Null bila env belum lengkap. */
 export function getVapidPublicKey() {
   return PUBLIC_KEY || null;
+}
+
+/**
+ * Baca preferensi user untuk UI pengaturan (server action helper).
+ * Aman bila kolom notification_prefs belum ada di DB.
+ */
+export async function readNotificationPrefs(supabase, userId) {
+  try {
+    const { data } = await supabase
+      .from("profiles")
+      .select("notification_prefs")
+      .eq("id", userId)
+      .single();
+    return data?.notification_prefs || {};
+  } catch {
+    return {};
+  }
 }

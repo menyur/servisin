@@ -10,9 +10,10 @@ import ReportForm from "@/components/ReportForm";
 import MyReportsList from "@/components/MyReportsList";
 import DepositModal from "@/components/DepositModal";
 import PushManager from "@/components/PushManager";
+import NotificationSettings from "@/components/NotificationSettings";
 import WithdrawModal from "@/components/WithdrawModal";
 import { formatRupiah } from "@/lib/pricing";
-import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2, Banknote } from "lucide-react";
+import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2, Banknote, Bell } from "lucide-react";
 
 export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null, balance = 0, transactions = [], deposits = [], withdrawals = [] }) {
   const [bookings, setBookings] = useState(initialBookings);
@@ -172,6 +173,14 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
         >
           <History size={16} /> Riwayat Saldo
         </button>
+        <button
+          onClick={() => setTab("notif")}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 transition ${
+            tab === "notif" ? "border-brand bg-brand-tint text-brand-deep" : "border-line text-ink-soft hover:bg-brand-tint/50"
+          }`}
+        >
+          <Bell size={16} /> Notifikasi
+        </button>
         <Link
           href="/panduan-teknisi"
           className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 border-line text-ink-soft hover:bg-brand-tint/50 transition"
@@ -179,6 +188,12 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
           <HelpCircle size={16} /> Panduan
         </Link>
       </div>
+
+      {tab === "notif" && (
+        <div className="max-w-md">
+          <NotificationSettings />
+        </div>
+      )}
 
       {tab === "balance" && (
         <BalanceHistory transactions={transactions} deposits={deposits} withdrawals={withdrawals} balance={balance} />
