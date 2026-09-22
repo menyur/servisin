@@ -160,12 +160,43 @@ export async function updateBookingStatusAdmin(bookingId, status) {
       ? { status, completed_at: new Date().toISOString() }
       : { status };
 
+  // data minimal untuk push (user_id selalu ada; teknisi opsional)
+  const { data: cur } = await supabase
+    .from("bookings")
+    .select("code, user_id, technician_id, services(name)")
+    .eq("id", bookingId)
+    .single();
+
   let { error } = await supabase.from("bookings").update(payload).eq("id", bookingId);
   // kolom completed_at belum ada di DB → ulangi tanpa itu agar update status tetap jalan
   if (error && /completed_at/.test(error.message)) {
     ({ error } = await supabase.from("bookings").update({ status }).eq("id", bookingId));
   }
   if (error) return { error: error.message };
+
+  // push ke pelanggan sesuai status baru (fire-and-forget)
+  if (cur) {
+    if (status === "in_progress") {
+      const techName = cur.technician_id
+        ? (await supabase.from("profiles").select("name").eq("id", cur.technician_id).single()).data?.name
+        : null;
+      await sendPushToUser(cur.user_id, {
+        title: "Pengerjaan dimulai 🚀",
+        body: techName
+          ? `${techName} sedang mengerjakan pesanan ${cur.code} (${cur.services?.name || "layanan"}).`
+          : `Pesanan ${cur.code} sedang dikerjakan.`,
+        url: "/dashboard",
+        tag: `booking-${bookingId}`,
+      });
+    } else if (status === "completed") {
+      await sendPushToUser(cur.user_id, {
+        title: "Pesanan selesai ✨",
+        body: `Pesanan ${cur.code} sudah selesai dikerjakan. Struk dikirim ke emailmu — jangan lupa beri penilaian!`,
+        url: "/dashboard",
+        tag: `booking-${bookingId}`,
+      });
+    }
+  }
 
   // struk PDF otomatis ke pelanggan saat pesanan ditandai selesai (fire-and-forget)
   // + potong komisi dari saldo teknisi — keduanya tak pernah menggagalkan update status
