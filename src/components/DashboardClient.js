@@ -12,6 +12,7 @@ import MyReportsList from "@/components/MyReportsList";
 import MyVouchers from "@/components/MyVouchers";
 import ReceiptModal from "@/components/ReceiptModal";
 import PaymentConfirmModal from "@/components/PaymentConfirmModal";
+import PushManager from "@/components/PushManager";
 import ReviewModal from "@/components/ReviewModal";
 import ReviewForm from "@/components/ReviewForm";
 import { EmptyBoxIllustration } from "@/components/Illustrations";
@@ -50,6 +51,11 @@ export default function DashboardClient({ initialBookings, customerName, custome
             <PlusCircle size={16} /> Booking baru
           </Link>
         </div>
+      </div>
+
+      {/* kartu aktivasi push notification (hilang sendiri setelah aktif/ditutup) */}
+      <div className="mb-6">
+        <PushManager />
       </div>
 
       <div className="flex gap-2 mb-6 flex-wrap">

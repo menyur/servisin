@@ -9,6 +9,7 @@ import OrderReport from "@/components/OrderReport";
 import ReportForm from "@/components/ReportForm";
 import MyReportsList from "@/components/MyReportsList";
 import DepositModal from "@/components/DepositModal";
+import PushManager from "@/components/PushManager";
 import WithdrawModal from "@/components/WithdrawModal";
 import { formatRupiah } from "@/lib/pricing";
 import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2, Banknote } from "lucide-react";
@@ -47,6 +48,10 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
         <div>
           <h1 className="font-display text-2xl text-navy mb-1">Tugas Saya</h1>
           <p className="text-ink-soft mb-4">Halo {technicianName}, ini daftar pekerjaan yang ditugaskan ke kamu.</p>
+          {/* kartu aktivasi push — tugas baru masuk akan menggebrak layar HP */}
+          <div className="mb-4 max-w-md">
+            <PushManager />
+          </div>
         </div>
         <Link
           href="/panduan-teknisi"

@@ -6,6 +6,7 @@ import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmai
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
 import { computeSplit } from "@/lib/pricing";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
+import { sendPushToUser } from "@/lib/push";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
 
@@ -57,6 +58,15 @@ export async function confirmBookingPaymentAdmin(bookingId) {
 
   revalidatePath("/admin");
   revalidatePath("/", "layout");
+
+  // push ke pelanggan: pembayaran dikonfirmasi
+  await sendPushToUser(b.user_id, {
+    title: "Pembayaran dikonfirmasi ✅",
+    body: `Pesanan ${b.code} sudah dikonfirmasi. Menunggu teknisi ditugaskan.`,
+    url: "/dashboard",
+    tag: `booking-${bookingId}`,
+  });
+
   return { ok: true, code: b.code };
 }
 
@@ -76,7 +86,7 @@ export async function rejectPaymentProofAdmin(bookingId, reason) {
 
   const { data: b } = await supabase
     .from("bookings")
-    .select("code, status, payment_method")
+    .select("code, status, payment_method, user_id")
     .eq("id", bookingId)
     .single();
   if (!b) return { error: "Pesanan tidak ditemukan." };
@@ -100,6 +110,15 @@ export async function rejectPaymentProofAdmin(bookingId, reason) {
 
   revalidatePath("/admin");
   revalidatePath("/", "layout");
+
+  // push ke pelanggan: bukti ditolak, perlu kirim ulang
+  await sendPushToUser(b.user_id, {
+    title: "Bukti pembayaran ditolak",
+    body: `Pesanan ${b.code}: ${clean} — silakan kirim ulang bukti yang benar.`,
+    url: "/dashboard",
+    tag: `booking-${bookingId}`,
+  });
+
   return { ok: true, code: b.code };
 }
 
@@ -358,6 +377,116 @@ export async function getAllServicesAdmin() {
   return { services: data || [] };
 }
 
+/**
+ * Kelola varian layanan (mis. ukuran PK pada AC).
+ * Dipakai wizard booking: layanan yang punya varian aktif memaksa pemilihan
+ * varian, dan harga final diambil dari varian — bukan dari client.
+ */
+export async function getServiceOptionsAdmin(serviceId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("service_options")
+    .select("*")
+    .eq("service_id", serviceId)
+    .order("sort_order");
+  if (error) return { error: error.message };
+  return { options: data || [] };
+}
+
+export async function createServiceOptionAdmin(serviceId, input) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const label = (input.label || "").trim();
+  const price = Number(input.price);
+  if (!label) return { error: "Nama varian wajib diisi (contoh: 1 PK)." };
+  if (!Number.isFinite(price) || price < 0) return { error: "Harga tidak valid." };
+
+  // sort_order paling akhir milik layanan itu
+  const { data: last } = await supabase
+    .from("service_options")
+    .select("sort_order")
+    .eq("service_id", serviceId)
+    .order("sort_order", { ascending: false })
+    .limit(1);
+
+  const { data, error } = await supabase
+    .from("service_options")
+    .insert({
+      service_id: serviceId,
+      label,
+      price,
+      duration_estimate: (input.durationEstimate || "").trim() || null,
+      is_active: input.isActive !== false,
+      sort_order: (last?.[0]?.sort_order ?? 0) + 1,
+    })
+    .select("*")
+    .single();
+  if (error) {
+    if (/duplicate key|unique/i.test(error.message || "")) {
+      return { error: `Varian "${label}" sudah ada untuk layanan ini.` };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/booking"); // wizard langsung menawarkan varian baru
+  revalidateTag("services");
+  return { option: data };
+}
+
+export async function updateServiceOptionAdmin(optionId, input) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const patch = {};
+  const label = (input.label || "").trim();
+  if (!label) return { error: "Nama varian tidak boleh kosong." };
+  patch.label = label;
+  const price = Number(input.price);
+  if (!Number.isFinite(price) || price < 0) return { error: "Harga tidak valid." };
+  patch.price = price;
+  patch.duration_estimate = (input.durationEstimate || "").trim() || null;
+  if (input.isActive !== undefined) patch.is_active = !!input.isActive;
+
+  const { data, error } = await supabase
+    .from("service_options")
+    .update(patch)
+    .eq("id", optionId)
+    .select("*")
+    .single();
+  if (error) {
+    if (/duplicate key|unique/i.test(error.message || "")) {
+      return { error: `Varian "${label}" sudah ada untuk layanan ini.` };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/booking");
+  revalidateTag("services");
+  return { option: data };
+}
+
+export async function deleteServiceOptionAdmin(optionId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { error } = await supabase.from("service_options").delete().eq("id", optionId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  revalidatePath("/booking");
+  revalidateTag("services");
+  return { ok: true };
+}
+
 export async function getAllUsersAdmin() {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
@@ -591,6 +720,21 @@ export async function assignTechnicianAdmin(bookingId, technicianId) {
         booking_time: booking.booking_time,
         address: booking.address,
         notes: booking.notes,
+      });
+
+      // push ke pelanggan: teknisi sudah ditugaskan
+      await sendPushToUser(booking.user_id, {
+        title: "Teknisi ditugaskan 🛠️",
+        body: `${technician.name} akan menangani pesanan ${booking.code} (${booking.services?.name || "layanan"}).`,
+        url: "/dashboard",
+        tag: `booking-${bookingId}`,
+      });
+      // push ke teknisi: tugas baru masuk
+      await sendPushToUser(technicianId, {
+        title: "Tugas baru masuk",
+        body: `${booking.code} — ${booking.services?.name || "Layanan"}, ${booking.booking_date} ${booking.booking_time}.`,
+        url: "/technician",
+        tag: `assign-${bookingId}`,
       });
     }
   }

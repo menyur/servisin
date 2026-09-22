@@ -27,6 +27,52 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// ============ Push Notification ============
+// Server mengirim payload JSON: { title, body, url, tag }
+self.addEventListener("push", (event) => {
+  let data = { title: "Servisin", body: "Ada pembaruan pesanan.", url: "/dashboard", tag: "servisin" };
+  try {
+    if (event.data) data = { ...data, ...event.data.json() };
+  } catch {
+    // payload bukan JSON — pakai teks mentah sebagai body
+    if (event.data) data.body = event.data.text();
+  }
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      tag: data.tag,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      vibrate: [100, 50, 100],
+      data: { url: data.url },
+    })
+  );
+});
+
+// Klik notifikasi → buka/fokuskan app ke URL tujuan
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = event.notification.data?.url || "/dashboard";
+
+  event.waitUntil(
+    (async () => {
+      const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const full = new URL(target, self.location.origin).href;
+      // ada jendela app terbuka? fokuskan & navigasikan
+      for (const client of clientList) {
+        if ("focus" in client) {
+          await client.focus();
+          if ("navigate" in client) await client.navigate(full);
+          return;
+        }
+      }
+      // belum ada → buka baru
+      await self.clients.openWindow(full);
+    })()
+  );
+});
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET") return;
