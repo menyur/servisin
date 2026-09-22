@@ -27,6 +27,7 @@ import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, His
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
+import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
 
@@ -1215,6 +1216,11 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
           {active ? "Nonaktifkan" : "Aktifkan kembali"}
         </button>
       </div>
+      {/* Varian ukuran (mis. PK pada AC): tambah/ubah harga/hapus */}
+      <ServiceOptionsManager
+        service={service}
+        onOptionsChange={(id, count) => onUpdated(id, { options_count: count })}
+      />
     </div>
   );
 }
