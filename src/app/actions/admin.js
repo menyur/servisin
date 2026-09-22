@@ -195,6 +195,15 @@ export async function updateBookingStatusAdmin(bookingId, status) {
         url: "/dashboard",
         tag: `booking-${bookingId}`,
       });
+      // push ke teknisi: pekerjaannya diakui & pendapatan dicatat
+      if (cur.technician_id) {
+        await sendPushToUser(cur.technician_id, {
+          title: "Pekerjaan selesai 🎉",
+          body: `Pesanan ${cur.code} ditandai selesai. Terima kasih — komisi dipotong, pendapatan bersih masuk saldo kamu.`,
+          url: "/technician",
+          tag: `booking-${bookingId}`,
+        });
+      }
     }
   }
 
