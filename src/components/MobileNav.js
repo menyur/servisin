@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X, ClipboardList, ShieldCheck, HardHat, LayoutDashboard } from "lucide-react";
+import { Menu, X, ClipboardList, ShieldCheck, HardHat } from "lucide-react";
 
 export default function MobileNav({ user, profile, pendingTechnicians = 0, pendingBookings = 0, openReports = 0 }) {
   const [open, setOpen] = useState(false);
@@ -31,9 +31,6 @@ export default function MobileNav({ user, profile, pendingTechnicians = 0, pendi
       : []),
     ...(profile?.role === "technician" || profile?.role === "admin"
       ? [{ href: "/technician", label: "Tugas Saya", icon: HardHat }]
-      : []),
-    ...(user && (!profile || profile.role === "customer")
-      ? [{ href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }]
       : []),
     ...(!user ? [{ href: "/gabung", label: "Gabung jadi teknisi", icon: HardHat, amber: true }] : []),
   ];
