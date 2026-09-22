@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Wrench, ClipboardList, LogOut, ShieldCheck, HardHat, UserRound } from "lucide-react";
 import { signOut } from "@/app/actions/auth";
 import MobileNav from "./MobileNav";
+import HideIfStandalone from "./HideIfStandalone";
 
 export default function Navbar({ user, profile, pendingTechnicians = 0, pendingBookings = 0, openReports = 0 }) {
   return (
@@ -21,8 +22,9 @@ export default function Navbar({ user, profile, pendingTechnicians = 0, pendingB
             <ClipboardList size={16} /> Cek Status Pesanan
           </Link>
           {profile?.role === "admin" && (
-            <Link href="/admin" className="hover:text-brand flex items-center gap-1.5">
-              <ShieldCheck size={16} /> Admin
+            <HideIfStandalone>
+              <Link href="/admin" className="hover:text-brand flex items-center gap-1.5">
+                <ShieldCheck size={16} /> Admin
               {pendingBookings > 0 && (
                 <span className="ml-0.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber text-white text-[10px] font-bold leading-none">
                   {pendingBookings}
@@ -38,7 +40,8 @@ export default function Navbar({ user, profile, pendingTechnicians = 0, pendingB
                   {openReports}
                 </span>
               )}
-            </Link>
+              </Link>
+            </HideIfStandalone>
           )}
           {(profile?.role === "technician" || profile?.role === "admin") && (
             <Link href="/technician" className="hover:text-brand flex items-center gap-1.5">

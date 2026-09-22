@@ -3,6 +3,8 @@
 // Next.js melayani otomatis di /manifest.webmanifest + meta link tag.
 export default function manifest() {
   return {
+    // id stabil untuk identitas app saat dipackage jadi APK/IPA (PWABuilder)
+    id: "/?source=pwa",
     name: "Servisin — Platform Pemesanan Jasa Serba Bisa",
     short_name: "Servisin",
     description:
@@ -40,10 +42,18 @@ export default function manifest() {
         purpose: "maskable",
       },
     ],
-    // Bila suatu hari ingin shortcut di long-press ikon aplikasi:
-    // shortcuts: [
-    //   { name: "Buat pesanan", url: "/booking" },
-    //   { name: "Lacak pesanan", url: "/track" },
-    // ],
+    // Shortcut long-press ikon aplikasi — dua aksi paling sering
+    shortcuts: [
+      {
+        name: "Buat pesanan",
+        short_name: "Pesan",
+        url: "/booking",
+      },
+      {
+        name: "Lacak pesanan",
+        short_name: "Lacak",
+        url: "/track",
+      },
+    ],
   };
 }

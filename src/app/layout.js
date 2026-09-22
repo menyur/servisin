@@ -2,6 +2,7 @@ import "./globals.css";
 import { Space_Grotesk, Inter } from "next/font/google";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
+import SwRegister from "@/components/SwRegister";
 import { createClient } from "@/lib/supabase/server";
 import { siteUrl } from "@/lib/site";
 
@@ -32,6 +33,14 @@ export const metadata = {
     siteName: "Servisin",
     locale: "id_ID",
   },
+  // appleWebApp: saat ditambahkan ke home screen iPhone/iPad, Safari membuka
+  // Servisin tanpa address bar (seperti app native) dengan judul "Servisin".
+  appleWebApp: {
+    capable: true,
+    title: "Servisin",
+    statusBarStyle: "default",
+  },
+  formatDetection: { telephone: false },
 };
 
 // Warna address bar browser mobile + theme PWA (viewport export, Next 14+)
@@ -83,6 +92,7 @@ export default async function RootLayout({ children }) {
         <Navbar user={user} profile={profile} pendingTechnicians={pendingTechnicians} pendingBookings={pendingBookings} openReports={openReports} />
         <main className="flex-1">{children}</main>
         <Footer />
+        <SwRegister />
       </body>
     </html>
   );

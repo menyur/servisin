@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Servisin — Sedang Offline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', -apple-system, system-ui, sans-serif;
+      background: #EAF4FB; color: #10202B;
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      padding: 24px; text-align: center;
+    }
+    .card {
+      background: #fff; border: 1px solid #D7E7F0; border-radius: 20px;
+      max-width: 380px; width: 100%; padding: 40px 28px;
+    }
+    .icon {
+      width: 64px; height: 64px; border-radius: 18px; background: #1C86C7;
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 20px; font-size: 30px;
+    }
+    h1 { font-size: 20px; color: #0B3556; margin-bottom: 10px; }
+    p { font-size: 14px; color: #4C6272; line-height: 1.6; margin-bottom: 24px; }
+    button {
+      background: #1C86C7; color: #fff; border: 0; border-radius: 12px;
+      padding: 12px 28px; font-size: 14px; font-weight: 600; cursor: pointer;
+      font-family: inherit;
+    }
+    button:active { transform: scale(0.97); }
+    .hint { font-size: 12px; color: #7C93A3; margin-top: 16px; margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">🔧</div>
+    <h1>Kamu sedang offline</h1>
+    <p>Koneksi internet tidak tersedia. Pesanan dan data terbaru akan tampil lagi begitu koneksi kembali.</p>
+    <button onclick="location.reload()">Coba Lagi</button>
+    <p class="hint">Servisin tetap bisa dibuka — cukup sambungkan internet lalu coba lagi.</p>
+  </div>
+</body>
+</html>

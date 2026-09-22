@@ -4,10 +4,13 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, X, ClipboardList, ShieldCheck, HardHat } from "lucide-react";
+import useStandalone from "./useStandalone";
 
 export default function MobileNav({ user, profile, pendingTechnicians = 0, pendingBookings = 0, openReports = 0 }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  // App terinstall hanya untuk pelanggan & teknisi — tanpa menu Admin.
+  const standalone = useStandalone();
 
   function close() {
     setOpen(false);
@@ -17,7 +20,7 @@ export default function MobileNav({ user, profile, pendingTechnicians = 0, pendi
     { href: "/#kategori", label: "Kategori" },
     { href: "/tentang", label: "Tentang" },
     { href: "/track", label: "Cek Status Pesanan", icon: ClipboardList },
-    ...(profile?.role === "admin"
+    ...(profile?.role === "admin" && !standalone
       ? [{
           href: "/admin",
           label: "Admin",
