@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Search, ArrowRight } from "lucide-react";
+import InstallBanner from "@/components/InstallBanner";
 import { getLandingData } from "@/lib/queries";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { HeroIllustration, CategoryThumb, ServiceThumb, TrustFast, TrustPro, TrustPrice, EmptyBoxIllustration, AcHeaderIllustration } from "@/components/Illustrations";
@@ -26,6 +27,8 @@ export default async function HomePage({ searchParams }) {
       <section className="bg-brand-tint overflow-hidden">
         <div className="max-w-6xl mx-auto px-5 pt-14 pb-16 grid lg:grid-cols-2 gap-10 items-center">
           <div>
+            {/* banner unduh aplikasi — hanya mobile & belum terinstall */}
+            <InstallBanner />
             <span className="pill bg-white text-brand-deep">Platform jasa serba bisa</span>
             <h1 className="font-display text-3xl sm:text-5xl text-navy mt-5 mb-4 leading-tight">
               Butuh bantuan apa hari ini?
