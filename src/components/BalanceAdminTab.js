@@ -7,6 +7,8 @@ import {
   addTechnicianBalanceAdmin,
   approveWithdrawalAdmin,
   rejectWithdrawalAdmin,
+  getWithdrawalsAdmin,
+  getBalanceDepositsAdmin,
 } from "@/app/actions/admin";
 import { formatRupiah } from "@/lib/pricing";
 import { Wallet, CheckCircle2, XCircle, Loader2, Plus, AlertTriangle, Banknote, ArrowUpFromLine } from "lucide-react";
@@ -23,12 +25,31 @@ export default function BalanceAdminTab({ initialDeposits, initialError, technic
   const [busyId, setBusyId] = useState(null);
   const [rejectWdId, setRejectWdId] = useState(null);
   const [rejectWdReason, setRejectWdReason] = useState("");
+  const [wdError, setWdError] = useState(withdrawalsError);
+  const [depError, setDepError] = useState(initialError);
+  const [reloading, setReloading] = useState(false);
   const [rejectId, setRejectId] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [manualTechId, setManualTechId] = useState("");
   const [manualAmount, setManualAmount] = useState("");
   const [manualNote, setManualNote] = useState("");
   const [manualMsg, setManualMsg] = useState(null);
+
+  // Minta ulang data ke server (dipakai setelah migrasi dijalankan
+  // dan error "tabel belum siap" tidak berlaku lagi).
+  async function reload() {
+    setReloading(true);
+    const [depRes, wdRes] = await Promise.all([getBalanceDepositsAdmin(), getWithdrawalsAdmin()]);
+    if (!depRes.error) {
+      setDeposits(depRes.deposits || []);
+      setDepError(null);
+    }
+    if (!wdRes.error) {
+      setWithdrawals(wdRes.withdrawals || []);
+      setWdError(null);
+    }
+    setReloading(false);
+  }
 
   const pending = deposits.filter((d) => d.status === "pending");
   const processed = deposits.filter((d) => d.status !== "pending");
@@ -100,16 +121,19 @@ export default function BalanceAdminTab({ initialDeposits, initialError, technic
           Periksa bukti transfer teknisi. Disetujui → saldo teknisi bertambah otomatis.
         </p>
 
-        {initialError && (
+        {depError && (
           <div className="card !p-4 border-amber/40 bg-amber/tint text-sm">
             <p className="font-semibold text-amber flex items-center gap-1.5 mb-1">
-              <AlertTriangle size={14} /> Tabel belum siap
+              <AlertTriangle size={14} /> Tabel setor belum siap
             </p>
-            <p className="text-ink-soft">{initialError}</p>
+            <p className="text-ink-soft mb-2">{depError}</p>
+            <button onClick={reload} disabled={reloading} className="btn-outline !py-1.5 text-xs flex items-center gap-1.5">
+              {reloading ? <Loader2 size={13} className="animate-spin" /> : null} Sudah migrasi? Cek ulang
+            </button>
           </div>
         )}
 
-        {!initialError && pending.length === 0 && (
+        {!depError && pending.length === 0 && (
           <div className="card text-center py-6 text-sm text-ink-soft">Tidak ada pengajuan setor yang menunggu verifikasi.</div>
         )}
 
@@ -185,12 +209,15 @@ export default function BalanceAdminTab({ initialDeposits, initialError, technic
           Saldo teknisi sudah ditahan saat pengajuan. Setujui setelah dana ditransfer ke rekeningnya; tolak → saldo kembali otomatis.
         </p>
 
-        {withdrawalsError && (
+        {wdError && (
           <div className="card !p-4 border-amber/40 bg-amber/tint text-sm mb-3">
             <p className="font-semibold text-amber flex items-center gap-1.5 mb-1">
               <AlertTriangle size={14} /> Tabel penarikan belum siap
             </p>
-            <p className="text-ink-soft">{withdrawalsError}</p>
+            <p className="text-ink-soft mb-2">{wdError}</p>
+            <button onClick={reload} disabled={reloading} className="btn-outline !py-1.5 text-xs flex items-center gap-1.5">
+              {reloading ? <Loader2 size={13} className="animate-spin" /> : null} Sudah migrasi? Cek ulang
+            </button>
           </div>
         )}
 
