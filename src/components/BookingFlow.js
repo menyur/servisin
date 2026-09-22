@@ -205,7 +205,11 @@ export default function BookingFlow({ categories, services, preselectedServiceId
 
 /* ---------- STEP 1 ---------- */
 function StepService({ categories, services, serviceId, setServiceId, onNext }) {
-  const [activeCat, setActiveCat] = useState(categories[0]?.id || "");
+  // Buka kategori yang memuat layanan yang sudah dipilih (dari ?service=),
+  // bukan selalu kategori pertama.
+  const [activeCat, setActiveCat] = useState(
+    () => services.find((s) => s.id === serviceId)?.category_id || categories[0]?.id || ""
+  );
   const filtered = services.filter((s) => s.category_id === activeCat);
 
   return (
