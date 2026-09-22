@@ -55,6 +55,20 @@ export default function PushManager() {
         setState("denied");
         return;
       }
+      // guard: public key VAPID wajib ada dari server. Null = env VAPID belum
+      // terbaca di deployment ini — beri pesan jelas, bukan error teknis.
+      let key = publicKey;
+      if (!key) {
+        const { publicKey: fetched } = await getPushPublicKey();
+        key = fetched;
+        if (key) setPublicKey(key);
+      }
+      if (!key) {
+        setError(
+          "Server belum memiliki kunci notifikasi (VAPID). pastikan NEXT_PUBLIC_VAPID_PUBLIC_KEY diisi di Vercel lalu redeploy."
+        );
+        return;
+      }
       const reg = await navigator.serviceWorker.ready;
       // unsub lama (bila key pernah berganti) lalu subscribe baru
       const old = await reg.pushManager.getSubscription();
@@ -62,7 +76,7 @@ export default function PushManager() {
 
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(publicKey),
+        applicationServerKey: urlBase64ToUint8Array(key),
       });
       const res = await savePushSubscription(sub.toJSON());
       if (res.error) {
