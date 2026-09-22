@@ -31,7 +31,7 @@ export default function ReceiptContent({ booking, customerName, customerPhone })
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Tanggal Cetak</td><td>{created}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Nama Pelanggan</td><td>{customerName || "-"}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Telepon</td><td>{customerPhone || "-"}</td></tr>
-          <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Layanan</td><td>{b.services?.name || "-"}</td></tr>
+          <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Layanan</td><td>{b.services?.name || "-"}{b.option_label ? ` — ${b.option_label}` : ""}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Jadwal</td><td>{b.booking_date} · {b.booking_time}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272", verticalAlign: "top" }}>Alamat</td><td>{b.address}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Metode Bayar</td><td>{paymentLabel(b.payment_method)}</td></tr>

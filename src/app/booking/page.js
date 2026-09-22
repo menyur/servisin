@@ -17,6 +17,13 @@ export default async function BookingPage({ searchParams }) {
     .select("*")
     .eq("is_active", true)
     .order("sort_order");
+  // Varian layanan (mis. ukuran PK AC) — dipakai wizard untuk memaksa
+  // pemilihan ukuran sebelum lanjut; tanpa varian harga = base_price.
+  const { data: serviceOptions } = await supabase
+    .from("service_options")
+    .select("id, service_id, label, price, duration_estimate")
+    .eq("is_active", true)
+    .order("sort_order");
 
   if (!user) {
     // Pertahankan layanan yang dipilih: setelah masuk/daftar, pengguna
@@ -46,6 +53,7 @@ export default async function BookingPage({ searchParams }) {
     <BookingFlow
       categories={categories || []}
       services={services || []}
+      serviceOptions={serviceOptions || []}
       preselectedServiceId={params?.service || null}
     />
   );

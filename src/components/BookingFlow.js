@@ -20,9 +20,10 @@ const PAYMENT_METHODS = [
   { id: "cod", label: "Cash on Delivery", icon: Banknote, desc: "Bayar tunai saat teknisi datang" },
 ];
 
-export default function BookingFlow({ categories, services, preselectedServiceId }) {
+export default function BookingFlow({ categories, services, serviceOptions = [], preselectedServiceId }) {
   const [step, setStep] = useState(1);
   const [serviceId, setServiceId] = useState(preselectedServiceId || "");
+  const [optionId, setOptionId] = useState("");
   const [form, setForm] = useState({ notes: "", address: "", date: "", time: "", attachment: null });
   const [paymentMethod, setPaymentMethod] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -32,14 +33,28 @@ export default function BookingFlow({ categories, services, preselectedServiceId
   const [voucherId, setVoucherId] = useState("");
 
   const selectedService = useMemo(() => services.find((s) => s.id === serviceId), [services, serviceId]);
+  // Varian milik layanan terpilih (mis. ukuran PK); kosong = layanan tanpa varian.
+  const options = useMemo(
+    () => serviceOptions.filter((o) => o.service_id === serviceId),
+    [serviceOptions, serviceId]
+  );
+  const selectedOption = useMemo(() => options.find((o) => o.id === optionId) || null, [options, optionId]);
   const appliedVoucher = useMemo(
     () => vouchers.find((v) => v.id === voucherId) || null,
     [vouchers, voucherId]
   );
+  // Harga per unit: ikut varian bila ada, kalau tidak pakai base_price layanan.
+  const unitPrice = selectedOption ? selectedOption.price : selectedService?.base_price || 0;
   const totals = useMemo(
-    () => calculateTotal(selectedService?.base_price || 0, appliedVoucher?.amount || 0),
-    [selectedService, appliedVoucher]
+    () => calculateTotal(unitPrice, appliedVoucher?.amount || 0),
+    [unitPrice, appliedVoucher]
   );
+
+  // ganti layanan → reset pilihan varian agar tidak nyasar
+  function chooseService(id) {
+    setServiceId(id);
+    setOptionId("");
+  }
 
   // muat voucher aktif saat alur booking dibuka (gagal diam — tabel mungkin belum ada)
   useEffect(() => {
@@ -102,6 +117,7 @@ export default function BookingFlow({ categories, services, preselectedServiceId
 
     const res = await createBooking({
       serviceId,
+      optionId: optionId || null,
       bookingDate: form.date,
       bookingTime: form.time,
       address: form.address,
@@ -160,8 +176,11 @@ export default function BookingFlow({ categories, services, preselectedServiceId
           categories={categories}
           services={services}
           serviceId={serviceId}
-          setServiceId={setServiceId}
-          onNext={() => serviceId && goStep(2)}
+          setServiceId={chooseService}
+          options={options}
+          optionId={optionId}
+          setOptionId={setOptionId}
+          onNext={() => serviceId && (options.length === 0 || optionId) && goStep(2)}
         />
       )}
 
@@ -178,6 +197,7 @@ export default function BookingFlow({ categories, services, preselectedServiceId
       {step === 3 && (
         <StepCost
           service={selectedService}
+          option={selectedOption}
           totals={totals}
           vouchers={vouchers}
           voucherId={voucherId}
@@ -204,13 +224,12 @@ export default function BookingFlow({ categories, services, preselectedServiceId
 }
 
 /* ---------- STEP 1 ---------- */
-function StepService({ categories, services, serviceId, setServiceId, onNext }) {
-  // Buka kategori yang memuat layanan yang sudah dipilih (dari ?service=),
-  // bukan selalu kategori pertama.
+function StepService({ categories, services, serviceId, setServiceId, options, optionId, setOptionId, onNext }) {
   const [activeCat, setActiveCat] = useState(
     () => services.find((s) => s.id === serviceId)?.category_id || categories[0]?.id || ""
   );
   const filtered = services.filter((s) => s.category_id === activeCat);
+  const selected = services.find((s) => s.id === serviceId);
 
   return (
     <div>
@@ -240,13 +259,44 @@ function StepService({ categories, services, serviceId, setServiceId, onNext }) 
             <span>
               <p className="font-semibold text-navy text-sm mb-1">{s.name}</p>
               <p className="text-xs text-ink-soft mb-2">{s.description}</p>
-              <p className="text-brand font-bold text-sm">{formatRupiah(s.base_price)}</p>
+              {/* layanan bervarian: tampil "mulai dari" harga termurah */}
+              <p className="text-brand font-bold text-sm">
+                {options.some((o) => o.service_id === s.id)
+                  ? `mulai ${formatRupiah(Math.min(...options.filter((o) => o.service_id === s.id).map((o) => o.price)))}`
+                  : formatRupiah(s.base_price)}
+              </p>
             </span>
           </button>
         ))}
       </div>
 
-      <button className="btn-primary w-full" disabled={!serviceId} onClick={onNext}>
+      {/* Panel pilihan varian (mis. ukuran PK) — wajib sebelum lanjut */}
+      {selected && options.length > 0 && (
+        <div className="card !p-4 mb-6 border-brand/40 bg-brand-tint/40">
+          <p className="font-display font-semibold text-navy text-sm mb-1">
+            Pilih ukuran/kapasitas — {selected.name}
+          </p>
+          <p className="text-xs text-ink-soft mb-3">
+            Harga menyesuaikan kapasitas unit yang kamu punya.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {options.map((o) => (
+              <button
+                key={o.id}
+                onClick={() => setOptionId(o.id)}
+                className={`text-left rounded-xl border-2 px-3 py-2.5 transition ${optionId === o.id ? "border-brand bg-white ring-4 ring-brand-tint" : "border-line bg-white hover:border-brand/50"}`}
+              >
+                <p className="font-semibold text-navy text-xs leading-snug mb-1">{o.label}</p>
+                <p className="text-brand font-bold text-sm">{formatRupiah(o.price)}</p>
+                {o.duration_estimate && <p className="text-[10px] text-ink-soft mt-0.5">{o.duration_estimate}</p>}
+              </button>
+            ))}
+          </div>
+          {!optionId && <p className="text-coral text-xs mt-2">Pilih ukuran dulu untuk melanjutkan.</p>}
+        </div>
+      )}
+
+      <button className="btn-primary w-full" disabled={!serviceId || (options.length > 0 && !optionId)} onClick={onNext}>
         Lanjut
       </button>
     </div>
@@ -301,12 +351,15 @@ function StepDetails({ form, update, errors, onBack, onNext }) {
 }
 
 /* ---------- STEP 3 ---------- */
-function StepCost({ service, totals, vouchers, voucherId, setVoucherId, onBack, onNext }) {
+function StepCost({ service, option, totals, vouchers, voucherId, setVoucherId, onBack, onNext }) {
   return (
     <div>
       <div className="card mb-6">
         <h3 className="font-display font-semibold text-navy mb-4">Rincian biaya</h3>
-        <Row label={`Biaya jasa — ${service?.name || "-"}`} value={formatRupiah(totals.subtotal)} />
+        <Row
+          label={`Biaya jasa — ${service?.name || "-"}${option ? ` (${option.label})` : ""}`}
+          value={formatRupiah(totals.subtotal)}
+        />
         <Row label="Biaya layanan aplikasi" value={formatRupiah(totals.appFee)} />
 
         {vouchers.length > 0 && (

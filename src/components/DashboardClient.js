@@ -84,7 +84,9 @@ export default function DashboardClient({ initialBookings, customerName, custome
                   <div className="flex justify-between items-start flex-wrap gap-2 mb-2">
                     <div>
                       <p className="font-display font-bold text-navy">{b.code}</p>
-                      <p className="text-sm text-ink-soft">{b.services?.name}</p>
+                      <p className="text-sm text-ink-soft">
+                        {b.services?.name}{b.option_label ? ` — ${b.option_label}` : ""}
+                      </p>
                     </div>
                     <StatusPill status={b.status} />
                   </div>

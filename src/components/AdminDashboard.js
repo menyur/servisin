@@ -292,7 +292,9 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                       </span>
                     )}
                   </p>
-                  <p className="text-sm text-ink-soft">{b.services?.name} · {b.booking_date} {b.booking_time}</p>
+                  <p className="text-sm text-ink-soft">
+                    {b.services?.name}{b.option_label ? ` — ${b.option_label}` : ""} · {b.booking_date} {b.booking_time}
+                  </p>
                 </div>
                 <select
                   value={b.status}

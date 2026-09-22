@@ -16,7 +16,7 @@ export async function createBooking(input) {
     return { error: "Kamu harus login terlebih dahulu untuk membuat booking." };
   }
 
-  const { serviceId, bookingDate, bookingTime, address, notes, attachmentUrl, paymentMethod, voucherId } = input;
+  const { serviceId, optionId, bookingDate, bookingTime, address, notes, attachmentUrl, paymentMethod, voucherId } = input;
 
   if (!serviceId || !bookingDate || !bookingTime || !address || !paymentMethod) {
     return { error: "Semua data booking wajib diisi." };
@@ -31,6 +31,25 @@ export async function createBooking(input) {
   if (svcErr || !service) {
     return { error: "Layanan tidak ditemukan." };
   }
+
+  // ---- Opsi layanan (mis. ukuran PK pada AC) ----
+  // Layanan yang punya varian WAJIB memilih salah satu; harga diserver
+  // yang menentukan (client tidak bisa menembak harga).
+  let option = null;
+  const { data: options } = await supabase
+    .from("service_options")
+    .select("id, label, price")
+    .eq("service_id", serviceId)
+    .eq("is_active", true)
+    .order("sort_order");
+  const hasOptions = (options || []).length > 0;
+  if (hasOptions) {
+    option = (options || []).find((o) => o.id === optionId) || null;
+    if (!option) {
+      return { error: "Pilih ukuran/varian layanan terlebih dahulu." };
+    }
+  }
+  const unitPrice = option ? option.price : service.base_price;
 
   const { data: profile } = await supabase
     .from("profiles")
@@ -61,7 +80,7 @@ export async function createBooking(input) {
   }
 
   const { subtotal, appFee, total } = calculateTotal(
-    service.base_price,
+    unitPrice,
     voucher?.amount || 0
   );
   const code = genBookingCode();
@@ -72,6 +91,7 @@ export async function createBooking(input) {
       code,
       user_id: user.id,
       service_id: serviceId,
+      option_label: option?.label || null,
       booking_date: bookingDate,
       booking_time: bookingTime,
       address,
@@ -118,6 +138,7 @@ export async function createBooking(input) {
         paymentMethod,
         voucher: null,
         voucherWarning: "Voucher gagal diterapkan (kolom diskon belum ada) — booking dibuat tanpa diskon.",
+        optionLabel: option?.label || null,
       });
     }
     return { error: "Gagal menyimpan booking: " + insertErr.message };
@@ -130,6 +151,7 @@ export async function createBooking(input) {
     user,
     paymentMethod,
     voucher,
+    optionLabel: option?.label || null,
   });
 }
 
@@ -137,7 +159,10 @@ export async function createBooking(input) {
  * Lanjutan createBooking setelah baris booking tersimpan:
  * tandai voucher terpakai, kirim email, payment gateway.
  */
-async function finishBookingCreation(supabase, { booking, service, profile, user, paymentMethod, voucher, voucherWarning }) {
+async function finishBookingCreation(supabase, { booking, service, profile, user, paymentMethod, voucher, voucherWarning, optionLabel }) {
+  if (optionLabel && !booking.option_label) {
+    booking.option_label = optionLabel; // fallback bila kolom belum ada di DB
+  }
   // Tandai voucher terpakai (best-effort — kalau gagal, voucher tetap bisa dipakai lagi)
   if (voucher) {
     const { error: useErr } = await supabase

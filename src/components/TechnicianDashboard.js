@@ -196,7 +196,7 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
                 <option value="">— Pilih pekerjaan —</option>
                 {bookings.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.code} — {b.services?.name} ({b.booking_date})
+                    {b.code} — {b.services?.name}{b.option_label ? ` (${b.option_label})` : ""} ({b.booking_date})
                   </option>
                 ))}
               </select>
@@ -344,7 +344,7 @@ function JobCard({ booking: b, busy, onMark, readOnly }) {
       <div className="flex justify-between items-start flex-wrap gap-2 mb-3">
         <div>
           <p className="font-display font-bold text-navy">{b.code}</p>
-          <p className="text-sm text-ink-soft">{b.services?.name}</p>
+          <p className="text-sm text-ink-soft">{b.services?.name}{b.option_label ? ` — ${b.option_label}` : ""}</p>
         </div>
         <StatusPill status={b.status} />
       </div>
