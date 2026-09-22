@@ -1,8 +1,27 @@
 import "./globals.css";
+import { Space_Grotesk, Inter } from "next/font/google";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { createClient } from "@/lib/supabase/server";
 import { siteUrl } from "@/lib/site";
+
+// Font self-hosted via next/font: di-download saat build, disajikan dari
+// domain sendiri (tanpa request ke Google saat runtime), preloaded otomatis,
+// dan tanpa layout shift (size-adjust dihitung Next). Menggantikan trik
+// media="print" + onLoad string yang memicu peringatan React tiap halaman.
+const display = Space_Grotesk({
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+  variable: "--font-display",
+  display: "swap",
+});
+
+const body = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+  variable: "--font-body",
+  display: "swap",
+});
 
 export const metadata = {
   metadataBase: new URL(siteUrl()),
@@ -59,27 +78,7 @@ export default async function RootLayout({ children }) {
   }
 
   return (
-    <html lang="id">
-      <head>
-        {/* Font: preconnect + stylesheet non-blocking (print→media trick) — CSS
-            Google Fonts tak lagi menghalangi render pertama. Preload woff2
-            tidak mungkin statis karena URL hash-nya dikelola Google. */}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
-          media="print"
-          // @ts-ignore — atribut onLoad valid di runtime, Next merender apa adanya
-          onLoad="this.media='all'"
-        />
-        <noscript>
-          <link
-            rel="stylesheet"
-            href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
-          />
-        </noscript>
-      </head>
+    <html lang="id" className={`${display.variable} ${body.variable}`}>
       <body className="font-body min-h-screen flex flex-col">
         <Navbar user={user} profile={profile} pendingTechnicians={pendingTechnicians} pendingBookings={pendingBookings} openReports={openReports} />
         <main className="flex-1">{children}</main>
