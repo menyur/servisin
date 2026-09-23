@@ -14,3 +14,6 @@ node_modules/
 # Freebuff workspace lokal (berisi secret & log preview)
 .freebuff/
 freebuff-cleanup-tmp/
+
+# Kunci penandatanganan APK — JANGAN pernah di-commit
+.keystore-backup/
