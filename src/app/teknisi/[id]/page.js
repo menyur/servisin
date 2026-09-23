@@ -1,33 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Star, BadgeCheck, ArrowLeft, MessageSquareQuote, ShieldCheck } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { getTechnicianProfile, getTechnicianMeta } from "@/lib/technicians";
 import { absoluteUrl } from "@/lib/site";
 
 // SEO dinamis per teknisi — judul & deskripsi memuat nama, rating, dan jumlah ulasan
 export async function generateMetadata({ params }) {
   const { id } = await params;
-  const supabase = await createClient();
-  const { data: tech } = await supabase
-    .from("profiles")
-    .select("name")
-    .eq("id", id)
-    .eq("role", "technician")
-    .eq("approval_status", "approved")
-    .maybeSingle();
-  if (!tech) return { title: "Teknisi tidak ditemukan — Servisin" };
+  const meta = await getTechnicianMeta(id);
+  if (!meta) return { title: "Teknisi tidak ditemukan — Servisin" };
 
-  const { data: reviews } = await supabase
-    .from("reviews")
-    .select("rating, comment")
-    .eq("technician_id", id);
-  const revs = reviews || [];
-  const avg = revs.length ? (revs.reduce((a, r) => a + r.rating, 0) / revs.length).toFixed(1) : null;
-
-  const title = `${tech.name} — Teknisi Servisin${avg ? ` ★ ${avg}` : ""}`;
+  const { name, avg, count } = meta;
+  const title = `${name} — Teknisi Servisin${avg ? ` ★ ${avg}` : ""}`;
   const description = avg
-    ? `Rating ${avg}/5 dari ${revs.length} ulasan asli pelanggan. Lihat rekam jejak lengkap ${tech.name} sebelum memesan jasa.`
-    : `Teknisi terverifikasi Servisin. Jadilah yang pertama menilai ${tech.name} setelah memesan jasa.`;
+    ? `Rating ${avg}/5 dari ${count} ulasan asli pelanggan. Lihat rekam jejak lengkap ${name} sebelum memesan jasa.`
+    : `Teknisi terverifikasi Servisin. Jadilah yang pertama menilai ${name} setelah memesan jasa.`;
 
   return {
     title,
@@ -68,25 +55,11 @@ function ratingLabel(avg) {
 
 export default async function TechnicianProfilePage({ params }) {
   const { id } = await params;
-  const supabase = await createClient();
 
-  // Profil teknisi — hanya yang approved yang boleh tampil publik
-  const { data: tech } = await supabase
-    .from("profiles")
-    .select("id, name, role, approval_status")
-    .eq("id", id)
-    .eq("role", "technician")
-    .eq("approval_status", "approved")
-    .maybeSingle();
-
-  if (!tech) notFound();
-
-  // Semua ulasan milik teknisi ini (publik boleh baca)
-  const { data: reviews, error } = await supabase
-    .from("reviews")
-    .select("rating, comment")
-    .eq("technician_id", id);
-  if (error) console.error("reviews profile read:", error.message);
+  // Data publik di-cache (tag technicians/reviews) — lihat src/lib/technicians.js
+  const profile = await getTechnicianProfile(id);
+  if (!profile) notFound();
+  const { tech, reviews } = profile;
 
   const revs = reviews || [];
   const avg = revs.length ? revs.reduce((a, r) => a + r.rating, 0) / revs.length : null;

@@ -691,6 +691,7 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
 
   revalidatePath("/admin");
   revalidatePath("/", "layout"); // refresh badge navbar (jumlah pendaftar pending)
+  revalidateTag("technicians"); // daftar publik /teknisi berubah (approve/reject)
   return { ok: true };
 }
 
@@ -707,6 +708,7 @@ export async function updateUserRoleAdmin(userId, role) {
 
   revalidatePath("/admin");
   revalidatePath("/", "layout"); // ganti role bisa mengubah badge pendaftar teknisi
+  revalidateTag("technicians"); // daftar publik /teknisi bisa berubah (promosi/demosi role)
   return { ok: true };
 }
 
