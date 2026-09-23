@@ -65,8 +65,8 @@ export default function DepositModal({ balance, onClose, onSubmitted }) {
         .from("balance-proofs")
         .upload(fileName, optimized, { upsert: true, contentType: optimized.type });
       if (upErr) throw upErr;
-      const { data } = supabase.storage.from("balance-proofs").getPublicUrl(fileName);
-      proofUrl = data.publicUrl;
+      // Bucket privat (hasil audit): simpan PATH — dibaca via signed URL di server.
+      proofUrl = fileName;
     } catch (err) {
       setSending(false);
       return setError(

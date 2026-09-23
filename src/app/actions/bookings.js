@@ -347,16 +347,16 @@ export async function trackBookingByCode(code) {
   if (!code || !code.trim()) return { error: "Masukkan kode booking." };
 
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("bookings")
-    .select("*, services(name, category_id)")
-    .eq("code", code.trim().toUpperCase())
-    .single();
+  // Publik tidak lagi bisa select bookings langsung (policy ditutup — hasil audit).
+  // Satu-satunya jalur: RPC security definer yang hanya mengembalikan kolom publik.
+  const { data, error } = await supabase.rpc("get_booking_by_code", {
+    p_code: code.trim().toUpperCase(),
+  });
 
-  if (error || !data) {
+  if (error || !data || data.length === 0) {
     return { error: "Kode booking tidak ditemukan." };
   }
-  return { booking: data };
+  return { booking: data[0] };
 }
 
 export async function getMyBookings() {
@@ -380,6 +380,21 @@ export async function getMyBookings() {
   ]);
 
   const bookings = bookingsRes.data || [];
+
+  // Bucket bukti pembayaran kini PRIVAT (hasil audit) — kolom menyimpan path.
+  // Tukar ke signed URL (1 jam) agar pemilik bisa melihat buktinya di dashboard.
+  const pathLike = bookings.filter((b) => b.payment_proof_url && !b.payment_proof_url.startsWith("http"));
+  if (pathLike.length > 0) {
+    const results = await Promise.all(
+      pathLike.map(async (b) => {
+        const { data: signed } = await supabase.storage.from("payment-proofs").createSignedUrl(b.payment_proof_url, 3600);
+        return [b.id, signed?.signedUrl || null];
+      })
+    );
+    const urlById = Object.fromEntries(results);
+    for (const b of pathLike) b.payment_proof_url = urlById[b.id] || null;
+  }
+
   const ratingByBooking = {};
   if (!reviewsRes.error) {
     for (const r of reviewsRes.data || []) ratingByBooking[r.booking_id] = r.rating;

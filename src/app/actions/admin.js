@@ -145,7 +145,23 @@ export async function getAllBookingsAdmin() {
     .select("*, services(name, category_id), profiles!bookings_user_id_fkey(name, phone, email), technician:profiles!bookings_technician_id_fkey(id, name)")
     .order("created_at", { ascending: false });
 
-  return { bookings: data || [] };
+  const bookings = data || [];
+
+  // Bucket bukti pembayaran kini PRIVAT (hasil audit) — kolom menyimpan path.
+  // Tukar ke signed URL agar <img> admin tetap bisa menampilkan buktinya.
+  const pathLike = bookings.filter((b) => b.payment_proof_url && !b.payment_proof_url.startsWith("http"));
+  if (pathLike.length > 0) {
+    const results = await Promise.all(
+      pathLike.map(async (b) => {
+        const { data: signed } = await supabase.storage.from("payment-proofs").createSignedUrl(b.payment_proof_url, 3600);
+        return [b.id, signed?.signedUrl || null];
+      })
+    );
+    const urlById = Object.fromEntries(results);
+    for (const b of pathLike) b.payment_proof_url = urlById[b.id] || null;
+  }
+
+  return { bookings };
 }
 
 export async function updateBookingStatusAdmin(bookingId, status) {
@@ -1054,7 +1070,22 @@ export async function getBalanceDepositsAdmin() {
     }
     return { error: error.message };
   }
-  return { deposits: data || [] };
+
+  // Bucket bukti setor kini PRIVAT (hasil audit) — tukar path ke signed URL.
+  const deposits = data || [];
+  const withPath = deposits.filter((d) => d.proof_url && !d.proof_url.startsWith("http"));
+  if (withPath.length > 0) {
+    const results = await Promise.all(
+      withPath.map(async (d) => {
+        const { data: signed } = await supabase.storage.from("balance-proofs").createSignedUrl(d.proof_url, 3600);
+        return [d.id, signed?.signedUrl || null];
+      })
+    );
+    const urlById = Object.fromEntries(results);
+    for (const d of withPath) d.proof_url = urlById[d.id] || null;
+  }
+
+  return { deposits };
 }
 
 /**
