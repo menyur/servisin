@@ -1,97 +1,87 @@
 # Servisin — Platform Pemesanan Jasa Serba Bisa
 
-Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platform booking jasa: Service AC, Tukang Rumah, dan Service Kendaraan.
+Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platform booking jasa: **Service AC, Tukang Rumah, Service Kendaraan, Kebersihan & Laundry** — dengan panel admin lengkap, dasbor teknisi, pembayaran terverifikasi, notifikasi push, dan aplikasi Android.
+
+> 🔐 Keamanan (RLS, storage, env): lihat [docs/security.md](docs/security.md)
+
+## Fitur utama
+
+- **Landing page + wizard booking** multi-step (pilih layanan → varian ukuran → jadwal → alamat → pembayaran), dengan harga per varian (mis. ukuran PK AC)
+- **Lacak pesanan publik** via kode booking (`/track`) — tanpa login, hanya data aman
+- **Dashboard pelanggan**: riwayat pesanan, konfirmasi pembayaran + upload bukti (privat), cetak/unduh struk PDF, arsip struk, voucher, beri penilaian teknisi, laporan, pengaturan notifikasi
+- **Dashboard teknisi**: tugas masuk, ubah status pekerjaan, saldo dengan komisi per teknisi (setor/tarik dengan persetujuan admin + bukti transfer), histori pendapatan
+- **Panel admin**: pesanan (filter/sort/badge), konfirmasi & penolakan bukti bayar, kelola layanan + **varian ukuran**, pendaftar teknisi (approve + verifikasi KTP), laporan masuk, histori per pelanggan/teknisi, ringkasan keuangan, kelola voucher, kelola saldo teknisi, unduh CSV + laporan bulanan otomatis
+- **Notifikasi**: email (Resend — simulasi otomatis tanpa API key) + **Web Push** (VAPID) dengan preferensi per peristiwa
+- **PWA + aplikasi Android**: ter-install dari Chrome, plus APK siap unduh di `/unduh`
 
 ## Tech stack
 
-- **Frontend**: Next.js 14 (App Router), Tailwind CSS, Lucide Icons
-- **Backend**: Next.js Server Actions (tidak perlu server terpisah)
-- **Database & Auth**: Supabase (PostgreSQL + Supabase Auth)
-- **Email**: Resend (mode simulasi otomatis kalau API key kosong)
-- **Payment**: Midtrans Snap (mode simulasi otomatis kalau API key kosong)
+- **Frontend**: Next.js (App Router), Tailwind CSS, Lucide Icons
+- **Backend**: Next.js Server Actions (tanpa server terpisah)
+- **Database & Auth**: Supabase (PostgreSQL + Supabase Auth, RLS di semua tabel)
+- **Email**: Resend · **Push**: Web Push (VAPID) · **Payment**: Midtrans Snap (mode simulasi otomatis tanpa API key)
 
 ## 1. Siapkan project Supabase
 
-1. Buat akun & project baru di [supabase.com](https://supabase.com) (gratis).
-2. Buka **SQL Editor**, jalankan isi file `supabase/schema.sql` (buat tabel, relasi, RLS).
-3. Masih di SQL Editor, jalankan isi file `supabase/seed.sql` (mengisi kategori & layanan awal).
-4. (Opsional, untuk upload foto keluhan) Buka **Storage**, buat bucket baru bernama `attachments`, set ke **public**.
-5. (Opsional, untuk foto profil & banner) Buka **Storage**, buat bucket baru bernama `profile-media`, set ke **public**.
-6. Buka **Project Settings → API**, salin `Project URL` dan `anon public key`.
+1. Buat project di [supabase.com](https://supabase.com) (gratis).
+2. **SQL Editor** → jalankan `supabase/schema.sql`, lalu `supabase/seed.sql`.
+3. Jalankan juga file `supabase/migrate-*.sql` dan `supabase/fix-*.sql` (semuanya idempoten) — atau setidaknya yang terbaru: `fix-security-audit.sql`, `migrate-push-subscriptions.sql`, `migrate-notification-prefs.sql`, `migrate-technician-balance.sql`, `migrate-service-options.sql`, `migrate-reviews.sql`, `migrate-reports.sql`, `migrate-vouchers.sql`, `migrate-receipt-archives.sql`, `migrate-monthly-report-archives.sql`, `migrate-approval-status.sql`, `migrate-commission-rate.sql`, `migrate-technician-ktp.sql`.
+4. Buat bucket Storage: jalankan `node scripts/setup-storage.mjs` (butuh service role key di `.env.local`) — lalu jalankan bagian policy di `supabase/setup-storage-buckets.sql`.
+5. Salin **Project URL** dan **anon public key** dari Settings → API.
 
 ## 2. Jalankan aplikasi
 
 ```bash
 npm install
 cp .env.example .env.local
-# lalu isi NEXT_PUBLIC_SUPABASE_URL dan NEXT_PUBLIC_SUPABASE_ANON_KEY di .env.local
+# isi minimal: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY
 npm run dev
 ```
 
-Buka `http://localhost:3000`.
+Buka `http://localhost:3000`. Script lain: `npm run build` (produksi), `npm run cleanup` (bersihkan cache dev).
 
-## 3. Membuat akun admin pertama
+## 3. Akun admin pertama
 
-1. Daftar akun biasa lewat halaman `/register` di aplikasi.
-2. Buka Supabase **Table Editor → profiles**, cari baris dengan email kamu.
-3. Ubah kolom `role` dari `customer` menjadi `admin`.
-4. Login ulang — menu **Admin** akan muncul di navbar dan halaman `/admin` bisa diakses.
+1. Daftar lewat `/register`, lalu di Supabase **Table Editor → profiles** ubah kolom `role` jadi `admin`.
+2. Login ulang — menu **Admin** muncul di navbar.
 
-## 4. Mengaktifkan email sungguhan (opsional)
+## 4. Env produksi (Vercel)
 
-Tanpa dikonfigurasi, email booking hanya dicetak ke log server (`npm run dev` di terminal) — aplikasi tetap berjalan normal untuk uji coba.
+Semua variabel di `.env.example` yang berakhiran rahasia (tanpa `NEXT_PUBLIC_`) wajib diisi di Vercel → Settings → Environment Variables: `RESEND_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. Yang `NEXT_PUBLIC_*` (termasuk `NEXT_PUBLIC_VAPID_PUBLIC_KEY`) baru berlaku setelah **redeploy**. Rinciannya di [docs/security.md](docs/security.md#4-env--apa-yang-publik-apa-yang-rahasia).
 
-Untuk email sungguhan:
-1. Daftar gratis di [resend.com](https://resend.com), buat API key.
-2. Isi `RESEND_API_KEY` di `.env.local`.
+## 5. Aplikasi Android (APK)
 
-## 5. Mengaktifkan payment gateway sungguhan (opsional)
+Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`: file `public/apk/servisin.apk` ada → tombol aktif dengan ukuran file.
 
-Tanpa dikonfigurasi, pembayaran otomatis memakai **mode simulasi** — user tetap bisa menyelesaikan alur checkout (QR/VA/e-wallet tiruan, atau COD sungguhan) tanpa akun payment gateway.
+Untuk memperbarui APK: generate via [PWABuilder](https://www.pwabuilder.com) (package ID `com.menyur.servisin`), salin hasilnya ke `public/apk/servisin.apk`, push. **Simpan signing key** (`signing.keystore`) — tanpa itu aplikasi tidak bisa diupdate di perangkat yang sudah terpasang.
 
-Untuk pembayaran sungguhan lewat Midtrans:
-1. Daftar akun sandbox gratis di [midtrans.com](https://midtrans.com).
-2. Ambil `Server Key` dan `Client Key` dari dashboard sandbox.
-3. Isi `MIDTRANS_SERVER_KEY` dan `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY` di `.env.local`.
-4. Kode integrasinya ada di `src/lib/payment.js` — sudah siap pakai, tidak perlu ubah kode lain.
-5. Kalau kamu lebih memilih Xendit atau Stripe, ganti isi fungsi `createPaymentTransaction` di file yang sama; struktur data yang dikembalikan (`status`, `redirectUrl`, dst) dipakai sama oleh halaman checkout.
-
-## Struktur folder
+## Struktur folder (ringkas)
 
 ```
 servisin/
-  supabase/
-    schema.sql       -> skema tabel + RLS (jalankan di Supabase SQL Editor)
-    seed.sql          -> data kategori & layanan awal
-  src/
-    app/
-      page.js          -> landing page (hero, kategori, sub-layanan)
-      login/, register/ -> autentikasi
-      booking/          -> alur pemesanan multi-step
-      track/            -> lacak pesanan (publik, tanpa login)
-      dashboard/        -> riwayat pesanan user
-      admin/             -> panel admin (pesanan & harga)
-      actions/           -> semua Server Actions (auth, bookings, admin)
-    components/          -> komponen UI yang dipakai ulang
-    lib/
-      supabase/          -> client Supabase (browser, server, middleware)
-      payment.js          -> integrasi/simulasi payment gateway
-      email.js            -> integrasi/simulasi notifikasi email
-      pricing.js           -> konstanta biaya aplikasi & kalkulasi total
+  supabase/            -> schema, seed, dan migrasi idempoten (jalankan di SQL Editor)
+  docs/security.md     -> praktik keamanan (RLS, storage, env) — WAJIB dibaca sebelum menambah fitur
+  scripts/             -> setup-storage.mjs, weekly-cleanup.mjs, dsb.
+  src/app/             -> halaman (landing, booking, track, dashboard, technician, admin, unduh, panduan)
+  src/app/actions/     -> semua Server Actions (auth, bookings, admin, technician, reviews, reports, push)
+  src/components/      -> komponen UI (wizard booking, dashboard client, admin tabs, ilustrasi)
+  src/lib/             -> client supabase (browser/server/middleware/admin), pricing, email, push, balance
+  public/apk/          -> servisin.apk (dibaca /api/apk-status)
 ```
 
 ## Skema database (ringkas)
 
-- `categories` — 3 kategori: `ac`, `tukang`, `kendaraan`
-- `services` — sub-layanan per kategori, dengan `base_price`
-- `profiles` — data tambahan user (nama, telepon, role), terhubung ke `auth.users` bawaan Supabase
-- `bookings` — pesanan, dengan `subtotal_price` + `app_fee` (tetap Rp5.000) = `total_price`, dan `status` (`pending → paid → in_progress → completed`, atau `cancelled`)
+- `categories`, `services` (+ `service_options` untuk varian ukuran & harga)
+- `profiles` — role (customer/technician/admin), approval status, komisi, saldo, preferensi notifikasi
+- `bookings` — pesanan + bukti pembayaran (privat, path) + penolakan + varian terpilih
+- `reviews`, `reports`, `vouchers` — penilaian, laporan, voucher insentif
+- `balance_deposits`, `balance_withdrawals`, `balance_transactions` — keuangan teknisi
+- `push_subscriptions`, `receipt_archives`, `monthly_report_archives` — notifikasi & arsip
 
-## Deploy ke hosting (Vercel — direkomendasikan untuk Next.js)
+Semua tabel dilindungi RLS — polanya didokumentasikan di [docs/security.md](docs/security.md).
 
-1. Push project ini ke GitHub.
-2. Buka [vercel.com](https://vercel.com), New Project, hubungkan ke repo.
-3. Di bagian Environment Variables, isi semua variabel yang sama seperti di `.env.local`.
-4. Klik Deploy.
+## Deploy ke Vercel
 
-Karena database (Supabase) terpisah dari server aplikasi, data booking **tidak akan hilang** meski aplikasi di-redeploy — beda dengan penyimpanan file JSON pada versi sebelumnya.
+1. Push ke GitHub → [vercel.com](https://vercel.com) → New Project → hubungkan repo.
+2. Isi semua env dari `.env.local` (lihat bagian 4).
+3. Deploy — database tetap di Supabase, data aman antar redeploy.
