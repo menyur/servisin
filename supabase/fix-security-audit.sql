@@ -22,7 +22,8 @@ returns table (
   code text,
   status text,
   service_name text,
-  scheduled_at timestamptz,
+  booking_date date,
+  booking_time text,
   technician_name text,
   completed_at timestamptz
 )
@@ -34,7 +35,8 @@ as $$
   select b.code,
          b.status,
          s.name,
-         b.scheduled_at,
+         b.booking_date,
+         b.booking_time,
          p.name,
          b.completed_at
   from bookings b
