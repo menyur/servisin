@@ -24,6 +24,32 @@ const nextConfig = {
           { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
         ],
       },
+      {
+        // Security headers (hasil audit) — berlaku untuk semua rute
+        source: "/:path*",
+        headers: [
+          { key: "X-Frame-Options", value: "DENY" }, // anti klikjacking
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(self)" },
+          {
+            key: "Content-Security-Policy",
+            // frame-ancestors 'none' = versi modern X-Frame-Options; img-src Supabase
+            // untuk thumbnail & gambar layanan; 'unsafe-inline' untuk style Tailwind.
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data: blob: https://*.supabase.co",
+              "font-src 'self' data:",
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+            ].join("; "),
+          },
+        ],
+      },
     ];
   },
 };

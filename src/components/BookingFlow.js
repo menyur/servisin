@@ -96,8 +96,8 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
       const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
       const { error } = await supabase.storage.from("attachments").upload(fileName, optimized, { contentType: optimized.type });
       if (error) throw error;
-      const { data } = supabase.storage.from("attachments").getPublicUrl(fileName);
-      return data.publicUrl;
+      // Bucket privat (hasil audit): simpan PATH — dibaca via signed URL di server.
+      return fileName;
     } catch (err) {
       // Bucket "attachments" belum dibuat di Supabase Storage — booking tetap lanjut tanpa lampiran.
       console.warn("Upload lampiran dilewati:", err.message);

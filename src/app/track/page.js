@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { trackBookingByCode } from "@/app/actions/bookings";
-import { formatRupiah } from "@/lib/pricing";
 import { STATUS_LABELS, STATUS_STEPS, StatusPipeline, StatusPill } from "@/components/StatusPipeline";
 import { EmptyBoxIllustration } from "@/components/Illustrations";
 
@@ -60,10 +59,12 @@ export default function TrackPage() {
           <StatusPipeline current={booking.status} />
 
           <div className="border-t border-line pt-4 space-y-2 text-sm">
-            <Row label="Layanan" value={booking.services?.name} />
-            <Row label="Jadwal" value={`${booking.booking_date} · ${booking.booking_time}`} />
-            <Row label="Alamat" value={booking.address} />
-            <Row label="Total" value={formatRupiah(booking.total_price)} />
+            <Row label="Layanan" value={booking.service_name} />
+            <Row label="Jadwal" value={booking.scheduled_at ? new Date(booking.scheduled_at).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" }) : null} />
+            <Row label="Teknisi" value={booking.technician_name || "Belum ditugaskan"} />
+            {booking.status === "completed" && (
+              <Row label="Selesai" value={booking.completed_at ? new Date(booking.completed_at).toLocaleDateString("id-ID", { dateStyle: "medium" }) : "-"} />
+            )}
           </div>
         </div>
       )}

@@ -57,8 +57,8 @@ export default function PaymentConfirmModal({ booking, onClose, onSubmitted }) {
     const fileName = `${booking.user_id || "u"}/${booking.code}-${Date.now()}.${ext}`;
     const { error: upErr } = await supabase.storage.from("payment-proofs").upload(fileName, optimized, { upsert: true, contentType: optimized.type });
     if (upErr) throw upErr;
-    const { data } = supabase.storage.from("payment-proofs").getPublicUrl(fileName);
-    return data.publicUrl;
+    // Bucket privat (hasil audit): simpan PATH — dibaca via signed URL di server.
+    return fileName;
   }
 
   async function handleSubmit(e) {
