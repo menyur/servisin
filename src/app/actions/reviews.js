@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import {
   REVIEW_INCENTIVE_DAYS,
   REVIEW_INCENTIVE_AMOUNT,
@@ -104,6 +104,8 @@ export async function submitReview({ bookingId, rating, comment }) {
   }
 
   revalidatePath("/dashboard");
+  // rating tampil publik di /teknisi (cache unstable_cache bertag)
+  revalidateTag("reviews");
   return { ok: true, voucher };
 }
 

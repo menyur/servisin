@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Star, BadgeCheck, MessageSquareQuote, ArrowRight, ShieldCheck } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { getTechnicianCards } from "@/lib/technicians";
 import { absoluteUrl } from "@/lib/site";
 
 export const metadata = {
@@ -41,44 +41,8 @@ function avatarLetter(name) {
 }
 
 export default async function TechniciansPage() {
-  const supabase = await createClient();
-
-  // Teknisi yang disetujui saja yang tampil publik
-  const { data: technicians } = await supabase
-    .from("profiles")
-    .select("id, name, approval_status, created_at")
-    .eq("role", "technician")
-    .eq("approval_status", "approved")
-    .order("name");
-
-  // Seluruh ulasan (policy: publik boleh baca) — dikelompokkan per teknisi.
-  // CATATAN: kolom created_at belum ada di tabel reviews (versi Table Editor),
-  // jadi tidak dipilih — query yang menyebut kolom tak ada gagal diam-diam.
-  const { data: reviews, error: reviewsError } = await supabase
-    .from("reviews")
-    .select("technician_id, rating, comment");
-  if (reviewsError) console.error("reviews public read:", reviewsError.message);
-
-  const byTech = {};
-  for (const r of reviews || []) {
-    (byTech[r.technician_id] ||= []).push(r);
-  }
-
-  const cards = (technicians || []).map((t) => {
-    const revs = byTech[t.id] || [];
-    const avg = revs.length
-      ? revs.reduce((a, r) => a + r.rating, 0) / revs.length
-      : null;
-    // ulasan berkomentar dulu, rating tertinggi di atas, maksimal 3
-    const shown = revs
-      .filter((r) => r.comment)
-      .sort((a, b) => b.rating - a.rating)
-      .slice(0, 3);
-    return { ...t, reviews: revs, avg, shown };
-  });
-
-  // teknisi berulasan dulu, lalu nama
-  cards.sort((a, b) => (b.reviews.length || 0) - (a.reviews.length || 0) || a.name.localeCompare(b.name));
+  // Data publik di-cache (tag technicians/reviews) — lihat src/lib/technicians.js
+  const cards = await getTechnicianCards();
 
   return (
     <div className="max-w-6xl mx-auto px-5 py-12">
