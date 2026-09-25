@@ -19,7 +19,7 @@ export default function RegisterPage({ searchParams }) {
       <div className="card relative overflow-hidden">
         <div className="absolute inset-x-0 top-0 h-28 bg-brand-tint/60 -z-10 pointer-events-none" />
         <div className="w-40 mx-auto -mt-2 mb-3"><AuthIllustration /></div>
-        <h1 className="font-display text-2xl text-navy mb-1.5 text-center">Buat akun Servisin</h1>
+        <h1 className="font-display text-2xl text-navy mb-1.5 text-center">Buat akun Fixify</h1>
         <p className="text-sm text-ink-soft mb-6 text-center">Sudah punya akun? <Link href="/login" className="text-brand font-semibold">Masuk di sini</Link></p>
 
         <form action={formAction} className="space-y-4">

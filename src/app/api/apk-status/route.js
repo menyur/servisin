@@ -8,7 +8,7 @@ import path from "node:path";
  */
 export async function GET() {
   try {
-    const apkPath = path.join(process.cwd(), "public", "apk", "servisin.apk");
+    const apkPath = path.join(process.cwd(), "public", "apk", "fixify.apk");
     if (!existsSync(apkPath)) {
       return Response.json({ available: false });
     }

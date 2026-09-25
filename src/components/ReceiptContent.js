@@ -18,7 +18,7 @@ export default function ReceiptContent({ booking, customerName, customerPhone })
             {/* ikon wrench sederhana */}
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: "middle" }}><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
           </span>
-          <span style={{ fontSize: 20, fontWeight: 700, color: "#0B3556" }}>Servisin</span>
+          <span style={{ fontSize: 20, fontWeight: 700, color: "#0B3556" }}>Fixify</span>
         </div>
         <div style={{ fontSize: 11, color: "#4C6272" }}>Platform Pemesanan Jasa Serba Bisa</div>
         <div style={{ fontSize: 11, color: "#4C6272" }}>Struk Pesanan</div>
@@ -99,7 +99,7 @@ export default function ReceiptContent({ booking, customerName, customerPhone })
 
       {/* Footer */}
       <div style={{ textAlign: "center", fontSize: 10, color: "#4C6272", borderTop: "2px dashed #D7E7F0", paddingTop: 12 }}>
-        <div style={{ fontWeight: 600, color: "#0B3556", marginBottom: 2 }}>Terima kasih sudah memesan di Servisin!</div>
+        <div style={{ fontWeight: 600, color: "#0B3556", marginBottom: 2 }}>Terima kasih sudah memesan di Fixify!</div>
         <div>Simpan struk ini sebagai bukti pesanan. Butuh bantuan? Hubungi kami lewat halaman Tentang Kami.</div>
         <div style={{ marginTop: 6, fontStyle: "italic" }}>Dicetak dari dashboard pelanggan · {created}</div>
       </div>

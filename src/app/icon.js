@@ -1,6 +1,6 @@
 import { ImageResponse } from "next/og";
 
-// Favicon situs (64×64) — ikon kunci biru Servisin di kotak rounded,
+// Favicon situs (64×64) — ikon kunci biru Fixify di kotak rounded,
 // persis logo navbar. Next.js melayani otomatis di /icon.png dan /favicon.ico
 // (konversi otomatis) lengkap dengan meta link tag di semua halaman.
 export const size = { width: 64, height: 64 };

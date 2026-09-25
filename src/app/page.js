@@ -63,7 +63,7 @@ export default async function HomePage({ searchParams }) {
         </div>
       </section>
 
-      {/* KENAPA SERVISIN */}
+      {/* KENAPA FIXIFY */}
       <section className="max-w-6xl mx-auto px-5 py-14 grid sm:grid-cols-3 gap-5">
         <div className="card flex flex-col items-center text-center gap-3">
           <div className="w-24"><TrustFast /></div>

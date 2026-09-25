@@ -1,5 +1,5 @@
 -- =========================================================
--- SERVISIN — Skema database (PostgreSQL / Supabase)
+-- FIXIFY — Skema database (PostgreSQL / Supabase)
 -- Jalankan file ini di Supabase SQL Editor, urut dari atas.
 --
 -- CATATAN: file ini untuk MEMBUAT database baru dari nol.

@@ -15,9 +15,9 @@ import {
 import { formatRupiah, APP_FEE, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
 
 export const metadata = {
-  title: "Panduan Pelanggan — Servisin",
+  title: "Panduan Pelanggan — Fixify",
   description:
-    "Cara menggunakan Servisin untuk pelanggan: memesan layanan, membayar, melacak status, menilai teknisi, dan memakai voucher.",
+    "Cara menggunakan Fixify untuk pelanggan: memesan layanan, membayar, melacak status, menilai teknisi, dan memakai voucher.",
 };
 
 const STEPS = [
@@ -196,7 +196,7 @@ export default function PanduanPelangganPage() {
         <h1 className="font-display text-2xl text-navy">Panduan Pelanggan</h1>
       </div>
       <p className="text-ink-soft mb-8">
-        Semua yang perlu kamu tahu untuk memesan lewat Servisin — dari memilih layanan sampai menilai
+        Semua yang perlu kamu tahu untuk memesan lewat Fixify — dari memilih layanan sampai menilai
         teknisi.
       </p>
 

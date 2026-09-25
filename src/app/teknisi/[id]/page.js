@@ -8,13 +8,13 @@ import { absoluteUrl } from "@/lib/site";
 export async function generateMetadata({ params }) {
   const { id } = await params;
   const meta = await getTechnicianMeta(id);
-  if (!meta) return { title: "Teknisi tidak ditemukan — Servisin" };
+  if (!meta) return { title: "Teknisi tidak ditemukan — Fixify" };
 
   const { name, avg, count } = meta;
-  const title = `${name} — Teknisi Servisin${avg ? ` ★ ${avg}` : ""}`;
+  const title = `${name} — Teknisi Fixify${avg ? ` ★ ${avg}` : ""}`;
   const description = avg
     ? `Rating ${avg}/5 dari ${count} ulasan asli pelanggan. Lihat rekam jejak lengkap ${name} sebelum memesan jasa.`
-    : `Teknisi terverifikasi Servisin. Jadilah yang pertama menilai ${name} setelah memesan jasa.`;
+    : `Teknisi terverifikasi Fixify. Jadilah yang pertama menilai ${name} setelah memesan jasa.`;
 
   return {
     title,

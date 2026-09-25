@@ -1,4 +1,4 @@
-# Servisin — Platform Pemesanan Jasa Serba Bisa
+# Fixify — Platform Pemesanan Jasa Serba Bisa
 
 Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platform booking jasa: **Service AC, Tukang Rumah, Service Kendaraan, Kebersihan & Laundry** — dengan panel admin lengkap, dasbor teknisi, pembayaran terverifikasi, notifikasi push, dan aplikasi Android.
 
@@ -51,14 +51,14 @@ Semua variabel di `.env.example` yang berakhiran rahasia (tanpa `NEXT_PUBLIC_`) 
 
 ## 5. Aplikasi Android (APK)
 
-Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`: file `public/apk/servisin.apk` ada → tombol aktif dengan ukuran file.
+Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`: file `public/apk/fixify.apk` ada → tombol aktif dengan ukuran file.
 
-Untuk memperbarui APK: generate via [PWABuilder](https://www.pwabuilder.com) (package ID `com.menyur.servisin`), salin hasilnya ke `public/apk/servisin.apk`, push. **Simpan signing key** (`signing.keystore`) — tanpa itu aplikasi tidak bisa diupdate di perangkat yang sudah terpasang.
+Untuk memperbarui APK: generate via [PWABuilder](https://www.pwabuilder.com) (package ID `com.menyur.fixify`), salin hasilnya ke `public/apk/fixify.apk`, push. **Simpan signing key** (`signing.keystore`) — tanpa itu aplikasi tidak bisa diupdate di perangkat yang sudah terpasang.
 
 ## Struktur folder (ringkas)
 
 ```
-servisin/
+fixify/
   supabase/            -> schema, seed, dan migrasi idempoten (jalankan di SQL Editor)
   docs/security.md     -> praktik keamanan (RLS, storage, env) — WAJIB dibaca sebelum menambah fitur
   scripts/             -> setup-storage.mjs, weekly-cleanup.mjs, dsb.
@@ -66,7 +66,7 @@ servisin/
   src/app/actions/     -> semua Server Actions (auth, bookings, admin, technician, reviews, reports, push)
   src/components/      -> komponen UI (wizard booking, dashboard client, admin tabs, ilustrasi)
   src/lib/             -> client supabase (browser/server/middleware/admin), pricing, email, push, balance
-  public/apk/          -> servisin.apk (dibaca /api/apk-status)
+  public/apk/          -> fixify.apk (dibaca /api/apk-status)
 ```
 
 ## Skema database (ringkas)

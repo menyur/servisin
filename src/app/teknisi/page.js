@@ -4,20 +4,20 @@ import { getTechnicianCards } from "@/lib/technicians";
 import { absoluteUrl } from "@/lib/site";
 
 export const metadata = {
-  title: "Teknisi Kami — Rating & Ulasan Asli | Servisin",
+  title: "Teknisi Kami — Rating & Ulasan Asli | Fixify",
   description:
-    "Kenali teknisi Servisin: rating dan ulasan asli dari pelanggan yang pesanannya sudah selesai dikerjakan. Lihat rekam jejak sebelum memesan.",
+    "Kenali teknisi Fixify: rating dan ulasan asli dari pelanggan yang pesanannya sudah selesai dikerjakan. Lihat rekam jejak sebelum memesan.",
   alternates: { canonical: absoluteUrl("/teknisi") },
   openGraph: {
     type: "website",
-    title: "Teknisi Kami — Rating & Ulasan Asli | Servisin",
+    title: "Teknisi Kami — Rating & Ulasan Asli | Fixify",
     description:
       "Semua rating berasal dari pelanggan dengan pesanan selesai — lihat rekam jejak teknisi sebelum memesan.",
     url: absoluteUrl("/teknisi"),
   },
   twitter: {
     card: "summary_large_image",
-    title: "Teknisi Kami — Rating & Ulasan Asli | Servisin",
+    title: "Teknisi Kami — Rating & Ulasan Asli | Fixify",
     description: "Reputasi terbuka: rating hanya dari pesanan yang selesai dikerjakan.",
   },
 };

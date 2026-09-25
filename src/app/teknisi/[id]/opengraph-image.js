@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 // Kartu OG dinamis per teknisi — menggambar nama, rating, dan jumlah ulasan.
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
-export const alt = "Profil teknisi Servisin";
+export const alt = "Profil teknisi Fixify";
 
 export default async function OgImage({ params }) {
   const { id } = await params;
@@ -24,7 +24,7 @@ export default async function OgImage({ params }) {
 
   const revs = reviews || [];
   const avg = revs.length ? revs.reduce((a, r) => a + r.rating, 0) / revs.length : null;
-  const name = tech?.name || "Teknisi Servisin";
+  const name = tech?.name || "Teknisi Fixify";
   // glyph ★ tidak tersedia di font Satori default — pakai kotak kuning (terisi) / outline (kosong)
   const filled = avg !== null ? Math.round(avg) : 0;
   const sub =
@@ -82,7 +82,7 @@ export default async function OgImage({ params }) {
         </div>
         <div style={{ fontSize: 34, color: "#C9DCEA", marginTop: 16 }}>{sub}</div>
         <div style={{ fontSize: 28, color: "#9FC8E4", marginTop: 56 }}>
-          Lihat semua ulasannya di servisin
+          Lihat semua ulasannya di fixify
         </div>
       </div>
     ),

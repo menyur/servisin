@@ -17,9 +17,9 @@ import {
 import { computeSplit, formatRupiah, DEFAULT_COMMISSION_RATE } from "@/lib/pricing";
 
 export const metadata = {
-  title: "Panduan Teknisi — Servisin",
+  title: "Panduan Teknisi — Fixify",
   description:
-    "Cara menggunakan Servisin untuk teknisi: memahami tugas masuk, mengubah status pekerjaan, membuat laporan, memahami komisi, dan menjaga rating.",
+    "Cara menggunakan Fixify untuk teknisi: memahami tugas masuk, mengubah status pekerjaan, membuat laporan, memahami komisi, dan menjaga rating.",
 };
 
 const STEPS = [
@@ -158,7 +158,7 @@ export default function PanduanTeknisiPage() {
         <h1 className="font-display text-2xl text-navy">Panduan Teknisi</h1>
       </div>
       <p className="text-ink-soft mb-8">
-        Semua yang perlu kamu tahu untuk bekerja dengan Servisin — dari tugas masuk sampai pendapatan.
+        Semua yang perlu kamu tahu untuk bekerja dengan Fixify — dari tugas masuk sampai pendapatan.
       </p>
 
       {/* CTA cepat */}

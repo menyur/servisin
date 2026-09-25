@@ -1,5 +1,5 @@
 -- =========================================================
--- Migrasi: setup Storage untuk SEMUA bucket aplikasi Servisin.
+-- Migrasi: setup Storage untuk SEMUA bucket aplikasi Fixify.
 --
 -- Daftar bucket (dipakai di src/ — hasil audit `storage.from(...)`):
 --   service-images  : thumbnail layanan (admin upload, publik read)

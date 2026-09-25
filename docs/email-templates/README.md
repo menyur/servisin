@@ -1,12 +1,12 @@
-# Template Email Supabase — Servisin
+# Template Email Supabase — Fixify
 
-## Perbandingan: default Supabase vs template Servisin
+## Perbandingan: default Supabase vs template Fixify
 
-| Aspek | Default Supabase | Template Servisin (`reset-password.html`) |
+| Aspek | Default Supabase | Template Fixify (`reset-password.html`) |
 |---|---|---|
 | Bahasa | Inggris | **Indonesia** |
 | Tampilan | Teks polos + link mentah `{{ .ConfirmationURL }}` | Kartu branded: header wordmark + banner `brand-tint`, tombol besar `brand #1C86C7`, kartu peringatan keamanan `coral-tint` |
-| Brand | Tidak ada — penerima tidak tahu dari mana email itu | Wordmark "Servisin" + ikon kunci pas di kotak biru, sesuai navbar aplikasi |
+| Brand | Tidak ada — penerima tidak tahu dari mana email itu | Wordmark "Fixify" + ikon kunci pas di kotak biru, sesuai navbar aplikasi |
 | Instruksi | "You can reset your password" (ambigu) | Jelas: berlaku 1 jam, sekali pakai, langkah yang harus dilakukan |
 | Keamanan | Tidak ada | Blok "Bukan kamu yang meminta?" — abaikan email, jangan bagikan link |
 | Fallback | Link mentah saja | Tombol + link salin-tempel untuk client yang memblokir tombol |

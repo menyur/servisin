@@ -12,7 +12,7 @@ export default function Navbar({ user, profile, pendingTechnicians = 0, pendingB
           <span className="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center">
             <Wrench size={16} />
           </span>
-          <span className="font-display font-bold text-lg text-navy">Servisin</span>
+          <span className="font-display font-bold text-lg text-navy">Fixify</span>
         </Link>
 
         <nav className="hidden md:flex items-center gap-6 text-sm font-semibold text-navy">
