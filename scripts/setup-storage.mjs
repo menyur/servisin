@@ -1,4 +1,4 @@
-// Buat semua bucket Storage yang dipakai aplikasi Servisin — otomatis & idempoten.
+// Buat semua bucket Storage yang dipakai aplikasi Fixify — otomatis & idempoten.
 // Memakai SUPABASE_SERVICE_ROLE_KEY (Storage API), jadi tidak terkena error 42501
 // yang kadang memblokir insert storage.buckets di SQL Editor.
 //

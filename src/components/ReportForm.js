@@ -41,7 +41,7 @@ export default function ReportForm({ mode = "customer", bookings = [], onSubmit,
         <CheckCircle2 size={40} className="text-mint" />
         <p className="font-display font-semibold text-navy">Laporan terkirim!</p>
         <p className="text-sm text-ink-soft max-w-sm">
-          Laporanmu sudah kami terima dan akan ditinjau oleh tim Servisin. Hasil tindak lanjut akan dikabarkan lewat email/WA.
+          Laporanmu sudah kami terima dan akan ditinjau oleh tim Fixify. Hasil tindak lanjut akan dikabarkan lewat email/WA.
         </p>
         <button className="btn-outline !py-2 text-sm mt-1" onClick={() => setSuccess(false)}>
           Buat laporan lain
@@ -110,7 +110,7 @@ export default function ReportForm({ mode = "customer", bookings = [], onSubmit,
         <Send size={16} /> {sending ? "Mengirim..." : "Kirim laporan"}
       </button>
       <p className="text-xs text-ink-soft">
-        Laporan akan ditinjau oleh admin Servisin sebelum ditindaklanjuti.
+        Laporan akan ditinjau oleh admin Fixify sebelum ditindaklanjuti.
       </p>
     </form>
   );

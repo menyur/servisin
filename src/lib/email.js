@@ -19,7 +19,7 @@ async function sendMail({ to, subject, html, attachments }) {
     const { Resend } = await import("resend");
     const resend = new Resend(process.env.RESEND_API_KEY);
     await resend.emails.send({
-      from: process.env.EMAIL_FROM || "Servisin <onboarding@resend.dev>",
+      from: process.env.EMAIL_FROM || "Fixify <onboarding@resend.dev>",
       to,
       subject,
       html,
@@ -45,7 +45,7 @@ function wrapper(title, bodyHtml) {
     <div style="font-family:sans-serif;color:#10202B;">
       <h2 style="color:#0B3556;">${title}</h2>
       ${bodyHtml}
-      <p style="color:#4C6272;font-size:13px;margin-top:20px;">Email ini dikirim otomatis oleh Servisin.</p>
+      <p style="color:#4C6272;font-size:13px;margin-top:20px;">Email ini dikirim otomatis oleh Fixify.</p>
     </div>
   `;
 }
@@ -56,7 +56,7 @@ export async function sendBookingConfirmationEmail(booking) {
     "Booking kamu diterima!",
     `
       <p>Halo ${booking.customer_name},</p>
-      <p>Terima kasih sudah memesan layanan <strong>${booking.service_name}</strong> di Servisin.</p>
+      <p>Terima kasih sudah memesan layanan <strong>${booking.service_name}</strong> di Fixify.</p>
       <table style="margin:16px 0;">
         ${detailRow("Kode booking", `<strong>${booking.code}</strong>`)}
         ${detailRow("Jadwal", `${booking.booking_date} · ${booking.booking_time}`)}
@@ -67,7 +67,7 @@ export async function sendBookingConfirmationEmail(booking) {
     `
   );
 
-  return sendMail({ to: booking.customer_email, subject: `Booking ${booking.code} diterima — Servisin`, html });
+  return sendMail({ to: booking.customer_email, subject: `Booking ${booking.code} diterima — Fixify`, html });
 }
 
 /** Ke semua admin: pelanggan mengklaim pembayaran dengan bukti transfer — perlu verifikasi. */
@@ -93,7 +93,7 @@ export async function sendAdminPaymentProofEmail(adminEmails, claim) {
     `
   );
 
-  return sendMail({ to: adminEmails, subject: `Bukti bayar ${claim.code} menunggu verifikasi — Servisin`, html });
+  return sendMail({ to: adminEmails, subject: `Bukti bayar ${claim.code} menunggu verifikasi — Fixify`, html });
 }
 
 /** Ke semua admin, setiap ada booking baru masuk. */
@@ -115,7 +115,7 @@ export async function sendAdminNewBookingEmail(adminEmails, booking) {
     `
   );
 
-  return sendMail({ to: adminEmails, subject: `Pesanan baru ${booking.code} — Servisin`, html });
+  return sendMail({ to: adminEmails, subject: `Pesanan baru ${booking.code} — Fixify`, html });
 }
 
 /** Ke semua admin, setiap ada laporan baru dari pelanggan/teknisi. */
@@ -137,7 +137,7 @@ export async function sendAdminNewReportEmail(adminEmails, report) {
     `
   );
 
-  return sendMail({ to: adminEmails, subject: `Laporan baru: ${report.title} — Servisin`, html });
+  return sendMail({ to: adminEmails, subject: `Laporan baru: ${report.title} — Fixify`, html });
 }
 
 /** Ke pelapor, saat admin menandai laporannya selesai ditindaklanjuti. */
@@ -146,7 +146,7 @@ export async function sendReportResolvedEmail(reporterEmail, report) {
     "Laporanmu sudah ditindaklanjuti",
     `
       <p>Halo ${report.reporter_name || ""},</p>
-      <p>Laporan yang kamu kirim telah ditinjau dan ditandai <strong>selesai</strong> oleh tim Servisin.</p>
+      <p>Laporan yang kamu kirim telah ditinjau dan ditandai <strong>selesai</strong> oleh tim Fixify.</p>
       <table style="margin:16px 0;">
         ${detailRow("Judul laporan", `<strong>${report.title}</strong>`)}
         ${report.booking_code ? detailRow("Pesanan terkait", report.booking_code) : ""}
@@ -164,7 +164,7 @@ export async function sendReportResolvedEmail(reporterEmail, report) {
     `
   );
 
-  return sendMail({ to: reporterEmail, subject: `Laporanmu telah diselesaikan — Servisin`, html });
+  return sendMail({ to: reporterEmail, subject: `Laporanmu telah diselesaikan — Fixify`, html });
 }
 
 /** Ke pelanggan: struk PDF terlampir saat pesanan selesai. */
@@ -173,7 +173,7 @@ export async function sendReceiptEmail(customerEmail, receipt) {
     "Pesananmu sudah selesai — ini struknya",
     `
       <p>Halo ${receipt.customer_name || ""},</p>
-      <p>Pesanan <strong>${receipt.code}</strong> telah ditandai <strong style="color:#2C8F63;">selesai</strong>. Terima kasih sudah mempercayakan kebutuhan servicemu pada Servisin!</p>
+      <p>Pesanan <strong>${receipt.code}</strong> telah ditandai <strong style="color:#2C8F63;">selesai</strong>. Terima kasih sudah mempercayakan kebutuhan servicemu pada Fixify!</p>
       <table style="margin:16px 0;">
         ${detailRow("Layanan", receipt.service_name)}
         ${detailRow("Jadwal", `${receipt.booking_date} · ${receipt.booking_time}`)}
@@ -183,13 +183,13 @@ export async function sendReceiptEmail(customerEmail, receipt) {
         ${detailRow(`<strong>Total dibayar</strong>`, `<strong>Rp${Number(receipt.total_price).toLocaleString("id-ID")}</strong>`)}
       </table>
       <p>Struk lengkap terlampir dalam bentuk PDF (<strong>${receipt.filename}</strong>) — simpan sebagai bukti pesanan.</p>
-      <p style="color:#4C6272;font-size:13px;">Puas dengan layanannya? Pesan lagi kapan saja lewat halaman utama, atau bagikan Servisin ke tetangga yang butuh.</p>
+      <p style="color:#4C6272;font-size:13px;">Puas dengan layanannya? Pesan lagi kapan saja lewat halaman utama, atau bagikan Fixify ke tetangga yang butuh.</p>
     `
   );
 
   return sendMail({
     to: customerEmail,
-    subject: `Struk pesanan ${receipt.code} — Servisin`,
+    subject: `Struk pesanan ${receipt.code} — Fixify`,
     html,
     attachments: [
       {
@@ -212,7 +212,7 @@ export async function sendMonthlyReportEmail(adminEmails, report) {
 
   const html = `
     <div style="font-family:sans-serif;color:#10202B;">
-      <h2 style="color:#0B3556;">Laporan bulanan Servisin — ${periodLabel}</h2>
+      <h2 style="color:#0B3556;">Laporan bulanan Fixify — ${periodLabel}</h2>
       <p>Rekap pesanan selesai bulan ${periodLabel}.</p>
       <table style="margin:16px 0;">
         ${detailRow("Pesanan selesai", `<strong>${report.count}</strong>`)}
@@ -225,7 +225,7 @@ export async function sendMonthlyReportEmail(adminEmails, report) {
 
   return sendMail({
     to: adminEmails,
-    subject: `Laporan bulanan ${periodLabel} — ${report.count} pesanan selesai — Servisin`,
+    subject: `Laporan bulanan ${periodLabel} — ${report.count} pesanan selesai — Fixify`,
     html,
     attachments: [
       {
@@ -256,7 +256,7 @@ export async function sendTechnicianAssignmentEmail(technicianEmail, booking) {
     `
   );
 
-  return sendMail({ to: technicianEmail, subject: `Tugas baru ${booking.code} — Servisin`, html });
+  return sendMail({ to: technicianEmail, subject: `Tugas baru ${booking.code} — Fixify`, html });
 }
 
 /* ============ NOTIFIKASI SALDO: SETOR & TARIK ============ */
@@ -277,7 +277,7 @@ export async function sendAdminNewDepositEmail(adminEmails, dep) {
     `
   );
 
-  return sendMail({ to: adminEmails, subject: `Setor saldo ${dep.tech_name} menunggu verifikasi — Servisin`, html });
+  return sendMail({ to: adminEmails, subject: `Setor saldo ${dep.tech_name} menunggu verifikasi — Fixify`, html });
 }
 
 /** Ke semua admin: teknisi mengajukan penarikan saldo ke rekening pribadi. */
@@ -296,7 +296,7 @@ export async function sendAdminNewWithdrawalEmail(adminEmails, wd) {
     `
   );
 
-  return sendMail({ to: adminEmails, subject: `Penarikan saldo ${wd.tech_name} menunggu persetujuan — Servisin`, html });
+  return sendMail({ to: adminEmails, subject: `Penarikan saldo ${wd.tech_name} menunggu persetujuan — Fixify`, html });
 }
 
 /** Ke semua admin: ada pendaftar teknisi baru menunggu kurasi (dengan KTP). */
@@ -317,5 +317,5 @@ export async function sendAdminNewApplicantEmail(adminEmails, a) {
     `
   );
 
-  return sendMail({ to: adminEmails, subject: `Pendaftar teknisi baru: ${a.name} — Servisin`, html });
+  return sendMail({ to: adminEmails, subject: `Pendaftar teknisi baru: ${a.name} — Fixify`, html });
 }

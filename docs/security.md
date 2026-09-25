@@ -1,4 +1,4 @@
-# Praktik Keamanan — Servisin
+# Praktik Keamanan — Fixify
 
 Referensi singkat untuk menjaga keamanan saat menambah fitur baru.
 Diverifikasi lewat audit (Sep 2026) — commit `c8b1e22` + `b474fc6`.

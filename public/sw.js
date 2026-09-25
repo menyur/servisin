@@ -1,8 +1,8 @@
-// Service worker Servisin — strategi pas-dasar untuk PWA:
+// Service worker Fixify — strategi pas-dasar untuk PWA:
 // 1) App shell (halaman) → network-first dengan fallback offline.html
 // 2) Aset statis (_next/static, ikon, font) → cache-first (ubah hash tiap build)
 // 3) Supabase/API → TIDAK di-cache (data harus selalu segar)
-const VERSION = "servisin-v1";
+const VERSION = "fixify-v1";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const OFFLINE_URL = "/offline.html";
@@ -30,7 +30,7 @@ self.addEventListener("activate", (event) => {
 // ============ Push Notification ============
 // Server mengirim payload JSON: { title, body, url, tag }
 self.addEventListener("push", (event) => {
-  let data = { title: "Servisin", body: "Ada pembaruan pesanan.", url: "/dashboard", tag: "servisin" };
+  let data = { title: "Fixify", body: "Ada pembaruan pesanan.", url: "/dashboard", tag: "fixify" };
   try {
     if (event.data) data = { ...data, ...event.data.json() };
   } catch {

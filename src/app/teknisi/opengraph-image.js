@@ -48,7 +48,7 @@ export default function OgImage() {
           Semua rating berasal dari pelanggan dengan pesanan selesai — lihat rekam jejak sebelum memesan.
         </div>
         <div style={{ fontSize: 30, color: "#FFC94D", marginTop: 56, fontWeight: 700 }}>
-          servisin · /teknisi
+          fixify · /teknisi
         </div>
       </div>
     ),

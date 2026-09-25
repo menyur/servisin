@@ -3,8 +3,8 @@ import { ArrowRight, MapPin, Phone, Mail, Clock, ShieldCheck, HeartHandshake, Le
 import { HeroIllustration, TrustFast, TrustPro, TrustPrice, AvatarRaka, AvatarSari, AvatarBima } from "@/components/Illustrations";
 
 export const metadata = {
-  title: "Tentang Kami — Servisin",
-  description: "Kenali Servisin: misi, nilai, dan cara kami menghubungkan kamu dengan teknisi terpercaya di seluruh Indonesia.",
+  title: "Tentang Kami — Fixify",
+  description: "Kenali Fixify: misi, nilai, dan cara kami menghubungkan kamu dengan teknisi terpercaya di seluruh Indonesia.",
 };
 
 const STATS = [
@@ -38,12 +38,12 @@ export default function TentangPage() {
       <section className="bg-brand-tint overflow-hidden">
         <div className="max-w-6xl mx-auto px-5 pt-14 pb-16 grid lg:grid-cols-2 gap-10 items-center">
           <div>
-            <span className="pill bg-white text-brand-deep">Tentang Servisin</span>
+            <span className="pill bg-white text-brand-deep">Tentang Fixify</span>
             <h1 className="font-display text-3xl sm:text-5xl text-navy mt-5 mb-4 leading-tight">
               Rumah kamu, urusan kami.
             </h1>
             <p className="text-ink-soft max-w-lg mb-8">
-              Servisin lahir dari satu pengamatan sederhana: mencari teknisi yang andal itu susah.
+              Fixify lahir dari satu pengamatan sederhana: mencari teknisi yang andal itu susah.
               Kami merapikan semuanya — satu platform untuk Service AC, tukang rumah, service kendaraan,
               hingga kebersihan — dengan teknisi terkurasi dan harga yang jelas sejak awal.
             </p>
@@ -127,7 +127,7 @@ export default function TentangPage() {
               </p>
               <p>
                 Bersama Sari, ia mulai bertanya-tanya: kenapa memesan mobil atau makanan bisa serapat itu, sementara mencari
-                teknisi andal masih seperti undian? Servisin dibangun dari sana — dengan janji sederhana: harga yang tertulis
+                teknisi andal masih seperti undian? Fixify dibangun dari sana — dengan janji sederhana: harga yang tertulis
                 jelas sejak awal, jadwal yang ditepati, dan teknisi yang benar-benar terkurasi.
               </p>
               <p className="font-semibold text-navy">
@@ -169,7 +169,7 @@ export default function TentangPage() {
             <h3 className="font-display font-semibold text-navy">Bima Nugraha</h3>
             <p className="text-xs font-semibold text-brand uppercase tracking-wide mb-2">Kepala Teknisi</p>
             <p className="text-sm text-ink-soft">
-              15 tahun di lapangan sebelum bergabung. Melatih semua teknisi Servisin dan menetapkan standar pengerjaan yang
+              15 tahun di lapangan sebelum bergabung. Melatih semua teknisi Fixify dan menetapkan standar pengerjaan yang
               kami janjikan ke pelanggan.
             </p>
           </div>
@@ -184,7 +184,7 @@ export default function TentangPage() {
           </div>
           <div className="relative max-w-2xl">
             <span className="pill bg-white/10 text-sky">Karier di lapangan</span>
-            <h2 className="font-display text-2xl sm:text-3xl mt-4 mb-3">Gabung jadi teknisi Servisin</h2>
+            <h2 className="font-display text-2xl sm:text-3xl mt-4 mb-3">Gabung jadi teknisi Fixify</h2>
             <p className="text-white/80 mb-6">
               Kamu punya keahlian — kami punya pesanannya. Dapatkan pelanggan di sekitarmu, atur jadwalmu sendiri,
               dan tumbuh bersama platform yang menghargai kerja tanganmu.
@@ -229,7 +229,7 @@ export default function TentangPage() {
             <span className="w-9 h-9 rounded-lg bg-brand-tint text-brand flex items-center justify-center shrink-0"><Mail size={16} /></span>
             <span>
               <span className="block font-semibold text-navy text-sm mb-1">Email</span>
-              <span className="block text-xs text-ink-soft">halo@servisin.id</span>
+              <span className="block text-xs text-ink-soft">halo@fixify.id</span>
             </span>
           </div>
           <div className="card flex items-start gap-3">

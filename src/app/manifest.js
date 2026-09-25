@@ -5,8 +5,8 @@ export default function manifest() {
   return {
     // id stabil untuk identitas app saat dipackage jadi APK/IPA (PWABuilder)
     id: "/?source=pwa",
-    name: "Servisin — Platform Pemesanan Jasa Serba Bisa",
-    short_name: "Servisin",
+    name: "Fixify — Platform Pemesanan Jasa Serba Bisa",
+    short_name: "Fixify",
     description:
       "Booking service AC, tukang rumah, kebersihan & laundry — teknisi terpercaya datang ke lokasi kamu.",
     start_url: "/",

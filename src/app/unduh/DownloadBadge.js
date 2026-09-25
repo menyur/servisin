@@ -5,8 +5,8 @@ import { Download, Loader2, Clock } from "lucide-react";
 
 /**
  * Tombol unduh APK + status ketersediaan file.
- * - Cek /api/apk-status sekali: file public/apk/servisin.apk ada atau belum.
- * - Ada   → tombol unduh aktif (href=/apk/servisin.apk) + ukuran file.
+ * - Cek /api/apk-status sekali: file public/apk/fixify.apk ada atau belum.
+ * - Ada   → tombol unduh aktif (href=/apk/fixify.apk) + ukuran file.
  * - Belum → tampil "Segera tersedia" + tetap menawarkan pasang via Chrome.
  */
 export function DownloadBadge() {
@@ -38,7 +38,7 @@ export function DownloadBadge() {
   if (status === "ready") {
     return (
       <a
-        href="/apk/servisin.apk"
+        href="/apk/fixify.apk"
         download
         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm hover:bg-brand-deep transition shadow-sm"
       >
@@ -55,7 +55,7 @@ export function DownloadBadge() {
         <Clock size={15} /> APK segera tersedia
       </span>
       <a
-        href="https://servisin-six.vercel.app"
+        href="https://fixify-six.vercel.app"
         target="_blank"
         rel="noopener noreferrer"
         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm hover:bg-brand-deep transition shadow-sm"

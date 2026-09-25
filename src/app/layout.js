@@ -26,18 +26,18 @@ const body = Inter({
 
 export const metadata = {
   metadataBase: new URL(siteUrl()),
-  title: "Servisin — Platform Pemesanan Jasa Serba Bisa",
+  title: "Fixify — Platform Pemesanan Jasa Serba Bisa",
   description: "Booking service AC, tukang rumah, dan service kendaraan dalam hitungan menit.",
   openGraph: {
     type: "website",
-    siteName: "Servisin",
+    siteName: "Fixify",
     locale: "id_ID",
   },
   // appleWebApp: saat ditambahkan ke home screen iPhone/iPad, Safari membuka
-  // Servisin tanpa address bar (seperti app native) dengan judul "Servisin".
+  // Fixify tanpa address bar (seperti app native) dengan judul "Fixify".
   appleWebApp: {
     capable: true,
-    title: "Servisin",
+    title: "Fixify",
     statusBarStyle: "default",
   },
   formatDetection: { telephone: false },

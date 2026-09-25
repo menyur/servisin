@@ -158,7 +158,7 @@ export default function GabungPage() {
               </button>
               <p className="text-[11px] text-ink-soft leading-relaxed">
                 Dengan mendaftar, kamu setuju mengikuti proses kurasi: verifikasi identitas, tes keahlian singkat, dan
-                orientasi standar layanan Servisin.
+                orientasi standar layanan Fixify.
               </p>
             </form>
           </>
@@ -206,7 +206,7 @@ export default function GabungPage() {
               )}
               <p className="flex items-start gap-1.5 text-[11px] text-ink-soft mt-2">
                 <ShieldCheck size={13} className="shrink-0 text-mint" />
-                Disimpan di storage privat — hanya admin Servisin yang dapat membukanya untuk verifikasi.
+                Disimpan di storage privat — hanya admin Fixify yang dapat membukanya untuk verifikasi.
               </p>
             </div>
 
@@ -220,7 +220,7 @@ export default function GabungPage() {
               />
               <span>
                 Data di atas sudah <strong className="text-navy">benar dan sesuai identitas saya</strong>. Saya siap
-                mengikuti proses verifikasi oleh tim Servisin.
+                mengikuti proses verifikasi oleh tim Fixify.
               </span>
             </label>
 

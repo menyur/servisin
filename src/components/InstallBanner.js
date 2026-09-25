@@ -47,7 +47,7 @@ export default function InstallBanner() {
         </span>
         <div className="min-w-0">
           <p className="font-display font-semibold text-navy text-sm">
-            Pasang aplikasi Servisin
+            Pasang aplikasi Fixify
           </p>
           <p className="text-xs text-ink-soft mt-0.5 mb-2.5 flex items-start gap-1">
             <Bell size={12} className="mt-0.5 shrink-0 text-amber" />

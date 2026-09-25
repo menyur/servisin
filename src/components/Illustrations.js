@@ -1,4 +1,4 @@
-// Ilustrasi SVG orisinal (bukan foto), memakai palet warna brand Servisin.
+// Ilustrasi SVG orisinal (bukan foto), memakai palet warna brand Fixify.
 import Image from "next/image";
 // Dipakai di hero landing page, thumbnail kartu layanan, halaman auth, empty-state, dll.
 
@@ -197,7 +197,7 @@ export function HeroIllustration(props) {
 /** Avatar ilustrasi: pendiri & teknisi (lengan, helm amber, senyum ramah). */
 export function AvatarRaka(props) {
   return (
-    <svg viewBox="0 0 120 120" width="100%" role="img" aria-label="Avatar ilustrasi Raka, pendiri Servisin" {...props}>
+    <svg viewBox="0 0 120 120" width="100%" role="img" aria-label="Avatar ilustrasi Raka, pendiri Fixify" {...props}>
       <circle cx="60" cy="60" r="56" fill={COLORS.skyTint} />
       <circle cx="60" cy="60" r="46" fill="#ffffff" opacity="0.6" />
       <g transform="translate(60,64)">

@@ -1,5 +1,5 @@
 -- =========================================================
--- SERVISIN — Data awal kategori & layanan
+-- FIXIFY — Data awal kategori & layanan
 -- Jalankan setelah schema.sql
 -- =========================================================
 

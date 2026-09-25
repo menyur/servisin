@@ -49,7 +49,7 @@ export function buildReceiptPdf({ booking, customerName, customerPhone }) {
     .roundedRect(194, 42, 24, 24, 6)
     .fillAndStroke("#1C86C7", "#1C86C7");
   doc.fillColor("#FFFFFF").font("Helvetica-Bold").fontSize(13).text("S", 194, 49, { width: 24, align: "center" });
-  doc.fillColor("#0B3556").font("Helvetica-Bold").fontSize(18).text("Servisin", 226, 47);
+  doc.fillColor("#0B3556").font("Helvetica-Bold").fontSize(18).text("Fixify", 226, 47);
   doc.fillColor("#4C6272").font("Helvetica").fontSize(8.5)
     .text("Platform Pemesanan Jasa Serba Bisa — Struk Pesanan", 48, 74, { width: doc.page.width - 96, align: "center" });
 
@@ -128,7 +128,7 @@ export function buildReceiptPdf({ booking, customerName, customerPhone }) {
   doc.moveTo(48, doc.y).lineTo(doc.page.width - 48, doc.y).dash(3, { space: 3 }).strokeColor("#D7E7F0").stroke().undash();
   doc.y += 10;
   doc.font("Helvetica-Bold").fontSize(8.5).fillColor("#0B3556")
-    .text("Terima kasih sudah memesan di Servisin!", 48, doc.y, { width: doc.page.width - 96, align: "center" });
+    .text("Terima kasih sudah memesan di Fixify!", 48, doc.y, { width: doc.page.width - 96, align: "center" });
   doc.font("Helvetica").fontSize(7.5).fillColor("#4C6272")
     .text("Simpan PDF ini sebagai bukti pesanan. Butuh bantuan? Hubungi kami lewat halaman Tentang Kami.", 48, doc.y + 12, { width: doc.page.width - 96, align: "center" });
   doc.font("Helvetica-Oblique").fontSize(7.5)

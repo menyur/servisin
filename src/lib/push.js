@@ -12,7 +12,7 @@ import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-const SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@servisin.id";
+const SUBJECT = process.env.VAPID_SUBJECT || "mailto:admin@fixify.id";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY; // opsional — baca lintas-user
@@ -72,7 +72,7 @@ async function getSubscriptions(userId) {
  * Subscription kadaluarsa/410 otomatis dihapus.
  * Tidak pernah melempar error — gagal push tak boleh menggagalkan aksi utama.
  */
-export async function sendPushToUser(userId, { title, body, url = "/dashboard", tag = "servisin", event = null }) {
+export async function sendPushToUser(userId, { title, body, url = "/dashboard", tag = "fixify", event = null }) {
   const wp = pushClient();
   if (!wp) return; // fitur mati tanpa error
 

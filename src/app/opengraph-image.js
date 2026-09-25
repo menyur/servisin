@@ -35,7 +35,7 @@ export default function OgImage() {
           >
             S
           </div>
-          <div style={{ fontSize: 64, fontWeight: 700, color: "#0B3556" }}>Servisin</div>
+          <div style={{ fontSize: 64, fontWeight: 700, color: "#0B3556" }}>Fixify</div>
         </div>
         <div style={{ fontSize: 52, fontWeight: 700, color: "#0B3556", marginTop: 48, lineHeight: 1.2 }}>
           Butuh bantuan apa hari ini?

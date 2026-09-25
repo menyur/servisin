@@ -3,14 +3,14 @@ import { Smartphone, Apple, Download, QrCode, Wrench, UserRound, ShieldCheck, Wi
 import { DownloadBadge } from "./DownloadBadge";
 
 export const metadata = {
-  title: "Unduh Aplikasi — Servisin",
+  title: "Unduh Aplikasi — Fixify",
   description:
-    "Pasang aplikasi Servisin di Android dan iPhone: booking lebih cepat, notifikasi pesanan langsung, dan tampilan penuh layar seperti aplikasi native.",
+    "Pasang aplikasi Fixify di Android dan iPhone: booking lebih cepat, notifikasi pesanan langsung, dan tampilan penuh layar seperti aplikasi native.",
 };
 
-// Tombol unduh mengarah ke /apk/servisin.apk.
+// Tombol unduh mengarah ke /apk/fixify.apk.
 // Setelah package PWABuilder diunduh, salin app-release-signed.apk ke
-// public/apk/servisin.apk — tombol langsung berfungsi dan ikon Android
+// public/apk/fixify.apk — tombol langsung berfungsi dan ikon Android
 // pada kartu berubah dari "segera" menjadi "unduh" (dicek lewat route
 // /api/apk-status tanpa rebuild halaman).
 export default function UnduhPage() {
@@ -20,7 +20,7 @@ export default function UnduhPage() {
         <div className="w-14 h-14 rounded-2xl bg-brand text-white flex items-center justify-center mx-auto mb-4">
           <Smartphone size={26} />
         </div>
-        <h1 className="font-display text-3xl text-navy mb-2">Pasang Aplikasi Servisin</h1>
+        <h1 className="font-display text-3xl text-navy mb-2">Pasang Aplikasi Fixify</h1>
         <p className="text-ink-soft max-w-lg mx-auto">
           Booking lebih cepat, notifikasi pesanan langsung ke HP, dan tampilan
           penuh layar seperti aplikasi native — gratis untuk pelanggan &amp; teknisi.
@@ -75,7 +75,7 @@ export default function UnduhPage() {
               <li>Ketuk tombol <strong>Unduh aplikasi</strong> di atas</li>
               <li>Saat muncul peringatan, pilih <strong>Tetap unduh</strong> / <strong>Install anyway</strong> (aman — file resmi dari situs ini)</li>
               <li>Buka file yang terunduh, izinkan <strong>Install dari sumber ini</strong></li>
-              <li>Ikon <strong>Servisin</strong> muncul di home screen — selesai!</li>
+              <li>Ikon <strong>Fixify</strong> muncul di home screen — selesai!</li>
             </ol>
 
             <details className="mt-4 text-sm">
@@ -83,7 +83,7 @@ export default function UnduhPage() {
                 <QrCode size={15} /> Tanpa file APK: pasang lewat Chrome (langkah singkat)
               </summary>
               <ol className="text-ink-soft space-y-1 mt-2 list-decimal list-inside pl-1">
-                <li>Buka <strong>servisin-six.vercel.app</strong> di Chrome</li>
+                <li>Buka <strong>fixify-six.vercel.app</strong> di Chrome</li>
                 <li>Ketuk menu <strong>⋮</strong> → <strong>Tambahkan ke layar utama</strong> → <strong>Instal</strong></li>
               </ol>
             </details>
@@ -100,13 +100,13 @@ export default function UnduhPage() {
           <div className="flex-1 min-w-0">
             <h2 className="font-display font-bold text-navy text-lg mb-1">iPhone / iPad</h2>
             <p className="text-sm text-ink-soft mb-3">
-              Tidak perlu file — Safari bisa memasang Servisin sebagai aplikasi home screen:
+              Tidak perlu file — Safari bisa memasang Fixify sebagai aplikasi home screen:
             </p>
             <ol className="text-sm text-ink-soft space-y-1.5 list-decimal list-inside">
-              <li>Buka <strong>servisin-six.vercel.app</strong> di Safari</li>
+              <li>Buka <strong>fixify-six.vercel.app</strong> di Safari</li>
               <li>Ketuk tombol <strong>Bagikan</strong> (kotak dengan panah ke atas)</li>
               <li>Gulir, pilih <strong>Tambahkan ke Layar Utama</strong> → <strong>Tambahkan</strong></li>
-              <li>Servisin terbuka penuh layar seperti aplikasi native</li>
+              <li>Fixify terbuka penuh layar seperti aplikasi native</li>
             </ol>
           </div>
         </div>

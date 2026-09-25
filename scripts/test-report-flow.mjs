@@ -145,7 +145,7 @@ section("6. Simulasi email (admin + resolved ke pelapor)");
   if (!emailMod) {
     console.log("Modul email tidak bisa diimpor langsung (bukan blocker — email sebenarnya diuji lewat server action).");
   } else {
-    await emailMod.sendAdminNewReportEmail([env.ADMIN_EMAIL_TEST || "admin@servisin.test"], {
+    await emailMod.sendAdminNewReportEmail([env.ADMIN_EMAIL_TEST || "admin@fixify.test"], {
       author_role: "customer",
       title: `Laporan uji alur ${stamp}`,
       content: "Isi laporan uji untuk simulasi email admin.",
@@ -153,7 +153,7 @@ section("6. Simulasi email (admin + resolved ke pelapor)");
       author_email: TEST_EMAIL,
       booking_code: "SV-0000",
     });
-    await emailMod.sendReportResolvedEmail(env.ADMIN_EMAIL_TEST || "admin@servisin.test", {
+    await emailMod.sendReportResolvedEmail(env.ADMIN_EMAIL_TEST || "admin@fixify.test", {
       reporter_name: "Pelanggan Uji Laporan",
       title: `Laporan uji alur ${stamp}`,
       booking_code: "SV-0000",

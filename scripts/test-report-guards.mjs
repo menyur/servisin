@@ -28,7 +28,7 @@ if (sel.error) {
 
 console.log("\n=== 2. Simulasi email (tanpa RESEND_API_KEY -> cetak ke log) ===");
 const emailMod = await import("../src/lib/email.js");
-await emailMod.sendAdminNewReportEmail(["admin@servisin.test"], {
+await emailMod.sendAdminNewReportEmail(["admin@fixify.test"], {
   author_role: "technician",
   title: "[UJI] Laporan pekerjaan SV-0001",
   content: "Kondisi sebelum: AC mati total.\nKondisi sesudah: dingin normal, kapasitor diganti.",
