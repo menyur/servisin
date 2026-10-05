@@ -78,7 +78,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         showSnack(context, r.error ?? 'Gagal mengubah status.', error: true);
       }
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal mengubah status: $e', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal mengubah status.');
     }
   }
 
@@ -176,7 +176,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             technicianId: _b.technicianId, technicianName: _b.technicianName, hasReview: _b.hasReview,
           ));
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal mengirim bukti.', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal mengirim bukti.');
     }
   }
 

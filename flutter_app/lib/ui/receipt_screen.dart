@@ -52,7 +52,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
       if (!mounted) return;
       showSnack(context, 'Struk diunduh: $fileName');
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal mengunduh struk: $e', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal mengunduh struk.');
     } finally {
       if (mounted) setState(() => _downloading = false);
     }

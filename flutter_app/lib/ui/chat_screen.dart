@@ -60,7 +60,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _messages = []);
-      showSnack(context, 'Gagal memuat chat: $e', error: true);
+      showSnackError(context, e, 'Gagal memuat chat.');
     }
     // Realtime — mulai setelah riwayat ada agar tidak dobel.
     _unsubscribe = await Api.subscribeChat(widget.booking.id, (msg) {
@@ -114,7 +114,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (mounted) {
         _input.text = text; // kembalikan teks agar tidak hilang
-        showSnack(context, 'Gagal mengirim: $e', error: true);
+        showSnackError(context, e, 'Gagal mengirim pesan.');
       }
     } finally {
       if (mounted) setState(() => _sending = false);

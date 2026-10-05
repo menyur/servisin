@@ -28,7 +28,7 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       await Api.sendPasswordReset(email);
       if (mounted) setState(() => _sent = true);
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal mengirim. Coba lagi nanti.', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal mengirim. Coba lagi nanti.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

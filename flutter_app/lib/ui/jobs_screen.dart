@@ -97,7 +97,7 @@ class _JobsScreenState extends State<JobsScreen> {
         await _load(); // daftar mungkin berubah (diambil orang lain)
       }
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal mengambil: $e', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal mengambil pekerjaan.');
     } finally {
       if (mounted) setState(() => _claimingId = null);
     }

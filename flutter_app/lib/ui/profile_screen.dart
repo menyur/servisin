@@ -85,7 +85,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       if (!mounted) return;
       showSnack(context, 'Foto profil diperbarui.');
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal memperbarui foto: $e', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal memperbarui foto.');
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
     }

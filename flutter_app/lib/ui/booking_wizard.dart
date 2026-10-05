@@ -130,7 +130,7 @@ class _BookingWizardState extends State<BookingWizard> {
         builder: (_) => ReceiptScreen(booking: bookingResult),
       ));
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal membuat pesanan: ${_msg(e)}', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal membuat pesanan: ${_msg(e)}');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

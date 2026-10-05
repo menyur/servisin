@@ -147,6 +147,39 @@ void showSnack(BuildContext context, String message, {bool error = false}) {
   ));
 }
 
+/// Pesan error ramah untuk exception jaringan — menggantikan dump teknis
+/// seperti "ClientException with SocketException: Failed host lookup:
+/// 'xxx.supabase.co' (OS Error: No address associated with hostname, errno = 7)"
+/// yang muncul saat HP tidak punya internet / DNS gagal.
+/// Return null bila [e] bukan error jaringan (pakai pesan aslinya).
+String? friendlyNetworkError(Object e) {
+  final m = e.toString().toLowerCase();
+  if (m.contains('socketexception') ||
+      m.contains('failed host lookup') ||
+      m.contains('clientexception') ||
+      m.contains('no address associated') ||
+      m.contains('errno = 7') ||
+      m.contains('connection refused') ||
+      m.contains('network is unreachable') ||
+      m.contains('connection reset') ||
+      m.contains('timed out') ||
+      m.contains('broken pipe')) {
+    return 'Tidak ada koneksi internet.\nPeriksa WiFi/data lalu coba lagi.';
+  }
+  return null;
+}
+
+/// showSnack dengan terjemahan error jaringan: bila [error] adalah exception
+/// jaringan, tampilkan pesan ramah (durasi lebih panjang karena dua baris).
+void showSnackError(BuildContext context, Object error, String fallback) {
+  final msg = friendlyNetworkError(error) ?? fallback;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text(msg),
+    backgroundColor: AppColors.coral,
+    duration: const Duration(seconds: 5),
+  ));
+}
+
 /// Alur teknisi melepas tugas: dialog alasan (min 5 karakter) →
 /// RPC release_job → pesanan kembali ke daftar Tersedia.
 /// Return true bila berhasil dilepas.
@@ -201,7 +234,7 @@ Future<bool> releaseJobFlow(BuildContext context, String bookingId) async {
     }
     return r.ok;
   } catch (e) {
-    if (context.mounted) showSnack(context, 'Gagal melepas tugas: $e', error: true);
+    if (context.mounted) showSnackError(context, e, 'Gagal melepas tugas.');
     return false;
   }
 }

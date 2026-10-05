@@ -103,8 +103,7 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
       });
     } catch (e) {
       if (mounted) {
-        showSnack(context, 'Gagal mengunggah KTP: periksa koneksi lalu coba lagi.',
-            error: true);
+        showSnackError(context, e, 'Gagal mengunggah KTP — periksa koneksi lalu coba lagi.');
       }
     } finally {
       if (mounted) setState(() => _uploadingKtp = false);

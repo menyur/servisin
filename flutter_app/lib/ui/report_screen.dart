@@ -62,7 +62,7 @@ class _ReportScreenState extends State<ReportScreen> {
       showSnack(context, 'Laporan terkirim. Tim kami akan meninjaunya.');
       Navigator.pop(context);
     } catch (e) {
-      if (mounted) showSnack(context, 'Gagal mengirim laporan.', error: true);
+      if (mounted) showSnackError(context, e, 'Gagal mengirim laporan.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
