@@ -11,9 +11,11 @@ Future<void> downloadReceiptFile(Uint8List bytes, String fileName) async {
   final dir = await getTemporaryDirectory();
   final file = File('${dir.path}/$fileName');
   await file.writeAsBytes(bytes, flush: true);
-  await Share.shareXFiles(
-    [XFile(file.path, mimeType: 'image/png')],
-    text: 'Struk pesanan Fixify — $fileName',
-    subject: 'Struk Fixify',
+  await SharePlus.instance.share(
+    ShareParams(
+      files: [XFile(file.path, mimeType: 'image/png')],
+      text: 'Struk pesanan Fixify — $fileName',
+      subject: 'Struk Fixify',
+    ),
   );
 }
