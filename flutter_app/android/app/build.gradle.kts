@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("com.google.gms.google-services")
@@ -10,7 +12,7 @@ plugins {
 // atau dibuat manual untuk build release lokal. Tanpa file itu build jatuh ke
 // debug signing (HATI-HATI: debug key CI bisa berubah per build → tidak bisa
 // install-over-install).
-val keystoreProps = java.util.Properties()
+val keystoreProps = Properties()
 val keystorePropsFile = rootProject.file("key.properties")
 if (keystorePropsFile.exists()) {
     keystoreProps.load(keystorePropsFile.inputStream())
