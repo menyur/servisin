@@ -1,0 +1,16 @@
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+    - web/**
+    # File kredensial lokal (di-gitignore, diregenerasi otomatis oleh
+    # tooling) — dilepas dari analisis agar pola nullable-nya tidak
+    # memicu lint unnecessary_nullable_for_final_variable_declarations.
+    - lib/env_override.dart
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_const_constructors: true
+    prefer_final_locals: true
+    avoid_print: true

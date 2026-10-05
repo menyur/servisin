@@ -1,0 +1,31 @@
+name: fixify_app
+description: "Fixify — Aplikasi pelanggan: booking teknisi terpercaya datang ke lokasi."
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.5.0        # auth + database + storage
+  image_picker: ^1.1.2            # pilih foto (bukti bayar, lampiran keluhan)
+  flutter_image_compress: ^2.3.0  # resize+compress sebelum upload (paritas dgn web)
+  intl: ^0.19.0                   # format rupiah & tanggal id-ID
+  http: ^1.2.0                    # panggil API web (notifikasi admin saat lepas tugas)
+  shared_preferences: ^2.3.2      # cache preferensi notifikasi lokal
+  cupertino_icons: ^1.0.8
+  path_provider: 2.1.4
+  share_plus: 7.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/logo.png
