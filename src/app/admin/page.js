@@ -10,6 +10,7 @@ import {
   getFinanceSummaryAdmin,
   getAllBannersAdmin,
   getJobReleasesAdmin,
+  getTechnicianBalancesAdmin,
 } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import Link from "next/link";
@@ -29,7 +30,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, releasesRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, releasesRes, techBalancesRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
@@ -41,6 +42,7 @@ export default async function AdminPage() {
     getFinanceSummaryAdmin().catch(() => ({ error: "Gagal memuat ringkasan keuangan." })),
     getAllBannersAdmin().catch(() => ({ error: "Gagal memuat banner." })),
     getJobReleasesAdmin().catch(() => ({ error: "Gagal memuat pelepasan tugas." })),
+    getTechnicianBalancesAdmin().catch(() => ({ error: "Gagal memuat saldo teknisi." })),
   ]);
 
   if (bookingsRes.error) {
@@ -72,6 +74,8 @@ export default async function AdminPage() {
       bannersError={bannersRes.error || null}
       initialReleases={releasesRes.releases || []}
       releasesError={releasesRes.error || null}
+      initialTechnicianBalances={techBalancesRes.technicians || []}
+      technicianBalancesError={techBalancesRes.error || null}
     />
   );
 }

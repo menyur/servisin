@@ -1364,6 +1364,65 @@ export async function getFinanceSummaryAdmin() {
  * Buat signed URL (berlaku 30 menit) untuk foto KTP pendaftar teknisi.
  * Bucket ktp-documents PRIVAT — hanya admin yang boleh membaca via action ini.
  */
+/**
+ * Saldo aktif per teknisi: balance + commission_rate + agregat transaksi
+ * (total setor, total komisi terpotong, penarikan disetujui/pending).
+ * Dipakai tab "Saldo Aktif" di panel admin.
+ */
+export async function getTechnicianBalancesAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const [techRes, txRes, wdRes] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("id, name, email, phone, balance, commission_rate, approval_status")
+      .eq("role", "technician")
+      .order("name", { ascending: true }),
+    supabase.from("balance_transactions").select("technician_id, type, amount, commission_amount"),
+    supabase.from("balance_withdrawals").select("technician_id, amount, status"),
+  ]);
+
+  if (techRes.error && /relation|does not exist|column/i.test(techRes.error.message || "")) {
+    return { error: "Kolom/tabel saldo belum ada — jalankan supabase/migrate-technician-balance.sql dulu." };
+  }
+
+  const techs = techRes.data || [];
+  const txs = txRes.error ? [] : txRes.data || [];
+  const wds = wdRes.error ? [] : wdRes.data || [];
+
+  const sum = (arr, f) => arr.reduce((s, x) => s + Number(f(x) || 0), 0);
+  const technicians = techs.map((t) => {
+    const myTx = txs.filter((x) => x.technician_id === t.id);
+    const myWd = wds.filter((x) => x.technician_id === t.id);
+    const topup = sum(myTx.filter((x) => x.type === "topup"), (x) => x.amount);
+    const commission = sum(myTx.filter((x) => x.type === "earning"), (x) => x.commission_amount);
+    const wdApproved = sum(myWd.filter((x) => x.status === "approved"), (x) => x.amount);
+    const wdPending = sum(myWd.filter((x) => x.status === "pending"), (x) => x.amount);
+    return {
+      ...t,
+      total_topup: topup,
+      total_commission: commission,
+      total_withdrawn: wdApproved,
+      pending_withdraw: wdPending,
+      available: Number(t.balance || 0) - wdPending,
+    };
+  });
+
+  return {
+    technicians,
+    summary: {
+      totalBalance: sum(technicians, (t) => t.balance),
+      totalAvailable: sum(technicians, (t) => t.available),
+      totalCommission: sum(technicians, (t) => t.total_commission),
+      totalTopup: sum(technicians, (t) => t.total_topup),
+      pendingHold: sum(technicians, (t) => t.pending_withdraw),
+      count: technicians.length,
+    },
+  };
+}
+
 export async function getKtpSignedUrlAdmin(path) {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
