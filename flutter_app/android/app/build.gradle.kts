@@ -7,7 +7,9 @@ plugins {
 
 android {
     namespace = "com.fixify.app"
-    compileSdk = flutter.compileSdkVersion
+    // Pin 35: plugin (share_plus dkk.) mensyaratkan compileSdk 35 lewat
+    // AAR metadata — flutter.compileSdkVersion bawaan ternyata lebih rendah.
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
