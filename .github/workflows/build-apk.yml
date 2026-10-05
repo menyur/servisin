@@ -19,6 +19,8 @@ on:
     paths:
       - "flutter_app/**"
       - ".github/workflows/build-apk.yml"
+      # Skrip/docs pendukung tidak perlu build APK ulang:
+      - "!flutter_app/android/backup-keystore.sh"
   workflow_dispatch:
 
 permissions:
