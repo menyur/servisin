@@ -9,9 +9,10 @@ export const metadata = {
 };
 
 // Tombol unduh mengarah ke /apk/fixify.apk.
-// Setelah package PWABuilder diunduh, salin app-release-signed.apk ke
-// public/apk/fixify.apk — tombol langsung berfungsi dan ikon Android
-// pada kartu berubah dari "segera" menjadi "unduh" (dicek lewat route
+// APK Flutter release dibuild otomatis oleh GitHub Actions
+// (.github/workflows/build-apk.yml) saat ada push yang mengubah flutter_app/**
+// dan di-commit bot ke public/apk/fixify.apk. Tombol langsung berfungsi dan
+// badge pada kartu berubah dari "segera" menjadi "unduh" (dicek lewat route
 // /api/apk-status tanpa rebuild halaman).
 export default function UnduhPage() {
   return (
