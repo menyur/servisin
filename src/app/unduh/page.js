@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Smartphone, Apple, Download, QrCode, Wrench, UserRound, ShieldCheck, Wifi } from "lucide-react";
-import { DownloadBadge } from "./DownloadBadge";
+import { DownloadVariants } from "./DownloadVariants";
 
 export const metadata = {
   title: "Unduh Aplikasi — Fixify",
@@ -8,12 +8,13 @@ export const metadata = {
     "Pasang aplikasi Fixify di Android dan iPhone: booking lebih cepat, notifikasi pesanan langsung, dan tampilan penuh layar seperti aplikasi native.",
 };
 
-// Tombol unduh mengarah ke /apk/fixify.apk.
-// APK Flutter release dibuild otomatis oleh GitHub Actions
-// (.github/workflows/build-apk.yml) saat ada push yang mengubah flutter_app/**
-// dan di-commit bot ke public/apk/fixify.apk. Tombol langsung berfungsi dan
-// badge pada kartu berubah dari "segera" menjadi "unduh" (dicek lewat route
-// /api/apk-status tanpa rebuild halaman).
+// APK Flutter release dipisah per ABI (57 MB fat → ±20 MB per varian):
+//   /apk/fixify-arm64.apk  → HP modern 64-bit
+//   /apk/fixify-armv7a.apk → HP lama 32-bit
+// Dibuild otomatis oleh GitHub Actions (.github/workflows/build-apk.yml)
+// saat ada push yang mengubah flutter_app/** dan di-commit bot ke public/apk/.
+// Tombol per varian + ukurannya dicek lewat route /api/apk-status tanpa
+// rebuild halaman.
 export default function UnduhPage() {
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
@@ -70,10 +71,10 @@ export default function UnduhPage() {
               Unduh aplikasi (APK) lalu pasang — atau pasang langsung dari Chrome tanpa file.
             </p>
 
-            <DownloadBadge />
+            <DownloadVariants />
 
             <ol className="text-sm text-ink-soft space-y-1.5 mt-4 list-decimal list-inside">
-              <li>Ketuk tombol <strong>Unduh aplikasi</strong> di atas</li>
+              <li>Ketuk tombol unduh di atas — <strong>64-bit</strong> untuk HP umum, <strong>32-bit</strong> untuk HP lama</li>
               <li>Saat muncul peringatan, pilih <strong>Tetap unduh</strong> / <strong>Install anyway</strong> (aman — file resmi dari situs ini)</li>
               <li>Buka file yang terunduh, izinkan <strong>Install dari sumber ini</strong></li>
               <li>Ikon <strong>Fixify</strong> muncul di home screen — selesai!</li>

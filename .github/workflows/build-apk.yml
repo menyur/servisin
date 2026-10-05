@@ -1,10 +1,12 @@
 # Build APK Android Fixify di runner GitHub.
 #
-# Latar: PC pengembang tidak punya Android SDK/JDK, dan APK lama di
-# public/apk/fixify.apk adalah paket PWABuilder (TWA) — bukan build Flutter.
-# Workflow ini membangun APK asli dari flutter_app lalu meng-commit hasilnya
-# ke public/apk/fixify.apk, sehingga tombol unduh di halaman /unduh otomatis
-# memakai APK terbaru (status dicek /api/apk-status tanpa rebuild halaman).
+# Latar: PC pengembang tidak punya Android SDK/JDK. Workflow ini membangun
+# APK release dari flutter_app dengan --split-per-abi (fat APK 57 MB →
+# ±20 MB per varian) lalu meng-commit hasilnya ke public/apk/:
+#   - fixify-arm64.apk  → HP Android modern (64-bit, mayoritas)
+#   - fixify-armv7a.apk → HP Android lama (32-bit)
+# sehingga tombol unduh di halaman /unduh otomatis memakai APK terbaru
+# (ukuran & ketersediaan dicek /api/apk-status tanpa rebuild halaman).
 #
 # Pemicu: push yang mengubah flutter_app/** atau workflow ini sendiri
 # (commit APK menyentuh public/apk saja → tidak memicu loop).
@@ -59,11 +61,11 @@ jobs:
         working-directory: flutter_app
         run: flutter pub get
 
-      - name: Build APK release
+      - name: Build APK release (split per ABI)
         working-directory: flutter_app
         run: |
           set -o pipefail
-          flutter build apk --release 2>&1 | tee build.log
+          flutter build apk --release --split-per-abi 2>&1 | tee build.log
 
       # Diagnostik: bila build gagal, keluarkan ekor log build sebagai
       # annotations error — terbaca lewat API publik tanpa akses admin.
@@ -78,17 +80,20 @@ jobs:
           fi
           tail -4 build.log | while IFS= read -r l; do echo "::error::TAIL|${l:0:170}"; done
 
-      - name: Salin APK ke public/apk/fixify.apk
+      - name: Salin APK per-ABI ke public/apk
         run: |
           mkdir -p public/apk
-          cp flutter_app/build/app/outputs/flutter-apk/app-release.apk public/apk/fixify.apk
+          # Hapus APK fat lama — digantikan varian per-ABI yang lebih kecil.
+          rm -f public/apk/fixify.apk
+          cp flutter_app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk public/apk/fixify-arm64.apk
+          cp flutter_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk public/apk/fixify-armv7a.apk
           ls -la public/apk
 
       - name: Commit & push APK baru (bila berubah)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/apk/fixify.apk
+          git add -A public/apk
           if git diff --cached --quiet; then
             echo "APK identik dengan sebelumnya — tidak ada commit."
           else
