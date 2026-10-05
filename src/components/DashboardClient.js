@@ -110,6 +110,9 @@ export default function DashboardClient({ initialBookings, customerName, custome
                     {Number(b.discount_amount) > 0 && (
                       <span className="text-mint font-medium">Diskon voucher: - {formatRupiah(b.discount_amount)}</span>
                     )}
+                    {Number(b.app_fee) > 0 && (
+                      <span>Biaya aplikasi: {formatRupiah(b.app_fee)}</span>
+                    )}
                     <span>Total: {formatRupiah(b.total_price)}</span>
                     <span>Alamat: {b.address}</span>
                     <span>
