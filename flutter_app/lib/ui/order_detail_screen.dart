@@ -185,6 +185,13 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       showSnack(context, 'Teknisi belum ditugaskan untuk pesanan ini.', error: true);
       return;
     }
+    // Pengaman lapis kedua: teknisi yang ditugaskan tak boleh menilai
+    // dirinya sendiri walau tombolnya sudah disembunyikan di UI.
+    final myId = Api.session?.user.id;
+    if (myId != null && _b.technicianId == myId) {
+      showSnack(context, 'Teknisi tidak bisa menilai pekerjaannya sendiri.', error: true);
+      return;
+    }
     int rating = 5;
     final commentCtrl = TextEditingController();
     final ok = await showModalBottomSheet<bool>(
@@ -454,7 +461,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 label: const Text('Kirim bukti pembayaran'),
               ),
             ),
-          if (b.status == BookingStatus.completed && b.technicianId != null && !b.hasReview)
+          // penilaian hanya untuk PELANGGAN — teknisi yang ditugaskan tidak
+          // boleh menilai dirinya sendiri (guard peran, bukan hanya status).
+          if (b.status == BookingStatus.completed &&
+              b.technicianId != null &&
+              !b.hasReview &&
+              !isAssignedTech)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: OutlinedButton.icon(
@@ -463,7 +475,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                 label: const Text('Beri penilaian teknisi'),
               ),
             ),
-          if (b.hasReview)
+          if (b.hasReview && !isAssignedTech)
             const Padding(
               padding: EdgeInsets.only(top: 10),
               child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [

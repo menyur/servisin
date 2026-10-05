@@ -36,6 +36,48 @@ class Api {
     );
   }
 
+  /// Daftar sebagai PENGRUSUS TEKNISI — paritas dengan /gabung di web:
+  /// metadata auth membawa role=technician + data kurasi (skill, address,
+  /// ktp_url). Trigger handle_new_user menyimpan semuanya ke profiles dengan
+  /// approval_status 'pending' (migrate-approval-status.sql) sampai admin
+  /// menyetujui lewat tab "Pendaftar Teknisi".
+  /// [ktpPath] = path file di bucket PRIVAT ktp-documents (folder pendaftaran/),
+  /// WAJIB diisi — pendaftar tanpa KTP ditolak di sisi UI & web.
+  static Future<AuthResponse> signUpTechnician({
+    required String email,
+    required String password,
+    required String name,
+    required String phone,
+    required String address,
+    required String skill,
+    required String ktpPath,
+  }) {
+    return db.auth.signUp(
+      email: email,
+      password: password,
+      data: {
+        'name': name,
+        'phone': phone,
+        'role': 'technician',
+        'skill': skill,
+        'address': address,
+        'ktp_url': ktpPath,
+      },
+    );
+  }
+
+  /// Upload foto KTP pendaftar ke bucket PRIVAT `ktp-documents`, folder
+  /// `pendaftaran/`. DIPANGGIL SEBELUM akun dibuat (user masih anon), jadi
+  /// JANGAN pakai uploadToBucket — itu menyisipkan uid ke path & menuntut
+  /// sesi. Policy insert anon khusus folder pendaftaran/ sudah ada di
+  /// migrate-technician-ktp.sql (sama seperti alur web).
+  static Future<String> uploadKtpPendaftaran(Uint8List bytes) async {
+    final path = 'pendaftaran/ktp-${DateTime.now().millisecondsSinceEpoch}.jpg';
+    await db.storage.from('ktp-documents').uploadBinary(path, bytes,
+        fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false));
+    return path;
+  }
+
   static Future<void> sendPasswordReset(String email) => db.auth.resetPasswordForEmail(email);
 
   static Future<void> signOut() => db.auth.signOut();

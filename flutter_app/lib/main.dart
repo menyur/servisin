@@ -10,6 +10,7 @@ import 'theme.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
 import 'ui/register_screen.dart';
+import 'ui/technician_register_screen.dart';
 import 'ui/reset_password_screen.dart';
 import 'ui/booking_wizard.dart';
 import 'ui/order_detail_screen.dart';
@@ -86,6 +87,9 @@ class FixifyApp extends StatelessWidget {
         '/onboarding': (_) => const OnboardingScreen(),
         '/login': (_) => const LoginScreen(),
         '/register': (_) => const RegisterScreen(),
+        // Pendaftaran teknisi (paritas /gabung web): route sendiri agar
+        // tautan dari login/daftar mudah dibagikan & di-deep-link.
+        '/register-technician': (_) => const TechnicianRegisterScreen(),
         '/reset-password': (_) => const ResetPasswordScreen(),
       },
       onGenerateRoute: (settings) {

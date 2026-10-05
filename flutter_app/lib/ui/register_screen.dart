@@ -201,6 +201,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                       textAlign: TextAlign.center,
                     ),
+                    const SizedBox(height: 8),
+                    // Pintasan pendaftaran teknisi (paritas /gabung di web).
+                    TextButton.icon(
+                      onPressed: () =>
+                          Navigator.pushNamed(context, '/register-technician'),
+                      style: TextButton.styleFrom(
+                          minimumSize: const Size.fromHeight(44)),
+                      icon: const Icon(Icons.handyman_rounded,
+                          size: 18, color: AppColors.brand),
+                      label: const Text('Ingin jadi teknisi? Daftar di sini',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
                   ]),
             ),
           ),

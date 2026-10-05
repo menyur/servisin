@@ -86,7 +86,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 ScreenHeader(
                   title: 'Halo, $firstName 👋',
                   subtitle: 'Teknisi terpercaya datang ke lokasimu',
-                  actions: [_AvatarButton(onTap: () => mainTabIndex.value = 4)],
+                  actions: [
+                    _AvatarButton(onTap: () => mainTabIndex.value = 4, url: _profile?.avatarUrl)
+                  ],
                 ),
                 Expanded(
                   child: ScreenStateView(loading: false, error: _error, onRetry: _load),
@@ -102,7 +104,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ScreenHeader(
                     title: 'Halo, $firstName 👋',
                     subtitle: 'Butuh bantuan apa hari ini?',
-                    actions: [_AvatarButton(onTap: () => mainTabIndex.value = 4)],
+                    actions: [
+                      _AvatarButton(onTap: () => mainTabIndex.value = 4, url: _profile?.avatarUrl)
+                    ],
                     bottom: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                       child: TextField(
@@ -216,27 +220,42 @@ class _HomeScreenState extends State<HomeScreen> {
 
 // ====== Komponen kecil beranda ======
 
+/// Avatar beranda (header gradien). Menampilkan foto profil bila sudah
+/// diunggah, selain itu fallback ke ikon orang — foto gagal dimuat pun
+/// kembali ke ikon agar header tidak kosong.
 class _AvatarButton extends StatelessWidget {
   final VoidCallback onTap;
-  const _AvatarButton({required this.onTap});
+  final String? url;
+  const _AvatarButton({required this.onTap, this.url});
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(right: 12),
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.22),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.5),
-            ),
-            child: const Icon(Icons.person_rounded, color: Colors.white, size: 22),
+  Widget build(BuildContext context) {
+    final hasPhoto = url != null && url!.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(right: 12),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 40,
+          height: 40,
+          clipBehavior: Clip.antiAlias, // foto dipotong bulat sebatas lingkaran
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.22),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.5),
           ),
+          child: hasPhoto
+              ? Image.network(
+                  url!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) =>
+                      const Icon(Icons.person_rounded, color: Colors.white, size: 22),
+                )
+              : const Icon(Icons.person_rounded, color: Colors.white, size: 22),
         ),
-      );
+      ),
+    );
+  }
 }
 
 /// Slide statis bawaan — dipakai saat admin belum mengunggah banner apa pun.
