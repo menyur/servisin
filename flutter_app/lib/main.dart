@@ -17,10 +17,8 @@ import 'ui/onboarding_screen.dart';
 import 'ui/splash_screen.dart';
 import 'ui/common.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// SEMENTARA (uji wizard): salurkan detail error ke localStorage agar bisa
-// dibaca dari luar. Hapus setelah uji selesai.
-// ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
-import 'dart:html' as html;
+
+import 'web_error_probe.dart';
 
 int _errCount = 0;
 void reportError(String label, Object error, StackTrace? st) {
@@ -33,9 +31,9 @@ void reportError(String label, Object error, StackTrace? st) {
   final msg = '$label#$_errCount: $dump';
   // ignore: avoid_print
   print(msg.length > 1500 ? msg.substring(0, 1500) : msg);
-  html.document.title = (label.contains('FE') ? 'ERR-CAPTURED' : 'X');
-  html.window.localStorage['fbuild'] = 'fix2-minsize';
-  html.window.localStorage['ferr$_errCount'] = msg.length > 4000 ? msg.substring(0, 4000) : msg;
+  // SEMENTARA (uji wizard): di web, salurkan detail ke localStorage agar
+  // bisa dibaca dari luar. Mobile: no-op (dart:html tidak tersedia).
+  reportWebError(_errCount, label, msg);
 }
 
 Future<void> main() async {
