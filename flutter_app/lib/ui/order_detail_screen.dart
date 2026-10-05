@@ -67,8 +67,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       final r = await Api.setJobStatus(_b.id, status);
       if (!mounted) return;
       if (r.ok) {
-        showSnack(context,
-            status == 'completed' ? 'Pekerjaan selesai. Terima kasih!' : 'Pekerjaan dimulai — semangat!');
+        if (status == 'completed' && r.commission != null) {
+          _showCommissionDialog(r.commission!, r.balance);
+        } else {
+          showSnack(context,
+              status == 'completed' ? 'Pekerjaan selesai. Terima kasih!' : 'Pekerjaan dimulai — semangat!');
+        }
         await _reload();
       } else {
         showSnack(context, r.error ?? 'Gagal mengubah status.', error: true);
@@ -76,6 +80,47 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     } catch (e) {
       if (mounted) showSnack(context, 'Gagal mengubah status: $e', error: true);
     }
+  }
+
+  /// Ringkasan setelah pesanan selesai: komisi yang dipotong dari saldo
+  /// dan sisa saldo terbaru (hasil RPC set_job_status).
+  void _showCommissionDialog(num commission, num? balance) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.check_circle, color: Color(0xFF2C8F63), size: 40),
+        title: const Text('Pekerjaan selesai!'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Komisi platform terpotong:', style: TextStyle(fontSize: 13, color: AppColors.inkSoft)),
+            const SizedBox(height: 4),
+            Text(
+              '- ${formatRupiah(commission)}',
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: Color(0xFFC0392B), // coral
+              ),
+            ),
+            if (balance != null) ...[
+              const SizedBox(height: 10),
+              Text('Saldo Anda sekarang: ${formatRupiah(balance)}',
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            ],
+            const SizedBox(height: 10),
+            const Text(
+              'Setor saldo untuk menutup komisi di menu Saldo.',
+              style: TextStyle(fontSize: 12, color: AppColors.inkSoft),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup')),
+        ],
+      ),
+    );
   }
 
   Future<void> _uploadProof() async {

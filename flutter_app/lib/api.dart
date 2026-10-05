@@ -171,10 +171,19 @@ class Api {
 
   /// Ubah status pekerjaan oleh teknisi: 'in_progress' atau 'completed'.
   /// Completed otomatis memotong komisi dari saldo (idempoten di server).
-  static Future<({bool ok, String? error})> setJobStatus(String bookingId, String status) async {
+  /// Bila completed: [commission] = komisi terpotong & [balance] = saldo
+  /// terbaru (null bila migrasi `migrate-set-job-status-return.sql` belum
+  /// dijalankan / sudah pernah dipotong sebelumnya).
+  static Future<({bool ok, String? error, num? commission, num? balance})> setJobStatus(
+      String bookingId, String status) async {
     final res = await db.rpc('set_job_status', params: {'p_booking': bookingId, 'p_status': status});
     final m = (res as Map).cast<String, dynamic>();
-    return (ok: m['ok'] == true, error: m['error'] as String?);
+    return (
+      ok: m['ok'] == true,
+      error: m['error'] as String?,
+      commission: m['commission'] as num?,
+      balance: m['balance'] as num?,
+    );
   }
 
   /// Lepas tugas dengan alasan → pesanan kembali ke daftar Tersedia
