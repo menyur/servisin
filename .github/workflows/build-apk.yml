@@ -1,0 +1,82 @@
+# Build APK Android Fixify di runner GitHub.
+#
+# Latar: PC pengembang tidak punya Android SDK/JDK, dan APK lama di
+# public/apk/fixify.apk adalah paket PWABuilder (TWA) — bukan build Flutter.
+# Workflow ini membangun APK asli dari flutter_app lalu meng-commit hasilnya
+# ke public/apk/fixify.apk, sehingga tombol unduh di halaman /unduh otomatis
+# memakai APK terbaru (status dicek /api/apk-status tanpa rebuild halaman).
+#
+# Pemicu: push yang mengubah flutter_app/** atau workflow ini sendiri
+# (commit APK menyentuh public/apk saja → tidak memicu loop).
+
+name: Build APK Android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flutter_app/**"
+      - ".github/workflows/build-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+
+      # lib/env_override.dart di-gitignore (digenerate lokal dari .env.local),
+      # jadi runner tidak punya file itu — buat sebelum build.
+      # Isinya kredensial PUBLIK client Supabase (publishable key): aman
+      # dibundel di APK, keamanan dijaga RLS di database.
+      - name: Buat lib/env_override.dart
+        working-directory: flutter_app
+        run: |
+          cat > lib/env_override.dart <<'EOT'
+          // Dihasilkan oleh CI (.github/workflows/build-apk.yml).
+          // Kredensial publik client Supabase — aman dibundel di aplikasi.
+          class EnvOverride {
+            static const String? supabaseUrl = "https://sgxlnhzezknmdhefsvvu.supabase.co";
+            static const String? supabaseAnonKey = "sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef";
+          }
+          EOT
+
+      - name: Flutter pub get
+        working-directory: flutter_app
+        run: flutter pub get
+
+      - name: Build APK release
+        working-directory: flutter_app
+        run: flutter build apk --release
+
+      - name: Salin APK ke public/apk/fixify.apk
+        run: |
+          mkdir -p public/apk
+          cp flutter_app/build/app/outputs/flutter-apk/app-release.apk public/apk/fixify.apk
+          ls -la public/apk
+
+      - name: Commit & push APK baru (bila berubah)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/apk/fixify.apk
+          if git diff --cached --quiet; then
+            echo "APK identik dengan sebelumnya — tidak ada commit."
+          else
+            git commit -m "APK Android Fixify — build CI otomatis"
+            git push
+          fi
