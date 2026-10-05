@@ -141,7 +141,19 @@ jobs:
           git add -A public/apk
           if git diff --cached --quiet; then
             echo "APK identik dengan sebelumnya — tidak ada commit."
-          else
-            git commit -m "APK Android Fixify — build CI otomatis"
-            git push
+            exit 0
           fi
+          git commit -m "APK Android Fixify — build CI otomatis"
+          # Commit lain bisa masuk selama build berjalan (race push) —
+          # rebase bot commit di atas main terbaru, coba sampai 3x.
+          for i in 1 2 3; do
+            git fetch origin main
+            if git rebase origin/main && git push; then
+              echo "APK ter-commit & ter-push (percobaan $i)."
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            sleep 15
+          done
+          echo "::error::Gagal push APK setelah 3 percobaan — main berubah terus (race)."
+          exit 1
