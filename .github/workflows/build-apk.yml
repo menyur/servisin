@@ -71,11 +71,12 @@ jobs:
         if: failure()
         working-directory: flutter_app
         run: |
+          grep -nE "Error: |error:|kernel_snapshot|Target .* failed|Exception:|Unable to" build.log | tail -22 | while IFS= read -r l; do echo "::error::KEY|${l:0:170}"; done
           if grep -n "What went wrong" build.log > /tmp/w.txt 2>/dev/null; then
             start=$(cut -d: -f1 /tmp/w.txt | head -1)
-            sed -n "${start},$((start+12))p" build.log | head -12 | while IFS= read -r l; do echo "::error::WENT|${l:0:170}"; done
+            sed -n "${start},$((start+6))p" build.log | head -6 | while IFS= read -r l; do echo "::error::WENT|${l:0:170}"; done
           fi
-          tail -12 build.log | while IFS= read -r l; do echo "::error::TAIL|${l:0:170}"; done
+          tail -4 build.log | while IFS= read -r l; do echo "::error::TAIL|${l:0:170}"; done
 
       - name: Salin APK ke public/apk/fixify.apk
         run: |
