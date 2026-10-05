@@ -6,7 +6,7 @@ import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmai
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
 import { computeSplit } from "@/lib/pricing";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
-import { sendPushToUser } from "@/lib/push";
+import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/push";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
 
@@ -29,7 +29,7 @@ export async function confirmBookingPaymentAdmin(bookingId) {
 
   const { data: b } = await supabase
     .from("bookings")
-    .select("code, status, payment_method, user_id")
+    .select("code, status, payment_method, user_id, address, services(name)")
     .eq("id", bookingId)
     .single();
 
@@ -66,6 +66,11 @@ export async function confirmBookingPaymentAdmin(bookingId) {
     body: `Pesanan ${b.code} sudah dikonfirmasi. Menunggu teknisi ditugaskan.`,
     url: "/dashboard",
     tag: `booking-${bookingId}`,
+  });
+
+  // broadcast ke teknisi terverifikasi sesuai area: pekerjaan baru tersedia
+  await sendNewJobPushToTechnicians({ id: bookingId, code: b.code, address: b.address }, {
+    serviceName: b.services?.name,
   });
 
   return { ok: true, code: b.code };
@@ -181,7 +186,7 @@ export async function updateBookingStatusAdmin(bookingId, status) {
   // data minimal untuk push (user_id selalu ada; teknisi opsional)
   const { data: cur } = await supabase
     .from("bookings")
-    .select("code, user_id, technician_id, services(name)")
+    .select("code, user_id, technician_id, address, services(name)")
     .eq("id", bookingId)
     .single();
 
@@ -194,7 +199,13 @@ export async function updateBookingStatusAdmin(bookingId, status) {
 
   // push ke pelanggan sesuai status baru (fire-and-forget)
   if (cur) {
-    if (status === "in_progress") {
+    if (status === "paid") {
+      // pekerjaan kembali tersedia (mis. dibatalkan teknisi/admin)
+      await sendNewJobPushToTechnicians(
+        { id: bookingId, code: cur.code, address: cur.address },
+        { serviceName: cur.services?.name }
+      );
+    } else if (status === "in_progress") {
       const techName = cur.technician_id
         ? (await supabase.from("profiles").select("name").eq("id", cur.technician_id).single()).data?.name
         : null;
@@ -1371,4 +1382,140 @@ export async function getKtpSignedUrlAdmin(path) {
     return { error: error.message };
   }
   return { url: data.signedUrl };
+}
+
+/* ========================= BANNER PROMOSI ========================= */
+
+/**
+ * Tambah banner promosi baru (tab Banner panel admin).
+ * imagePath = path di bucket publik `banners` (hasil BannerImageUpload).
+ * targetTab: tab app yang dibuka saat banner ditap (0/1/2/3, null = tanpa aksi).
+ */
+export async function createBannerAdmin(input) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const title = (input.title || "").trim();
+  const imagePath = (input.imagePath || "").trim();
+  if (!title) return { error: "Judul banner wajib diisi." };
+  if (!imagePath) return { error: "Gambar banner wajib diunggah." };
+
+  const targetTab = input.targetTab === null || input.targetTab === "" ? null : Number(input.targetTab);
+  if (targetTab !== null && (!Number.isInteger(targetTab) || targetTab < 0 || targetTab > 4)) {
+    return { error: "Tab tujuan tidak valid." };
+  }
+
+  const { data: last } = await supabase.from("banners").select("sort_order").order("sort_order", { ascending: false }).limit(1);
+  const sortOrder = (last?.[0]?.sort_order ?? 0) + 1;
+
+  const { data, error } = await supabase
+    .from("banners")
+    .insert({
+      title,
+      description: (input.description || "").trim() || null,
+      image_path: imagePath,
+      target_tab: targetTab,
+      is_active: input.isActive !== false,
+      sort_order: sortOrder,
+    })
+    .select()
+    .single();
+  if (error) {
+    if (/row-level security/i.test(error.message || "")) {
+      return { error: "Database menolak (RLS) — jalankan supabase/migrate-banners.sql dulu." };
+    }
+    if (/does not exist|schema/i.test(error.message || "")) {
+      return { error: "Tabel banners belum ada — jalankan supabase/migrate-banners.sql di SQL Editor." };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  return { banner: data };
+}
+
+/** Toggle aktif/nonaktif banner. */
+export async function toggleBannerAdmin(bannerId, isActive) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { error } = await supabase.from("banners").update({ is_active: !!isActive }).eq("id", bannerId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+/** Hapus banner (row + file gambarnya di storage; file gagal hapus tidak fatal). */
+export async function deleteBannerAdmin(bannerId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: banner } = await supabase.from("banners").select("image_path").eq("id", bannerId).single();
+
+  const { error } = await supabase.from("banners").delete().eq("id", bannerId);
+  if (error) return { error: error.message };
+
+  if (banner?.image_path && !/^https?:\/\//.test(banner.image_path)) {
+    const { error: rmErr } = await supabase.storage.from("banners").remove([banner.image_path]);
+    if (rmErr) console.error("Gagal hapus file banner:", rmErr.message);
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+/** Daftar semua banner (termasuk nonaktif) untuk tab Banner panel admin. */
+export async function getAllBannersAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("banners")
+    .select("*")
+    .order("sort_order", { ascending: true })
+    .order("created_at", { ascending: false });
+  if (error) {
+    if (/does not exist/i.test(error.message || "")) return { banners: [] }; // migrasi belum jalan
+    return { error: error.message };
+  }
+  return { banners: data || [] };
+}
+
+/* ========================= PELEPASAN TUGAS (JOB RELEASES) ========================= */
+
+/**
+ * Daftar pelepasan tugas oleh teknisi beserta alasannya (tabel audit
+ * job_releases, dibuat oleh supabase/migrate-job-release.sql).
+ * Dibaca lewat sesi admin — policy RLS "admin can read job releases"
+ * yang mengizinkan, tidak butuh service-role key.
+ */
+export async function getJobReleasesAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("job_releases")
+    .select(
+      "*, booking:bookings(code, status, address, booking_date, booking_time, services(name)), " +
+        "technician:profiles!job_releases_technician_id_fkey(id, name, email, avatar_url)"
+    )
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (error) {
+    if (/relation|does not exist/i.test(error.message || "")) {
+      return { error: "Tabel job_releases belum ada — jalankan supabase/migrate-job-release.sql dulu." };
+    }
+    return { error: error.message };
+  }
+  return { releases: data || [] };
 }

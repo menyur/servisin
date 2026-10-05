@@ -4,7 +4,6 @@ import { use, useActionState } from "react";
 import Link from "next/link";
 import { signUp } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
-import { AuthIllustration } from "@/components/Illustrations";
 
 export default function RegisterPage({ searchParams }) {
   const [state, formAction] = useActionState(signUp, null);
@@ -18,7 +17,14 @@ export default function RegisterPage({ searchParams }) {
     <div className="max-w-md mx-auto px-5 py-16">
       <div className="card relative overflow-hidden">
         <div className="absolute inset-x-0 top-0 h-28 bg-brand-tint/60 -z-10 pointer-events-none" />
-        <div className="w-40 mx-auto -mt-2 mb-3"><AuthIllustration /></div>
+        {/* Logo Fixify — konsisten dengan header auth aplikasi mobile */}
+        <img
+          src="/logo.png"
+          alt="Logo Fixify"
+          width={80}
+          height={80}
+          className="w-20 h-20 mx-auto -mt-2 mb-3 rounded-2xl bg-white border border-line shadow-sm object-contain p-1.5"
+        />
         <h1 className="font-display text-2xl text-navy mb-1.5 text-center">Buat akun Fixify</h1>
         <p className="text-sm text-ink-soft mb-6 text-center">Sudah punya akun? <Link href="/login" className="text-brand font-semibold">Masuk di sini</Link></p>
 

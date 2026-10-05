@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Wrench, ClipboardList, LogOut, ShieldCheck, HardHat, UserRound } from "lucide-react";
+import { ClipboardList, LogOut, ShieldCheck, HardHat, UserRound } from "lucide-react";
 import { signOut } from "@/app/actions/auth";
 import MobileNav from "./MobileNav";
 import HideIfStandalone from "./HideIfStandalone";
@@ -9,9 +9,13 @@ export default function Navbar({ user, profile, pendingTechnicians = 0, pendingB
     <header className="sticky top-0 z-40 bg-paper/95 backdrop-blur border-b border-line">
       <div className="max-w-6xl mx-auto px-5 py-3.5 flex items-center justify-between gap-4">
         <Link href="/" className="flex items-center gap-2">
-          <span className="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center">
-            <Wrench size={16} />
-          </span>
+          <img
+            src="/logo.png"
+            alt="Logo Fixify"
+            width={32}
+            height={32}
+            className="w-8 h-8 rounded-lg object-cover shrink-0"
+          />
           <span className="font-display font-bold text-lg text-navy">Fixify</span>
         </Link>
 

@@ -319,3 +319,35 @@ export async function sendAdminNewApplicantEmail(adminEmails, a) {
 
   return sendMail({ to: adminEmails, subject: `Pendaftar teknisi baru: ${a.name} — Fixify`, html });
 }
+
+/** Escape HTML untuk konten dari input user (mis. alasan pelepasan tugas). */
+function escHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Ke semua admin: teknisi melepas tugas beserta alasannya (dari app teknisi). */
+export async function sendAdminJobReleaseEmail(adminEmails, release) {
+  const html = wrapper(
+    "Teknisi melepas tugas",
+    `
+      <p>Teknisi <strong>${escHtml(release.techName)}</strong> melepas tugas berikut beserta alasannya:</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Kode pesanan", `<strong>${escHtml(release.code)}</strong>`)}
+        ${detailRow("Layanan", escHtml(release.serviceName))}
+        ${detailRow("Jadwal", escHtml(release.schedule))}
+        ${detailRow("Alamat", escHtml(release.address || "-"))}
+      </table>
+      <p style="margin:16px 0;background:#FFF4EC;border-left:4px solid #FF7001;padding:10px 14px;border-radius:6px;">
+        <strong>Alasan teknisi:</strong><br/>${escHtml(release.reason).replace(/\n/g, "<br />")}
+      </p>
+      <p>Pesanan otomatis kembali ke daftar &quot;Tersedia&quot; dan bisa diambil teknisi lain.
+      Riwayat lengkap ada di panel Admin → tab &quot;Pelepasan Tugas&quot;.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Tugas ${release.code} dilepas teknisi — Fixify`, html });
+}

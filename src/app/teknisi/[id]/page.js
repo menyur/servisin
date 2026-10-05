@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { Star, BadgeCheck, ArrowLeft, MessageSquareQuote, ShieldCheck } from "lucide-react";
+import { Star, BadgeCheck, ArrowLeft, MessageSquareQuote, ShieldCheck, MapPin } from "lucide-react";
 import { getTechnicianProfile, getTechnicianMeta } from "@/lib/technicians";
 import { absoluteUrl } from "@/lib/site";
 
@@ -85,8 +85,37 @@ export default async function TechnicianProfilePage({ params }) {
 
       {/* KARTU IDENTITAS */}
       <div className="card flex flex-col sm:flex-row sm:items-center gap-5 mb-8">
-        <div className="w-16 h-16 rounded-2xl bg-brand-tint text-brand-deep font-display font-bold text-2xl flex items-center justify-center shrink-0">
-          {(tech.name || "?").trim().charAt(0).toUpperCase()}
+        <div className="relative shrink-0">
+          {tech.avatar_url ? (
+            <img
+              src={tech.avatar_url}
+              alt={`Foto profil ${tech.name}`}
+              className="w-16 h-16 rounded-2xl object-cover border-2 border-line shrink-0"
+            />
+          ) : (
+            <div className="w-16 h-16 rounded-2xl bg-brand-tint text-brand-deep font-display font-bold text-2xl flex items-center justify-center shrink-0">
+              {(tech.name || "?").trim().charAt(0).toUpperCase()}
+            </div>
+          )}
+          {/* Badge rating di pojok foto — konsisten dengan daftar /teknisi */}
+          {avg !== null ? (
+            <span
+              className="absolute -bottom-1.5 -right-1.5 bg-white border border-line shadow-sm rounded-full px-1.5 py-0.5 flex items-center gap-0.5"
+              aria-label={`Rating ${avg.toFixed(1)} dari 5`}
+            >
+              <Star size={10} className="text-amber fill-amber" />
+              <span className="text-[10px] font-bold text-navy leading-none">
+                {avg.toFixed(1)}
+              </span>
+            </span>
+          ) : (
+            <span
+              className="absolute -bottom-1.5 -right-1.5 bg-white border border-line shadow-sm rounded-full p-0.5"
+              aria-label="Terverifikasi, belum ada ulasan"
+            >
+              <BadgeCheck size={13} className="text-mint" />
+            </span>
+          )}
         </div>
         <div className="flex-1">
           <h1 className="font-display text-2xl text-navy flex items-center gap-2 flex-wrap">
@@ -105,6 +134,12 @@ export default async function TechnicianProfilePage({ params }) {
             <span className="pill bg-mint-tint text-mint-deep text-xs">
               {ratingLabel(avg || 0)}
             </span>
+            {/* Area layanan teknisi (mis. Bandung) */}
+            {tech.service_area && (
+              <span className="pill bg-brand-tint text-brand-deep text-xs flex items-center gap-1">
+                <MapPin size={11} /> Melayani {tech.service_area}
+              </span>
+            )}
           </div>
         </div>
         <Link href="/#kategori" className="btn-primary whitespace-nowrap">

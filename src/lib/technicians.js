@@ -15,7 +15,7 @@ const getTechnicianCardsCached = unstable_cache(
     const [techRes, revRes] = await Promise.all([
       supabase
         .from("profiles")
-        .select("id, name, approval_status, created_at")
+        .select("id, name, avatar_url, service_area, approval_status, created_at")
         .eq("role", "technician")
         .eq("approval_status", "approved")
         .order("name"),
@@ -23,7 +23,7 @@ const getTechnicianCardsCached = unstable_cache(
     ]);
     return { technicians: techRes.data || [], reviews: revRes.data || [] };
   },
-  ["technician-cards-v1"],
+  ["technician-cards-v3"],
   { tags: ["technicians", "reviews"], revalidate: 300 }
 );
 
@@ -64,7 +64,7 @@ const getTechnicianProfileCached = unstable_cache(
     const [techRes, revRes] = await Promise.all([
       supabase
         .from("profiles")
-        .select("id, name, role, approval_status")
+        .select("id, name, avatar_url, service_area, role, approval_status")
         .eq("id", id)
         .eq("role", "technician")
         .eq("approval_status", "approved")
@@ -73,7 +73,7 @@ const getTechnicianProfileCached = unstable_cache(
     ]);
     return { tech: techRes.data, reviews: revRes.data || [] };
   },
-  ["technician-profile-v1"],
+  ["technician-profile-v3"],
   { tags: ["technicians", "reviews"], revalidate: 300 }
 );
 

@@ -5,7 +5,16 @@ export default function Footer() {
   return (
     <footer className="border-t border-line bg-white py-8 px-5">
       <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
-        <span className="font-display font-bold text-navy">Fixify</span>
+        <span className="flex items-center gap-2">
+          <img
+            src="/logo.png"
+            alt="Logo Fixify"
+            width={22}
+            height={22}
+            className="w-[22px] h-[22px] rounded-md object-cover"
+          />
+          <span className="font-display font-bold text-navy">Fixify</span>
+        </span>
         <nav className="flex gap-5 text-sm text-ink-soft">
           <Link href="/tentang" className="hover:text-brand">Tentang Kami</Link>
           

@@ -45,7 +45,7 @@ export const metadata = {
 
 // Warna address bar browser mobile + theme PWA (viewport export, Next 14+)
 export const viewport = {
-  themeColor: "#1C86C7",
+  themeColor: "#0880F5",
 };
 
 export default async function RootLayout({ children }) {

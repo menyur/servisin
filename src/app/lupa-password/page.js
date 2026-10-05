@@ -5,7 +5,6 @@ import Link from "next/link";
 import { MailCheck, KeyRound } from "lucide-react";
 import { requestPasswordReset } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
-import { AuthIllustration } from "@/components/Illustrations";
 
 export default function LupaPasswordPage() {
   const [state, formAction] = useActionState(requestPasswordReset, null);
@@ -14,7 +13,14 @@ export default function LupaPasswordPage() {
     <div className="max-w-md mx-auto px-5 py-16">
       <div className="card relative overflow-hidden">
         <div className="absolute inset-x-0 top-0 h-28 bg-brand-tint/60 -z-10 pointer-events-none" />
-        <div className="w-40 mx-auto -mt-2 mb-3"><AuthIllustration /></div>
+        {/* Logo Fixify — konsisten dengan header auth aplikasi mobile */}
+        <img
+          src="/logo.png"
+          alt="Logo Fixify"
+          width={80}
+          height={80}
+          className="w-20 h-20 mx-auto -mt-2 mb-3 rounded-2xl bg-white border border-line shadow-sm object-contain p-1.5"
+        />
 
         {state?.success ? (
           <div className="text-center py-4">

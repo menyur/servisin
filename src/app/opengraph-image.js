@@ -1,10 +1,20 @@
 import { ImageResponse } from "next/og";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 // Kartu OG situs-wide (default untuk semua halaman tanpa kartu spesifik)
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-export default function OgImage() {
+// Logo master dibaca saat render lalu disisipkan sebagai data URL
+// (satori tidak memuat gambar remote secara andal).
+async function logoDataUrl() {
+  const buf = await readFile(path.join(process.cwd(), "public", "icons", "icon-512.png"));
+  return `data:image/png;base64,${buf.toString("base64")}`;
+}
+
+export default async function OgImage() {
+  const logo = await logoDataUrl();
   return new ImageResponse(
     (
       <div
@@ -19,22 +29,12 @@ export default function OgImage() {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
-          <div
-            style={{
-              width: 96,
-              height: 96,
-              borderRadius: 24,
-              background: "#1C86C7",
-              color: "white",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 56,
-              fontWeight: 700,
-            }}
-          >
-            S
-          </div>
+          <img
+            src={logo}
+            width={96}
+            height={96}
+            style={{ borderRadius: 24 }}
+          />
           <div style={{ fontSize: 64, fontWeight: 700, color: "#0B3556" }}>Fixify</div>
         </div>
         <div style={{ fontSize: 52, fontWeight: 700, color: "#0B3556", marginTop: 48, lineHeight: 1.2 }}>

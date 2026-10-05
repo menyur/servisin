@@ -23,11 +23,13 @@ import {
 } from "@/app/actions/admin";
 import { formatRupiah, computeSplit } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, Link2Off } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
+import BannerAdminTab from "@/components/BannerAdminTab";
+import JobReleasesAdminTab from "@/components/JobReleasesAdminTab";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
 
@@ -40,7 +42,7 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialReleases = [], releasesError = null }) {
   const [tab, setTab] = useState("bookings");
   const [bookings, setBookings] = useState(initialBookings);
   const [services, setServices] = useState(initialServices);
@@ -212,6 +214,8 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "applicants"} onClick={() => setTab("applicants")} icon={UserCheck} label={`Pendaftar Teknisi${pendingTechs.length ? ` (${pendingTechs.length})` : ""}`} />
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
+        <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
+        <TabButton active={tab === "releases"} onClick={() => setTab("releases")} icon={Link2Off} label={`Pelepasan Tugas${initialReleases.length ? ` (${initialReleases.length})` : ""}`} />
       </div>
 
       {tab === "bookings" && (
@@ -523,6 +527,10 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           )}
         </div>
       )}
+
+      {tab === "banners" && <BannerAdminTab banners={initialBanners} bannersError={bannersError} />}
+
+      {tab === "releases" && <JobReleasesAdminTab releases={initialReleases} releasesError={releasesError} />}
     </div>
   );
 }

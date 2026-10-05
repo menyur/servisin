@@ -38,6 +38,8 @@ export const PUSH_EVENTS = {
   technician_assigned: "Teknisi ditugaskan / tugas baru",
   work_started: "Pengerjaan dimulai",
   order_completed: "Pesanan selesai",
+  new_job_available: "Pekerjaan baru tersedia (teknisi)",
+  job_released: "Tugas dilepas teknisi (admin)",
 };
 
 /** Baca preferensi user dari profiles.notification_prefs (aman bila kolom belum ada). */
@@ -121,6 +123,59 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
 /** Public key untuk client (subscribe). Null bila env belum lengkap. */
 export function getVapidPublicKey() {
   return PUBLIC_KEY || null;
+}
+
+/**
+ * Broadcast "Pekerjaan baru tersedia" ke semua teknisi terverifikasi
+ * yang areanya cocok dengan alamat pesanan.
+ *
+ * Aturan area:
+ *  - profiles.service_area kosong/NULL → terima SEMUA pekerjaan.
+ *  - Terisi → kirim hanya bila teks area muncul di alamat pesanan
+ *    (pencocokan sederhana case-insensitive, mis. "Bandung").
+ *
+ * Preferensi notifikasi per teknisi tetap dihormati oleh
+ * sendPushToUser (event: new_job_available).
+ * Fire-and-forget: tak pernah melempar / menggagalkan aksi utama.
+ */
+export async function sendNewJobPushToTechnicians(booking, { serviceName = "" } = {}) {
+  const wp = pushClient();
+  if (!wp || !SERVICE_URL || !SERVICE_KEY) return;
+
+  try {
+    const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
+    const { data: techs, error } = await admin
+      .from("profiles")
+      .select("id, service_area")
+      .eq("role", "technician")
+      .eq("approval_status", "approved");
+    if (error || !techs?.length) return;
+
+    const address = (booking.address || "").toLowerCase();
+    const targets = techs.filter((t) => {
+      const area = (t.service_area || "").trim().toLowerCase();
+      if (!area) return true; // tanpa area = semua pekerjaan
+      return address.includes(area);
+    });
+
+    const label = serviceName || "Layanan";
+    const loc = (booking.address || "").trim();
+    const body = `${label} · #${booking.code || ""}${loc ? ` — ${loc}` : ""}`.slice(0, 180);
+
+    await Promise.allSettled(
+      targets.map((t) =>
+        sendPushToUser(t.id, {
+          title: "Pekerjaan baru tersedia 🔧",
+          event: "new_job_available",
+          body,
+          url: "/technician",
+          tag: `job-${booking.id}`,
+        })
+      )
+    );
+  } catch (err) {
+    console.warn("[push] broadcast pekerjaan baru gagal:", err.message);
+  }
 }
 
 /**
