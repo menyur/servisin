@@ -112,6 +112,28 @@ jobs:
           cp flutter_app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk public/apk/fixify-armv7a.apk
           ls -la public/apk
 
+      # Manifest untuk halaman /unduh: versi (pubspec.yaml), tanggal build,
+      # dan checksum SHA-256 tiap APK — pengguna bisa memverifikasi unduhan.
+      - name: Buat manifest unduhan (versi, tanggal, SHA-256)
+        run: |
+          V=$(grep -E '^version:' flutter_app/pubspec.yaml | sed 's/version: *//;s/\r//')
+          VER=$(echo "$V" | cut -d+ -f1)
+          BUILD=$(echo "$V" | sed -n 's/.*+//p')
+          C64=$(sha256sum public/apk/fixify-arm64.apk | cut -d' ' -f1)
+          C32=$(sha256sum public/apk/fixify-armv7a.apk | cut -d' ' -f1)
+          cat > public/apk/manifest.json <<EOF
+          {
+            "version": "$VER",
+            "build": "$BUILD",
+            "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "checksums": {
+              "fixify-arm64.apk": "$C64",
+              "fixify-armv7a.apk": "$C32"
+            }
+          }
+          EOF
+          cat public/apk/manifest.json
+
       - name: Commit & push APK baru (bila berubah)
         run: |
           git config user.name "github-actions[bot]"
