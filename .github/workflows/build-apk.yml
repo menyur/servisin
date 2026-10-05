@@ -57,6 +57,27 @@ jobs:
           }
           EOT
 
+      # Decode release keystore dari GitHub Secrets + tulis key.properties.
+      # Bila secret belum di-set, lanjut dengan debug signing (APK terbit,
+      # tapi TIDAK bisa install-over-install antar build).
+      - name: Siapkan release signing (dari GitHub Secrets)
+        working-directory: flutter_app/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::Secret ANDROID_KEYSTORE_BASE64 belum di-set — APK di-sign dengan debug key."
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > fixify-release.keystore
+          cat > key.properties <<EOF
+          storeFile=../fixify-release.keystore
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=fixify-release
+          keyPassword=$ANDROID_KEYSTORE_PASSWORD
+          EOF
+
       - name: Flutter pub get
         working-directory: flutter_app
         run: flutter pub get
