@@ -134,11 +134,20 @@ export function getVapidPublicKey() {
  *  - Terisi → kirim hanya bila teks area muncul di alamat pesanan
  *    (pencocokan sederhana case-insensitive, mis. "Bandung").
  *
+ * Aturan keahlian (profiles.skill = categories.id):
+ *  - skill kosong/NULL → terima semua kategori.
+ *  - Terisi → kirim hanya bila kategori layanan pesanan sama
+ *    (serviceId diberikan pemanggil; bila tidak diketahui,
+ *    filter dilewati supaya pekerjaan tetap terdistribusi).
+ *
  * Preferensi notifikasi per teknisi tetap dihormati oleh
  * sendPushToUser (event: new_job_available).
  * Fire-and-forget: tak pernah melempar / menggagalkan aksi utama.
  */
-export async function sendNewJobPushToTechnicians(booking, { serviceName = "" } = {}) {
+export async function sendNewJobPushToTechnicians(
+  booking,
+  { serviceName = "", serviceId = null } = {}
+) {
   const wp = pushClient();
   if (!wp || !SERVICE_URL || !SERVICE_KEY) return;
 
@@ -146,16 +155,38 @@ export async function sendNewJobPushToTechnicians(booking, { serviceName = "" } 
     const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
     const { data: techs, error } = await admin
       .from("profiles")
-      .select("id, service_area")
+      .select("id, service_area, skill")
       .eq("role", "technician")
       .eq("approval_status", "approved");
     if (error || !techs?.length) return;
 
+    // Kategori layanan pesanan untuk filter keahlian. Best-effort:
+    // bila serviceId/tabel tidak tersedia → filter keahlian dilewati
+    // (fail-open, jangan sampai pekerjaan tidak dikirim ke siapa pun).
+    let serviceCategory = null;
+    if (serviceId) {
+      try {
+        const { data: svc } = await admin
+          .from("services")
+          .select("category_id")
+          .eq("id", serviceId)
+          .maybeSingle();
+        serviceCategory = svc?.category_id || null;
+      } catch (_) {
+        serviceCategory = null;
+      }
+    }
+
     const address = (booking.address || "").toLowerCase();
     const targets = techs.filter((t) => {
+      // Aturan area: kosong = semua; terisi = cocok di alamat pesanan.
       const area = (t.service_area || "").trim().toLowerCase();
-      if (!area) return true; // tanpa area = semua pekerjaan
-      return address.includes(area);
+      if (area && !address.includes(area)) return false;
+      // Aturan keahlian: kosong = semua kategori; terisi = harus cocok
+      // dengan kategori layanan pesanan (id skill = categories.id).
+      const skill = (t.skill || "").trim();
+      if (skill && serviceCategory && skill !== serviceCategory) return false;
+      return true;
     });
 
     const label = serviceName || "Layanan";

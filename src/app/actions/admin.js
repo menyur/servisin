@@ -29,7 +29,7 @@ export async function confirmBookingPaymentAdmin(bookingId) {
 
   const { data: b } = await supabase
     .from("bookings")
-    .select("code, status, payment_method, user_id, address, services(name)")
+    .select("code, status, payment_method, user_id, address, service_id, services(name)")
     .eq("id", bookingId)
     .single();
 
@@ -68,9 +68,10 @@ export async function confirmBookingPaymentAdmin(bookingId) {
     tag: `booking-${bookingId}`,
   });
 
-  // broadcast ke teknisi terverifikasi sesuai area: pekerjaan baru tersedia
+  // broadcast ke teknisi terverifikasi sesuai area + keahlian: pekerjaan baru tersedia
   await sendNewJobPushToTechnicians({ id: bookingId, code: b.code, address: b.address }, {
     serviceName: b.services?.name,
+    serviceId: b.service_id,
   });
 
   return { ok: true, code: b.code };
