@@ -220,6 +220,16 @@ class Booking {
   final String? userId;
   final bool hasReview;
 
+  /// Stempel waktu untuk timeline status:
+  /// * createdAt — pesanan dibuat (kolom created_at, selalu ada);
+  /// * paymentConfirmedAt — admin mengonfirmasi pembayaran
+  ///   (payment_confirmed_at; null bila kolom belum ada di DB atau
+  ///   belum dikonfirmasi — pesanan COD tak lewat langkah ini);
+  /// * completedAt — pesanan selesai (completed_at).
+  final DateTime? createdAt;
+  final DateTime? paymentConfirmedAt;
+  final DateTime? completedAt;
+
   Booking({
     required this.id,
     required this.code,
@@ -243,6 +253,9 @@ class Booking {
     this.technicianAvatar,
     this.userId,
     this.hasReview = false,
+    this.createdAt,
+    this.paymentConfirmedAt,
+    this.completedAt,
   });
 
   factory Booking.fromMap(Map<String, dynamic> m, {bool hasReview = false}) {
@@ -273,6 +286,10 @@ class Booking {
       technicianName: tech?['name'] as String?,
       technicianAvatar: tech?['avatar_url'] as String?,
       hasReview: hasReview,
+      createdAt: m['created_at'] == null ? null : DateTime.parse(m['created_at'] as String),
+      paymentConfirmedAt:
+          m['payment_confirmed_at'] == null ? null : DateTime.parse(m['payment_confirmed_at'] as String),
+      completedAt: m['completed_at'] == null ? null : DateTime.parse(m['completed_at'] as String),
     );
   }
 }
@@ -323,6 +340,7 @@ class BalanceTransaction {
   final double? commissionAmount; // komisi terpotong (earning pesanan selesai)
   final String? note;
   final String? bookingCode; // join ke bookings(code) bila terpasang
+  final int? bookingTotalPrice; // join ke bookings(total_price) — dasar pendapatan kotor
   final DateTime createdAt;
 
   BalanceTransaction({
@@ -332,6 +350,7 @@ class BalanceTransaction {
     this.commissionAmount,
     this.note,
     this.bookingCode,
+    this.bookingTotalPrice,
     required this.createdAt,
   });
 
@@ -344,6 +363,7 @@ class BalanceTransaction {
       commissionAmount: (m['commission_amount'] as num?)?.toDouble(),
       note: m['note'] as String?,
       bookingCode: bk?['code'] as String?,
+      bookingTotalPrice: (bk?['total_price'] as num?)?.toInt(),
       createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ?? DateTime.now(),
     );
   }
@@ -366,21 +386,40 @@ class BalanceTransaction {
 class TechnicianBalanceSummary {
   final double balance;
 
-  /// Pendapatan kotor pesanan selesai (neto + komisi yang dipotong).
+  /// Pendapatan KOTOR pesanan selesai = total harga − biaya aplikasi
+  /// (diambil dari booking tiap transaksi earning — bukan 2× komisi).
   final int earnedTotal;
 
-  /// Komisi platform yang sudah dipotong dari saldo.
+  /// Komisi platform yang benar-benar dipotong dari saldo
+  /// (Σ −amount pada baris earning — efek riil ke saldo).
   final int commissionTotal;
 
   /// Total setor yang disetujui admin.
   final int topupTotal;
+
+  /// Total penarikan yang disetujui (dikurangi dari saldo).
+  final int withdrawalTotal;
+
+  /// Refund penarikan yang ditolak (kembali ke saldo).
+  final int refundTotal;
+
+  /// Saldo menurut ledger: setoran − komisi − penarikan + refund.
+  /// Selisih terhadap [balance] = perubahan saldo tanpa baris mutasi
+  /// (koreksi manual) atau bug data historis — ditampilkan sebagai catatan.
+  final int expectedBalance;
 
   const TechnicianBalanceSummary({
     required this.balance,
     this.earnedTotal = 0,
     this.commissionTotal = 0,
     this.topupTotal = 0,
+    this.withdrawalTotal = 0,
+    this.refundTotal = 0,
+    this.expectedBalance = 0,
   });
+
+  /// Selisih saldo aktual vs ledger (≠ 0 = ada anomali data).
+  int get mismatch => balance.round() - expectedBalance;
 }
 
 /// Satu lowongan pekerjaan untuk teknisi: pesanan sudah dibayar,
@@ -499,3 +538,22 @@ const paymentMethods = [
   ('e_wallet', 'E-Wallet', 'GoPay, ShopeePay, dan lainnya'),
   ('cod', 'Bayar di Tempat', 'Tunai saat teknisi datang'),
 ];
+
+/// Label ramah kode keahlian teknisi ('ac' → 'Service AC'; id sama dengan
+/// categories.id). Dipakai profil (read-only) & filter daftar Tersedia.
+/// Kode tak dikenal ditampilkan apa adanya; null → string kosong.
+String skillLabel(String? code) => switch (code) {
+      'ac' => 'Service AC',
+      'tukang' => 'Tukang rumah',
+      'kendaraan' => 'Service kendaraan',
+      'kebersihan' => 'Kebersihan & laundry',
+      _ => code ?? '',
+    };
+
+/// Label ramah kode metode bayar ('qris' → 'QRIS'); null bila tak dikenal.
+String? paymentMethodLabel(String code) {
+  for (final m in paymentMethods) {
+    if (m.$1 == code) return m.$2;
+  }
+  return null;
+}

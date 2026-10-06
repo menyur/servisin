@@ -276,7 +276,7 @@ class _JobsScreenState extends State<JobsScreen> {
             skillName: hasSkill
                 ? (filtered.isNotEmpty
                     ? filtered.first.serviceCategoryName
-                    : _skillLabel(skill))
+                    : skillLabel(skill))
                 : null,
             showAll: _showAllAreas,
             showAllSkills: _showAllSkills,
@@ -330,15 +330,6 @@ class _JobsScreenState extends State<JobsScreen> {
         claiming: _claimingId == job.id,
         onClaim: () => _claim(job),
       );
-
-  /// Label ramah kode skill — fallback bila kategori belum tahu.
-  String _skillLabel(String code) => switch (code) {
-        'ac' => 'Service AC',
-        'tukang' => 'Tukang rumah',
-        'kendaraan' => 'Service kendaraan',
-        'kebersihan' => 'Kebersihan & laundry',
-        _ => code,
-      };
 
   Widget _assignedList(List<Booking> bookings) {
     if (bookings.isEmpty) {

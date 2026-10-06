@@ -92,6 +92,8 @@ class _BalanceScreenState extends State<BalanceScreen> {
                             padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                             children: [
                               _SummaryCard(summary: _summary),
+                              const SizedBox(height: 14),
+                              const _MoneyFlowCard(),
                               const SizedBox(height: 20),
                               const Text('Riwayat Mutasi',
                                   style: TextStyle(
@@ -144,7 +146,6 @@ class _SummaryCard extends StatelessWidget {
     }
     final saldo = s.balance;
     final negative = saldo < 0;
-    final compensation = s.commissionTotal > 0;
 
     final stats = <(String, int, Color)>[
       ('Pendapatan', s.earnedTotal, AppColors.mint),
@@ -218,26 +219,99 @@ class _SummaryCard extends StatelessWidget {
               ),
             ),
         ]),
+        if (s.withdrawalTotal > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+                'Penarikan disetujui: ${formatRupiah(s.withdrawalTotal)} (sudah ditarik dari saldo)',
+                style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.85))),
+          ),
         const SizedBox(height: 12),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.14),
+            color: Colors.white.withValues(alpha: s.mismatch == 0 ? 0.14 : 0.22),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(children: [
-            const Icon(Icons.info_outline_rounded, size: 14, color: Colors.white),
+            Icon(
+                s.mismatch == 0
+                    ? Icons.info_outline_rounded
+                    : Icons.warning_amber_rounded,
+                size: 14,
+                color: Colors.white),
             const SizedBox(width: 7),
             Expanded(
-              child: compensation
-                  ? const Text('Komisi dipotong otomatis saat pesanan selesai.',
-                      style: TextStyle(fontSize: 11, color: Colors.white))
-                  : const Text(
-                      'Pendapatan dicatat saat pesananmu selesai — komisi dipotong dari saldo.',
-                      style: TextStyle(fontSize: 10.5, color: Colors.white)),
+              child: s.mismatch == 0
+                  ? const Text(
+                      'Saldo = Setoran − Komisi − Penarikan + Refund. Pendapatan = nilai pekerjaan selesai (belum otomatis masuk saldo).',
+                      style: TextStyle(fontSize: 10.5, color: Colors.white))
+                  : Text(
+                      'Ada selisih ${formatRupiah(s.mismatch.abs())} antara saldo dan riwayat mutasi — minta admin koreksi lewat penyesuaian saldo.',
+                      style: const TextStyle(fontSize: 10.5, color: Colors.white)),
             ),
           ]),
         ),
+      ]),
+    );
+  }
+}
+
+/// Kartu penjelasan singkat alur uang: dari mana angka saldo berasal —
+/// agar teknisi paham beda "Pendapatan" (kotor) vs "Saldo" (aktif).
+class _MoneyFlowCard extends StatelessWidget {
+  const _MoneyFlowCard();
+
+  @override
+  Widget build(BuildContext context) {
+    // Warna ikon mengikuti arah mutasi pada riwayat di bawah:
+    // brand = setor, mint = pendapatan, coral = potongan saldo.
+    final rows = <(IconData, Color, String)>[
+      (
+        Icons.savings_rounded,
+        AppColors.brand,
+        'Setor disetujui admin → saldo bertambah.',
+      ),
+      (
+        Icons.work_history_rounded,
+        AppColors.mint,
+        'Pesanan selesai → komisi platform dipotong dari saldo. Nilai pekerjaan tampil sebagai Pendapatan (kotor), tidak langsung masuk saldo.',
+      ),
+      (
+        Icons.south_west_rounded,
+        AppColors.coral,
+        'Penarikan disetujui → saldo berkurang. Ditolak? Dana kembali sebagai refund.',
+      ),
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.lightbulb_rounded, size: 16, color: AppColors.brand),
+          SizedBox(width: 7),
+          Text('Cara kerja saldo',
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.navy)),
+        ]),
+        const SizedBox(height: 9),
+        for (final r in rows) ...[
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Icon(r.$1, size: 14, color: r.$2),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(r.$3,
+                  style: const TextStyle(
+                      fontSize: 11.5, color: AppColors.inkSoft, height: 1.35)),
+            ),
+          ]),
+          const SizedBox(height: 7),
+        ],
       ]),
     );
   }

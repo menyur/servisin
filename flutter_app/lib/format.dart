@@ -44,6 +44,15 @@ String formatDateShort(String isoDate) {
 String _fallbackDate(DateTime d) =>
     '${d.day} ${_bulan[d.month - 1]} ${d.year}';
 
+/// Tanggal + jam (waktu lokal perangkat) untuk stempel timeline status:
+/// "6 Okt 2026 · 14:05". Tidak butuh data locale — aman dipanggil kapan pun.
+String formatDateTimeId(DateTime d) {
+  final local = d.toLocal();
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '${_fallbackDate(local)} · $hh:$mm';
+}
+
 const _bulan = [
   'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
   'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',

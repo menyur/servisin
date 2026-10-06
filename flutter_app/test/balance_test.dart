@@ -12,6 +12,16 @@ void main() {
       expect(p2.skill, isNull);
     });
 
+    test('skillLabel memetakan kode keahlian ke label ramah (profil read-only)', () {
+      expect(skillLabel('ac'), 'Service AC');
+      expect(skillLabel('tukang'), 'Tukang rumah');
+      expect(skillLabel('kendaraan'), 'Service kendaraan');
+      expect(skillLabel('kebersihan'), 'Kebersihan & laundry');
+      // Kode tak dikenal tampil apa adanya; null → kosong (baris tak dirender).
+      expect(skillLabel(' elektronik '), ' elektronik ');
+      expect(skillLabel(null), '');
+    });
+
     test('AvailableJob membawa kategori layanan (RPC skill-filter)', () {
       final j = AvailableJob.fromMap({
         'id': 'b1',
@@ -64,17 +74,60 @@ void main() {
   });
 
   group('Agregat summary from transactions (Api.summarizeBalance)', () {
-    test('earning amount negatif → pendapatan kotor & komisi benar', () {
+    test('earning amount negatif: pendapatan = total booking − appFee, komisi = debit', () {
       final tx = [
-        // pendapatan kotor 60rb (komisi 15rb + neto 45rb yang masuk saldo)
-        _tx(type: 'earning', amount: -45000, commission: 15000),
+        // booking total 125.000 → base = 125.000 − 5.000 = 120.000;
+        // komisi 10% = 12.000 → amount = −12.000 (debit saldo, bentuk riil)
+        _tx(type: 'earning', amount: -12000, commission: 12000, bookingTotal: 125000),
         _tx(type: 'topup', amount: 200000),
       ];
       final s = Api.summarizeBalance(null, tx);
-      expect(s.earnedTotal, 60000);
-      expect(s.commissionTotal, 15000);
+      expect(s.earnedTotal, 120000); // bukan 2× komisi (bug lama)
+      expect(s.commissionTotal, 12000);
       expect(s.topupTotal, 200000);
-      expect(s.balance, 0);
+      // expected = 200.000 − 12.000 = 188.000
+      expect(s.expectedBalance, 188000);
+    });
+
+    test('earning backfill ber-amount POSITIF tidak dihitung komisi (anomali → selisih)', () {
+      final tx = [
+        _tx(type: 'topup', amount: 50000),
+        // backfill salah tanda: amount +6.250, komisi 6.250
+        _tx(type: 'earning', amount: 6250, commission: 6250, bookingTotal: 67500),
+      ];
+      final s = Api.summarizeBalance(null, tx);
+      expect(s.commissionTotal, 0); // tidak pernah benar-benar dipotong
+      expect(s.earnedTotal, 62500); // base dari booking tetap dihitung
+      expect(s.topupTotal, 50000);
+      // ledger: 50.000 + 6.250 = 56.250, tapi expected 50.000 → selisih 6.250
+      expect(s.expectedBalance, 50000);
+    });
+
+    test('penarikan & refund ikut dalam expectedBalance', () {
+      final tx = [
+        _tx(type: 'topup', amount: 100000),
+        _tx(type: 'earning', amount: -8000, commission: 8000, bookingTotal: 130000),
+        _tx(type: 'withdrawal', amount: 30000),
+        _tx(type: 'refund', amount: 12000),
+      ];
+      final s = Api.summarizeBalance(null, tx);
+      // 100.000 − 8.000 − 30.000 + 12.000 = 74.000
+      expect(s.expectedBalance, 74000);
+      expect(s.withdrawalTotal, 30000);
+      expect(s.refundTotal, 12000);
+    });
+
+    test('earning tanpa booking: fallback = komisi', () {
+      final tx = [_tx(type: 'earning', amount: -9000, commission: 9000)];
+      final s = Api.summarizeBalance(null, tx);
+      expect(s.earnedTotal, 9000);
+      expect(s.commissionTotal, 9000);
+    });
+
+    test('mismatch = saldo aktual − expectedBalance', () {
+      final s = Api.summarizeBalance(_profile(balance: 43749), [_tx(type: 'topup', amount: 50000)]);
+      expect(s.expectedBalance, 50000);
+      expect(s.mismatch, 43749 - 50000);
     });
 
     test('saldo diambil dari profiles.balance (bisa negatif)', () {
@@ -103,12 +156,15 @@ BalanceTransaction _tx({
   required String type,
   double amount = 1000,
   double? commission,
+  int? bookingTotal,
 }) =>
     BalanceTransaction(
       id: 'tx',
       type: type,
       amount: amount,
       commissionAmount: commission,
+      bookingCode: bookingTotal != null ? 'SV-X' : null,
+      bookingTotalPrice: bookingTotal,
       createdAt: DateTime(2026, 1, 15),
     );
 

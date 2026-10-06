@@ -301,6 +301,53 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           // Teknisi: area kerja — dipakai memfilter notifikasi
                           // "Pekerjaan baru tersedia" sesuai alamat pesanan.
                           if (_profile?.role == 'technician') ...[
+                            // Keahlian utama — READ-ONLY: ditetapkan admin saat
+                            // kurasi pendaftaran; tidak ada kontrol ubah di sini
+                            // (updateMyProfile juga tidak pernah menulis skill).
+                            if (_profile?.skill?.isNotEmpty ?? false) ...[
+                              const SizedBox(height: 12),
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: AppColors.brandTint,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                      color: AppColors.brand.withValues(alpha: 0.25)),
+                                ),
+                                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  const Icon(Icons.handyman_rounded,
+                                      size: 20, color: AppColors.brand),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          const Text('Keahlian',
+                                              style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: AppColors.brandDeep)),
+                                          const SizedBox(height: 2),
+                                          Text(skillLabel(_profile!.skill),
+                                              style: const TextStyle(
+                                                  fontSize: 14.5,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: AppColors.navy)),
+                                          const SizedBox(height: 2),
+                                          const Text('Ditetapkan admin — tidak dapat diubah',
+                                              style: TextStyle(
+                                                  fontSize: 11, color: AppColors.inkSoft)),
+                                        ]),
+                                  ),
+                                  const Padding(
+                                    padding: EdgeInsets.only(top: 2),
+                                    child: Icon(Icons.lock_rounded,
+                                        size: 16, color: AppColors.inkSoft),
+                                  ),
+                                ]),
+                              ),
+                            ],
                             const SizedBox(height: 12),
                             TextField(
                               controller: _serviceArea,

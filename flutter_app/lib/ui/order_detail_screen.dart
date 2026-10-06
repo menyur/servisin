@@ -22,8 +22,6 @@ class OrderDetailScreen extends StatefulWidget {
 class _OrderDetailScreenState extends State<OrderDetailScreen> {
   late Booking _b;
 
-  static const _pipeline = [BookingStatus.pending, BookingStatus.paid, BookingStatus.inProgress, BookingStatus.completed];
-
   // Realtime: status pesanan ini berubah dari luar (mis. admin menyetujui
   // bukti bayar, teknisi mulai/selesai) → segarkan otomatis.
   StreamSubscription<BookingUpdate>? _tickSub;
@@ -99,6 +97,102 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       }
     } catch (e) {
       if (mounted) showSnackError(context, e, 'Gagal mengubah status.');
+    }
+  }
+
+  /// Baris "Metode bayar" — dengan tombol edit bila pesanan masih
+  /// menunggu pembayaran dan yang membuka adalah pemiliknya.
+  Widget _methodRow({required bool canEdit}) {
+    final label = paymentMethodLabel(_b.paymentMethod!) ?? _b.paymentMethod!;
+    if (!canEdit) return InfoRow('Metode bayar', label);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: [
+        const SizedBox(
+            width: 120,
+            child: Text('Metode bayar', style: TextStyle(color: AppColors.inkSoft, fontSize: 13))),
+        Expanded(
+          child: Text(label,
+              style: const TextStyle(color: AppColors.ink, fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+        SizedBox(
+          width: 30,
+          height: 30,
+          child: IconButton(
+            padding: EdgeInsets.zero,
+            iconSize: 18,
+            tooltip: 'Ganti metode bayar',
+            onPressed: _editPaymentMethod,
+            icon: const Icon(Icons.edit_outlined, color: AppColors.brand),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  /// Bottom sheet pilih metode bayar → simpan lewat Api.updatePaymentMethod.
+  Future<void> _editPaymentMethod() async {
+    String selected = _b.paymentMethod ?? 'qris';
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              const Text('Ganti Metode Bayar', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+              const SizedBox(height: 4),
+              const Text('Hanya berlaku selama pesanan belum dibayar.',
+                  style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+              const SizedBox(height: 8),
+              // Baris pilihan manual (bukan RadioListTile) — API Radio/
+              // groupValue deprecated di Flutter 3.32+ dan pola ini seragam
+              // dengan pemilih rating bintang di layar ini.
+              ...paymentMethods.map((m) {
+                final chosen = selected == m.$1;
+                return InkWell(
+                  onTap: () => setSheet(() => selected = m.$1),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                    child: Row(children: [
+                      Icon(
+                        chosen ? Icons.radio_button_checked_rounded : Icons.radio_button_off_rounded,
+                        size: 20,
+                        color: chosen ? AppColors.brand : AppColors.inkSoft,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(m.$2, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.navy)),
+                          Text(m.$3, style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+                        ]),
+                      ),
+                    ]),
+                  ),
+                );
+              }),
+              const SizedBox(height: 10),
+              FilledButton(
+                onPressed: selected == _b.paymentMethod ? null : () => Navigator.pop(ctx, true),
+                child: const Text('Simpan metode'),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final r = await Api.updatePaymentMethod(_b.id, selected);
+    if (!mounted) return;
+    if (r.ok) {
+      setState(() => _b = _copyWith(paymentMethod: selected));
+      showSnack(context, 'Metode bayar diganti ke ${paymentMethodLabel(selected) ?? selected}.');
+    } else {
+      showSnack(context, r.error ?? 'Gagal mengubah metode bayar.', error: true);
     }
   }
 
@@ -194,6 +288,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             bookingTime: _b.bookingTime, address: _b.address, notes: _b.notes,
             paymentMethod: _b.paymentMethod, paymentProofUrl: path,
             technicianId: _b.technicianId, technicianName: _b.technicianName, hasReview: _b.hasReview,
+            createdAt: _b.createdAt, paymentConfirmedAt: _b.paymentConfirmedAt,
+            completedAt: _b.completedAt,
           ));
     } catch (e) {
       if (mounted) showSnackError(context, e, 'Gagal mengirim bukti.');
@@ -265,15 +361,17 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     }
   }
 
-  Booking _copyWith({bool? hasReview, String? paymentProofUrl}) => Booking(
+  Booking _copyWith({bool? hasReview, String? paymentProofUrl, String? paymentMethod}) => Booking(
         id: _b.id, code: _b.code, serviceName: _b.serviceName, optionLabel: _b.optionLabel,
         subtotalPrice: _b.subtotalPrice, appFee: _b.appFee, discountAmount: _b.discountAmount,
         totalPrice: _b.totalPrice, status: _b.status, bookingDate: _b.bookingDate,
         bookingTime: _b.bookingTime, address: _b.address, notes: _b.notes,
-        paymentMethod: _b.paymentMethod, paymentProofUrl: paymentProofUrl ?? _b.paymentProofUrl,
+        paymentMethod: paymentMethod ?? _b.paymentMethod, paymentProofUrl: paymentProofUrl ?? _b.paymentProofUrl,
         paymentRejected: _b.paymentRejected, paymentRejectionReason: _b.paymentRejectionReason,
         technicianId: _b.technicianId, technicianName: _b.technicianName,
         hasReview: hasReview ?? _b.hasReview,
+        createdAt: _b.createdAt, paymentConfirmedAt: _b.paymentConfirmedAt,
+        completedAt: _b.completedAt,
       );
 
   @override
@@ -306,21 +404,14 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // pipeline status
+          // pipeline status + timeline stempel waktu
           Container(
             padding: const EdgeInsets.all(16),
             decoration: _cardDeco(),
             child: Column(children: [
               StatusBadge(b.status),
               const SizedBox(height: 14),
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                for (var i = 0; i < _pipeline.length; i++)
-                  _PipelineDot(
-                    label: const ['Pesan', 'Bayar', 'Kerja', 'Selesai'][i],
-                    done: _pipeline.indexOf(b.status) >= i && b.status != BookingStatus.cancelled,
-                    isLast: i == _pipeline.length - 1,
-                  ),
-              ]),
+              _StatusTimeline(b: b),
             ]),
           ),
           const SizedBox(height: 12),
@@ -389,7 +480,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                     ),
                   ]),
                 ),
-              if (b.paymentMethod != null) InfoRow('Metode bayar', b.paymentMethod!),
+              if (b.paymentMethod != null)
+                _methodRow(canEdit: needsPayment && !isAssignedTech),
               const Divider(height: 24),
               InfoRow('Subtotal', formatRupiah(b.subtotalPrice)),
               InfoRow('Biaya aplikasi', formatRupiah(b.appFee)),
@@ -526,27 +618,142 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       );
 }
 
-class _PipelineDot extends StatelessWidget {
-  final String label;
-  final bool done;
-  final bool isLast;
-  const _PipelineDot({required this.label, required this.done, required this.isLast});
+/// Timeline vertikal status pesanan dengan stempel waktu:
+/// Pesanan dibuat → Dibayar → Dikerjakan → Selesai (+ Dibatalkan).
+/// Stempel hanya tampil bila kolomnya tersedia di database.
+class _StatusTimeline extends StatelessWidget {
+  final Booking b;
+  const _StatusTimeline({required this.b});
 
   @override
-  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-          width: 26,
-          height: 26,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: done ? AppColors.brand : Colors.white,
-            border: Border.all(color: done ? AppColors.brand : AppColors.line, width: 2),
-          ),
-          child: done
-              ? const Icon(Icons.check, size: 16, color: Colors.white)
-              : null,
+  Widget build(BuildContext context) {
+    final pipeline = [BookingStatus.pending, BookingStatus.paid, BookingStatus.inProgress, BookingStatus.completed];
+    final cancelled = b.status == BookingStatus.cancelled;
+    final currentIdx = cancelled ? -1 : pipeline.indexOf(b.status);
+
+    final steps = <_TimelineStepData>[
+      _TimelineStepData(
+        'Pesanan dibuat',
+        stamp: b.createdAt,
+        reached: cancelled || currentIdx >= 0,
+      ),
+      _TimelineStepData(
+        'Dibayar — dikonfirmasi admin',
+        stamp: b.paymentConfirmedAt,
+        reached: currentIdx >= 1,
+      ),
+      _TimelineStepData(
+        'Dikerjakan teknisi',
+        stamp: null, // belum ada kolom started_at di database
+        reached: currentIdx >= 2,
+        ongoing: b.status == BookingStatus.inProgress,
+      ),
+      _TimelineStepData(
+        'Selesai',
+        stamp: b.completedAt,
+        reached: currentIdx >= 3,
+      ),
+    ];
+
+    return Column(children: [
+      for (var i = 0; i < steps.length; i++)
+        _TimelineRow(
+          step: steps[i],
+          isLast: i == steps.length - 1 && !cancelled,
         ),
-        const SizedBox(height: 4),
-        Text(label, style: TextStyle(fontSize: 11, color: done ? AppColors.navy : AppColors.inkSoft)),
-      ]);
+      if (cancelled)
+        const _TimelineRow(
+          step: _TimelineStepData('Pesanan dibatalkan', stamp: null, reached: true, cancelled: true),
+          isLast: true,
+        ),
+    ]);
+  }
+}
+
+class _TimelineStepData {
+  final String label;
+  final DateTime? stamp;
+  final bool reached;
+  final bool ongoing;
+  final bool cancelled;
+  const _TimelineStepData(this.label, {this.stamp, required this.reached, this.ongoing = false, this.cancelled = false});
+}
+
+class _TimelineRow extends StatelessWidget {
+  final _TimelineStepData step;
+  final bool isLast;
+  const _TimelineRow({required this.step, required this.isLast});
+
+  Color get _dotColor {
+    if (step.cancelled) return AppColors.coral;
+    if (step.reached) return AppColors.mint;
+    return Colors.white;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stampText = step.reached
+        ? (step.stamp != null ? formatDateTimeId(step.stamp!) : (step.ongoing ? 'sedang berlangsung' : '—'))
+        : null;
+
+    return IntrinsicHeight(
+      child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Rel vertikal + titik status
+        SizedBox(
+          width: 26,
+          child: Column(children: [
+            Container(
+              width: 14,
+              height: 14,
+              margin: const EdgeInsets.only(top: 3),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _dotColor,
+                border: Border.all(color: _dotColor == Colors.white ? AppColors.line : _dotColor, width: 2),
+              ),
+              child: step.reached && !step.ongoing
+                  ? const Icon(Icons.check, size: 9, color: Colors.white)
+                  : null,
+            ),
+            if (!isLast)
+              Expanded(
+                child: Container(width: 2, color: step.reached ? AppColors.mint.withValues(alpha: .45) : AppColors.line),
+              ),
+          ]),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(bottom: isLast ? 0 : 14),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                step.label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: step.ongoing ? FontWeight.w800 : FontWeight.w600,
+                  color: step.cancelled
+                      ? AppColors.coral
+                      : step.reached
+                          ? AppColors.navy
+                          : AppColors.inkSoft,
+                ),
+              ),
+              if (stampText != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    stampText,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: step.ongoing ? AppColors.mint : AppColors.inkSoft,
+                      fontStyle: step.ongoing ? FontStyle.italic : FontStyle.normal,
+                    ),
+                  ),
+                ),
+            ]),
+          ),
+        ),
+      ]),
+    );
+  }
 }

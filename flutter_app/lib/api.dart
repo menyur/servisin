@@ -442,6 +442,30 @@ class Api {
     }).eq('id', bookingId);
   }
 
+  /// Ganti metode pembayaran pesanan milik sendiri yang masih 'pending'.
+  /// RLS "user can add payment proof" hanya mengizinkan pemilik mengubah
+  /// baris pending-nya — metode lain/lama tak bisa ditulis dari klien.
+  /// Hasil SELALU dibaca-balik: update yang ditolak RLS mengembalikan
+  /// sukses kosong (0 baris) tanpa error — jangan anggap sukses buta.
+  static Future<({bool ok, String? error})> updatePaymentMethod(
+      String bookingId, String method) async {
+    try {
+      final row = await db
+          .from('bookings')
+          .update({'payment_method': method})
+          .eq('id', bookingId)
+          .select('payment_method')
+          .single();
+      final applied = row['payment_method'] == method;
+      return (
+        ok: applied,
+        error: applied ? null : 'Metode bayar tidak bisa diubah (pesanan mungkin sudah diproses).',
+      );
+    } catch (e) {
+      return (ok: false, error: 'Gagal mengubah metode bayar. Periksa koneksi lalu coba lagi.');
+    }
+  }
+
   static Future<String> createSignedUrl(String bucket, String path, {int seconds = 3600}) async {
     final res = await db.storage.from(bucket).createSignedUrl(path, seconds);
     return res;
@@ -526,27 +550,55 @@ class Api {
   }
 
   /// Hitung summary dari profil + transaksi (dipakai dua fungsi di atas).
+  ///
+  /// Definisi (model TOP-UP):
+  /// * Pendapatan kotor = total harga pesanan − biaya aplikasi (appFee)
+  ///   — dari booking tiap earning, BUKAN 2× komisi (bug lama:
+  ///   amount earning = −komisi, jadi komisi + |amount| menghitung
+  ///   komisi dua kali).
+  /// * Komisi terpotong = Σ −amount baris earning (efek riil ke saldo;
+  ///   baris backfill lama ber-amount POSITIF tidak dihitung komisi —
+  ///   itu anomali yang dikoreksi fix-earning-amount-sign.sql dan
+  ///   tampak sebagai selisih di expectedBalance).
+  /// * expectedBalance = setoran − komisi − penarikan + refund; kalau
+  ///   ≠ profiles.balance, ada perubahan saldo tanpa baris mutasi.
   static TechnicianBalanceSummary summarizeBalance(
       Profile? p, List<BalanceTransaction> tx) {
-    var earned = 0; // pendapatan kotor pesanan selesai (neto + komisi)
-    var commission = 0; // komisi yang dipotong platform
-    var topup = 0; // total setor yang disetujui admin
+    var earned = 0;
+    var commission = 0;
+    var topup = 0;
+    var withdrawal = 0;
+    var refund = 0;
     for (final t in tx) {
       switch (t.type) {
         case 'earning':
-          // amount tersimpan NEGATIF (potongan saldo sebesar komisi)
-          final c = t.commissionAmount ?? 0;
-          commission += c.round();
-          earned += (c + t.amount.abs()).round();
+          if (t.amount < 0) commission += (-t.amount).round();
+          // Pendapatan kotor: total harga − biaya aplikasi.
+          final total = t.bookingTotalPrice;
+          if (total != null) {
+            final base = total - appFee;
+            if (base > 0) earned += base;
+          } else {
+            // Tanpa booking (kasus langka): komisi sebagai perkiraan.
+            earned += (t.commissionAmount ?? 0).round();
+          }
         case 'topup':
           topup += t.amount.round();
+        case 'withdrawal':
+          withdrawal += t.amount.round();
+        case 'refund':
+          refund += t.amount.round();
       }
     }
+    final expected = topup - commission - withdrawal + refund;
     return TechnicianBalanceSummary(
       balance: p?.balance ?? 0,
       earnedTotal: earned,
       commissionTotal: commission,
       topupTotal: topup,
+      withdrawalTotal: withdrawal,
+      refundTotal: refund,
+      expectedBalance: expected,
     );
   }
 
@@ -566,7 +618,7 @@ class Api {
   static Future<List<BalanceTransaction>> fetchMyBalanceTransactions({int limit = 100}) async {
     final rows = await db
         .from('balance_transactions')
-        .select('id, type, amount, commission_amount, note, created_at, bookings(code)')
+        .select('id, type, amount, commission_amount, note, created_at, bookings(code, total_price)')
         .order('created_at', ascending: false)
         .limit(limit);
     return rows.map<BalanceTransaction>((m) => BalanceTransaction.fromMap(m)).toList();
