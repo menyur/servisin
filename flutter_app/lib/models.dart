@@ -109,7 +109,17 @@ class Profile {
   final String role;
   final String? serviceArea; // daerah kerja teknisi (filter push pekerjaan baru)
 
-  Profile({required this.id, required this.name, required this.email, this.phone, this.address, this.avatarUrl, required this.role, this.serviceArea});
+  /// Keahlian utama teknisi = ID kategori katalog ('ac'|'tukang'|'kendaraan'|
+  /// 'kebersihan' — sama dengan categories.id). Kosong = tanpa filter
+  /// keahlian. Dipakai filter daftar Tersedia & push pekerjaan baru.
+  final String? skill;
+
+  /// Saldo aktif teknisi (model top-up — migrate-technician-balance.sql):
+  /// naik saat admin menyetujui bukti setor, dipotong komisi saat pesanan
+  /// selesai, ditahan saat pengajuan penarikan. Untuk pelanggan selalu 0.
+  final double balance;
+
+  Profile({required this.id, required this.name, required this.email, this.phone, this.address, this.avatarUrl, required this.role, this.serviceArea, this.skill, this.balance = 0});
 
   factory Profile.fromMap(Map<String, dynamic> m) => Profile(
         id: m['id'] as String,
@@ -120,7 +130,16 @@ class Profile {
         avatarUrl: m['avatar_url'] as String?,
         role: (m['role'] as String?) ?? 'customer',
         serviceArea: m['service_area'] as String?,
+        skill: m['skill'] as String?,
+        balance: _parseNum(m['balance']),
       );
+
+  /// Kolom numeric PostgREST bisa datang sebagai angka ATAU string
+  /// (presisi besar diserialisasi sebagai teks) — terima keduanya.
+  static double _parseNum(dynamic v) {
+    if (v is num) return v.toDouble();
+    return num.tryParse('${v ?? ""}')?.toDouble() ?? 0;
+  }
 }
 
 /// Satu pesan chat pelanggan ↔ teknisi untuk sebuah pesanan.
@@ -258,6 +277,112 @@ class Booking {
   }
 }
 
+/// Event realtime perubahan satu baris bookings (Supabase Realtime
+/// postgres_changes, lihat Api.subscribeBookingUpdates).
+/// [prevStatus]/[prevTechnicianId] bisa null bila server tidak mengirim
+/// kondisi lama (bookings butuh replica identity full —
+/// migrate-realtime-bookings.sql) — deteksi perubahan jadi best-effort.
+class BookingUpdate {
+  final String id;
+  final String code;
+  final String? status;
+  final String? prevStatus;
+  final String? technicianId;
+  final String? prevTechnicianId;
+  final String? userId;
+
+  BookingUpdate({
+    required this.id,
+    required this.code,
+    this.status,
+    this.prevStatus,
+    this.technicianId,
+    this.prevTechnicianId,
+    this.userId,
+  });
+
+  BookingStatus get statusValue => bookingStatusFrom(status);
+
+  /// Status berubah dibanding kondisi lama (bila diketahui).
+  bool get statusChanged =>
+      prevStatus != null && status != null && prevStatus != status;
+
+  /// Teknisi baru saja ditugaskan (technician_id dari null terisi).
+  bool get technicianAssigned =>
+      technicianId != null && prevTechnicianId == null;
+}
+
+/// Satu mutasi saldo teknisi (tabel balance_transactions — audit trail):
+/// amount > 0 = top-up (setor disetujui) / refund penarikan,
+/// amount < 0 = potongan komisi pesanan selesai / penarikan.
+/// Hanya bisa dibaca pemilik baris & admin (RLS).
+class BalanceTransaction {
+  final String id;
+  final String type; // earning | topup | adjustment | withdrawal | refund
+  final double amount;
+  final double? commissionAmount; // komisi terpotong (earning pesanan selesai)
+  final String? note;
+  final String? bookingCode; // join ke bookings(code) bila terpasang
+  final DateTime createdAt;
+
+  BalanceTransaction({
+    required this.id,
+    required this.type,
+    required this.amount,
+    this.commissionAmount,
+    this.note,
+    this.bookingCode,
+    required this.createdAt,
+  });
+
+  factory BalanceTransaction.fromMap(Map<String, dynamic> m) {
+    final bk = m['bookings'] as Map<String, dynamic>?;
+    return BalanceTransaction(
+      id: m['id'] as String,
+      type: (m['type'] as String?) ?? 'adjustment',
+      amount: (m['amount'] as num?)?.toDouble() ?? 0,
+      commissionAmount: (m['commission_amount'] as num?)?.toDouble(),
+      note: m['note'] as String?,
+      bookingCode: bk?['code'] as String?,
+      createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ?? DateTime.now(),
+    );
+  }
+
+  bool get income => amount >= 0;
+
+  /// Judul mutasi sesuai jenis (dipakai daftar riwayat).
+  String get typeLabel => switch (type) {
+        'earning' => 'Pesanan Selesai',
+        'topup' => 'Setor Disetujui',
+        'withdrawal' => 'Penarikan Saldo',
+        'refund' => 'Refund Penarikan',
+        _ => 'Penyesuaian',
+      };
+}
+
+/// Ringkasan saldo teknisi untuk kartu saldo: saldo aktif + total
+/// pendapatan bersih (earning neto) + total top-up yang disetujui.
+/// Semua dihitung di klien dari tabel balance_transactions (RLS aman).
+class TechnicianBalanceSummary {
+  final double balance;
+
+  /// Pendapatan kotor pesanan selesai (neto + komisi yang dipotong).
+  final int earnedTotal;
+
+  /// Komisi platform yang sudah dipotong dari saldo.
+  final int commissionTotal;
+
+  /// Total setor yang disetujui admin.
+  final int topupTotal;
+
+  const TechnicianBalanceSummary({
+    required this.balance,
+    this.earnedTotal = 0,
+    this.commissionTotal = 0,
+    this.topupTotal = 0,
+  });
+}
+
 /// Satu lowongan pekerjaan untuk teknisi: pesanan sudah dibayar,
 /// belum diambil siapa pun (dari RPC available_jobs).
 class AvailableJob {
@@ -272,6 +397,12 @@ class AvailableJob {
   final String customerName;
   final DateTime createdAt;
 
+  /// Kategori layanan (id + nama) dari RPC available_jobs — dipakai
+  /// filter keahlian di klien; null bila migrasi skill-filter belum
+  /// dijalankan (kolom belum ada di hasil RPC).
+  final String? serviceCategory;
+  final String? serviceCategoryName;
+
   AvailableJob({
     required this.id,
     required this.code,
@@ -283,6 +414,8 @@ class AvailableJob {
     required this.totalPrice,
     required this.customerName,
     required this.createdAt,
+    this.serviceCategory,
+    this.serviceCategoryName,
   });
 
   factory AvailableJob.fromMap(Map<String, dynamic> m) => AvailableJob(
@@ -296,6 +429,8 @@ class AvailableJob {
         totalPrice: (m['total_price'] as num?)?.toInt() ?? 0,
         customerName: (m['customer_name'] as String?) ?? 'Pelanggan',
         createdAt: DateTime.tryParse((m['created_at'] as String?) ?? '') ?? DateTime.now(),
+        serviceCategory: m['service_category'] as String?,
+        serviceCategoryName: m['service_category_name'] as String?,
       );
 }
 

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -26,10 +28,17 @@ class _OrdersScreenState extends State<OrdersScreen> {
     (BookingStatus.completed, 'Selesai'),
   ];
 
+  // Langganan tick realtime: daftar pesanan auto-refresh saat status
+  // berubah dari tempat lain (admin/teknisi) tanpa pull-to-refresh.
+  StreamSubscription<void>? _tickSub;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _tickSub = bookingUpdatesTick.stream.listen((_) => _load());
+    // Layar Pesanan terbuka = semua event realtime dianggap sudah dilihat.
+    unseenBookingUpdates.value = 0;
   }
 
   Future<void> _load() async {
@@ -48,6 +57,12 @@ class _OrdersScreenState extends State<OrdersScreen> {
   int _count(BookingStatus? s) => (_bookings ?? const <Booking>[])
       .where((b) => s == null || b.status == s)
       .length;
+
+  @override
+  void dispose() {
+    unawaited(_tickSub?.cancel());
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -180,6 +180,66 @@ class Api {
     };
   }
 
+  /// Berlangganan perubahan status pesanan secara realtime (postgres_changes
+  /// event UPDATE pada tabel bookings). Satu channel dengan dua filter:
+  /// - user_id = uid       → pelanggan menerima perubahan pesanannya,
+  /// - technician_id = uid → teknisi menerima tugas yang ditugaskan.
+  /// Event selalu menghormati RLS (tidak ada baris orang lain yang bocor).
+  /// Kondisi lama tersedia di payload karena bookings memakai replica
+  /// identity full (jalankan migrate-realtime-bookings.sql). Mengembalikan
+  /// fungsi cleanup untuk membatalkan channel (dipanggil logout/dispose).
+  static ChatUnsubscribe subscribeBookingUpdates(
+      String uid, void Function(BookingUpdate) onUpdate) {
+    final channel = db.channel('bookings-$uid');
+    var active = true;
+
+    void handle(PostgresChangePayload payload) {
+      if (!active) return;
+      final row = payload.newRecord;
+      final id = row['id'] as String?;
+      if (id == null || id.isEmpty) return;
+      final old = payload.oldRecord;
+      onUpdate(BookingUpdate(
+        id: id,
+        code: (row['code'] as String?) ?? (old['code'] as String?) ?? '',
+        status: row['status'] as String?,
+        prevStatus: old['status'] as String?,
+        technicianId: row['technician_id'] as String?,
+        prevTechnicianId: old['technician_id'] as String?,
+        userId: row['user_id'] as String?,
+      ));
+    }
+
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'bookings',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'user_id',
+        value: uid,
+      ),
+      callback: handle,
+    );
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'bookings',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'technician_id',
+        value: uid,
+      ),
+      callback: handle,
+    );
+    channel.subscribe();
+    return () async {
+      if (!active) return;
+      active = false;
+      await db.removeChannel(channel);
+    };
+  }
+
   // ============ pekerjaan teknisi (ambil pekerjaan) ============
 
   /// Daftar pekerjaan tersedia (sudah dibayar, belum diambil teknisi).
@@ -434,6 +494,82 @@ class Api {
       if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
       if (attachmentPath != null) 'attachment_url': attachmentPath,
     });
+  }
+
+  // ============ saldo teknisi ============
+
+  /// Saldo & riwayat mutasi teknisi yang sedang login.
+  /// Sumber: profiles.balance + balance_transactions (RLS self-only —
+  /// teknisi TIDAK boleh menulis mutasi sendiri, cegah fraud).
+  /// Gagal aman bila migrasi teknisi-balance belum dijalankan (error dibalankan).
+  static Future<TechnicianBalanceSummary> fetchMyBalanceSummary(
+      {List<BalanceTransaction>? transactions}) async {
+    final tx = transactions ?? await fetchMyBalanceTransactions();
+    final p = await myProfile();
+    return summarizeBalance(p, tx);
+  }
+
+  /// Satu panggilan untuk LAYAR Saldo: summary + daftar transaksi
+  /// dari fetch paralel yang sama (hemat satu query profil vs
+  /// memanggil fetchMyBalanceSummary + fetchMyBalanceTransactions).
+  static Future<({TechnicianBalanceSummary summary, List<BalanceTransaction> transactions})>
+      fetchMyBalancePage() async {
+    final results = await Future.wait([
+      myProfile().catchError((_) => null as Profile?),
+      fetchMyBalanceTransactions(),
+    ]);
+    final tx = results[1] as List<BalanceTransaction>;
+    return (
+      summary: summarizeBalance(results[0] as Profile?, tx),
+      transactions: tx,
+    );
+  }
+
+  /// Hitung summary dari profil + transaksi (dipakai dua fungsi di atas).
+  static TechnicianBalanceSummary summarizeBalance(
+      Profile? p, List<BalanceTransaction> tx) {
+    var earned = 0; // pendapatan kotor pesanan selesai (neto + komisi)
+    var commission = 0; // komisi yang dipotong platform
+    var topup = 0; // total setor yang disetujui admin
+    for (final t in tx) {
+      switch (t.type) {
+        case 'earning':
+          // amount tersimpan NEGATIF (potongan saldo sebesar komisi)
+          final c = t.commissionAmount ?? 0;
+          commission += c.round();
+          earned += (c + t.amount.abs()).round();
+        case 'topup':
+          topup += t.amount.round();
+      }
+    }
+    return TechnicianBalanceSummary(
+      balance: p?.balance ?? 0,
+      earnedTotal: earned,
+      commissionTotal: commission,
+      topupTotal: topup,
+    );
+  }
+
+  /// Ringkas saldo, TANPA melempar: null bila migrasi balance belum
+  /// dijalankan / database menolak. Dipakai strip saldo di tab Pekerjaan
+  /// yang tidak boleh mematikan daftar pekerjaan saat gagal.
+  static Future<TechnicianBalanceSummary?> fetchMyBalanceSummarySafe() async {
+    try {
+      return await fetchMyBalanceSummary();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Riwayat mutasi saldo (100 terbaru, terbaru dulu).
+  /// join bookings(code) supaya transaksi komisi menampilkan kode pesanan.
+  static Future<List<BalanceTransaction>> fetchMyBalanceTransactions({int limit = 100}) async {
+    final rows = await db
+        .from('balance_transactions')
+        .select('id, type, amount, commission_amount, note, created_at, bookings(code)')
+        .order('created_at', ascending: false)
+        .limit(limit);
+    return rows.map<BalanceTransaction>((m) => BalanceTransaction.fromMap(m)).toList();
   }
 
   // ============ voucher ============

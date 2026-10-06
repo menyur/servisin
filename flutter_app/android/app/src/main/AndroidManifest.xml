@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- WAJIB untuk akses jaringan (Supabase REST/Realtime, gambar avatar,
+         upload bukti bayar). Tanpa izin ini APK release gagal lookup host
+         ("Failed host lookup: 'xxx.supabase.co'") walau WiFi/data aktif —
+         build debug/profile mendapat izin dari manifest debug, tapi
+         manifest utama TIDAK mewariskannya ke build release. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="Fixify"
         android:name="${applicationName}"

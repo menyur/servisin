@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -357,9 +359,40 @@ class _StaggerInState extends State<StaggerIn> with SingleTickerProviderStateMix
 /// tab Profil) untuk pindah tab tanpa pushNamed.
 final ValueNotifier<int> mainTabIndex = ValueNotifier<int>(0);
 
+/// Tick realtime perubahan status pesanan. MainShell berlangganan Supabase
+/// Realtime (Api.subscribeBookingUpdates) sekali untuk seluruh aplikasi,
+/// lalu menyiarkan event ke sini. Layar yang menampilkan pesanan (Pesanan,
+/// Pekerjaan, Detail) mendengarkan stream ini untuk auto-refresh.
+final StreamController<BookingUpdate> bookingUpdatesTick =
+    StreamController<BookingUpdate>.broadcast();
+
+/// Posisi tab "Pesanan" pada bar navigasi — sama untuk pelanggan dan teknisi.
+const int kOrdersTabIndex = 1;
+
+/// Jumlah event realtime pesanan yang belum "dilihat": naik tiap event
+/// bermakna (perubahan status / penugasan teknisi) datang saat user tidak
+/// berada di tab Pesanan, dan reset ke 0 saat tab Pesanan dibuka.
+/// Dipakai MainNav untuk badge kecil di ikon tab Pesanan.
+final ValueNotifier<int> unseenBookingUpdates = ValueNotifier<int>(0);
+
+/// Kode pesanan yang notifikasi realtime-nya ditahan sementara (event
+/// pantulan aksi sendiri — layar pelaku sudah menampilkan snack dari hasil
+/// RPC). MainShell memeriksa set ini sebelum menampilkan snack.
+final Set<String> suppressedBookingNotify = <String>{};
+
+/// Tahan notifikasi realtime untuk [code] selama beberapa detik.
+void suppressBookingNotify(String code) {
+  if (code.isEmpty) return;
+  suppressedBookingNotify.add(code);
+  Timer(const Duration(seconds: 3), () => suppressedBookingNotify.remove(code));
+}
+
 /// Shell tab utama: kelima layar tinggal di dalam satu scaffold dengan
 /// bottom nav bersama. Pergantian tab dianimasikan fade + slide arah
 /// (kanan untuk maju, kiri untuk mundur) lewat AnimatedSwitcher.
+/// Juga memegang langganan realtime status pesanan: event UPDATE pada
+/// tabel bookings (milik user sebagai pelanggan atau teknisi) memunculkan
+/// SnackBar notifikasi dan menyiarkan tick ke layar terkait.
 class MainShell extends StatefulWidget {
   final int initialIndex;
   const MainShell({super.key, this.initialIndex = 0});
@@ -372,6 +405,10 @@ class _MainShellState extends State<MainShell> {
   late int _index = widget.initialIndex;
   late int _prevIndex = widget.initialIndex;
   bool _isTechnician = false;
+
+  // Realtime status pesanan (satu channel untuk seluruh aplikasi).
+  ChatUnsubscribe? _realtimeCleanup;
+  String? _realtimeUid;
 
   /// Tab sesuai peran: teknisi mendapat tab **Pekerjaan**
   /// (ambil pekerjaan) di posisi tengah, menggantikan Voucher.
@@ -397,6 +434,8 @@ class _MainShellState extends State<MainShell> {
       _prevIndex = _index;
       _index = i;
     });
+    // Membuka tab Pesanan = semua event realtime dinyatakan sudah dilihat.
+    if (i == kOrdersTabIndex) unseenBookingUpdates.value = 0;
     mainTabIndex.value = i;
   }
 
@@ -405,7 +444,9 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     // Sinkron saat layar lain meminta pindah tab (mainTabIndex.value = X).
     mainTabIndex.addListener(_onExternalTabRequest);
+    if (widget.initialIndex == kOrdersTabIndex) unseenBookingUpdates.value = 0;
     _detectRole();
+    _initBookingRealtime();
   }
 
   Future<void> _detectRole() async {
@@ -420,8 +461,57 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  /// Pasang langganan realtime bila user sudah login, atau bongkar bila
+  /// tidak (mis. shell dibuka tanpa sesi). Dipanggil dari initState.
+  void _initBookingRealtime() {
+    final uid = Api.session?.user.id;
+    if (uid != null && _realtimeUid == null) {
+      _realtimeUid = uid;
+      _realtimeCleanup = Api.subscribeBookingUpdates(uid, _onBookingUpdate);
+    } else if (uid == null && _realtimeUid != null) {
+      _teardownRealtime();
+    }
+  }
+
+  void _teardownRealtime() {
+    _realtimeUid = null;
+    _realtimeCleanup?.call();
+    _realtimeCleanup = null;
+  }
+
+  /// Event UPDATE bookings dari Supabase Realtime: tampilkan notifikasi
+  /// ringan dan siarkan tick agar layar terkait memuat ulang datanya.
+  void _onBookingUpdate(BookingUpdate u) {
+    bookingUpdatesTick.add(u);
+
+    // Diamkan notif untuk event hasil aksi sendiri (mis. teknisi menandai
+    // selesai) — snack-nya sudah tampil dari hasil RPC di layar pelaku.
+    if (suppressedBookingNotify.contains(u.code)) return;
+
+    String pesan;
+    if (u.statusChanged) {
+      pesan = 'Pesanan #${u.code}: ${u.statusValue.label}';
+    } else if (u.technicianAssigned) {
+      pesan = 'Teknisi sudah ditugaskan untuk pesanan #${u.code}.';
+    } else {
+      // Perubahan lain (mis. bukti bayar diunggah) — cukup refresh, tanpa snack.
+      return;
+    }
+
+    // User sedang di tab Pesanan: daftar auto-refresh sehingga perubahan
+    // langsung terlihat — cukup snack, badge tetap 0.
+    if (_index == kOrdersTabIndex) {
+      showSnack(context, pesan);
+      return;
+    }
+
+    unseenBookingUpdates.value++;
+    showSnack(context, pesan);
+  }
+
   @override
   void dispose() {
+    _teardownRealtime();
     mainTabIndex.removeListener(_onExternalTabRequest);
     super.dispose();
   }
@@ -533,6 +623,30 @@ class MainNav extends StatelessWidget {
           children: List.generate(_items.length, (i) {
             final active = i == currentIndex;
             final item = _items[i];
+            Widget icon = Icon(
+              active ? item.$2 : item.$1,
+              size: 22,
+              color: active ? Colors.white : AppColors.inkSoft,
+            );
+            // Ikon tab "Pesanan" dibungkus Stack agar badge jumlah event
+            // realtime yang belum dilihat dapat menempel di pojoknya.
+            if (i == kOrdersTabIndex) {
+              icon = Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  icon,
+                  Positioned(
+                    top: -5,
+                    right: -8,
+                    child: ValueListenableBuilder<int>(
+                      valueListenable: unseenBookingUpdates,
+                      builder: (context, n, _) =>
+                          n <= 0 ? const SizedBox.shrink() : _UnseenBadge(count: n),
+                    ),
+                  ),
+                ],
+              );
+            }
             return Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -564,11 +678,7 @@ class MainNav extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
-                        active ? item.$2 : item.$1,
-                        size: 22,
-                        color: active ? Colors.white : AppColors.inkSoft,
-                      ),
+                      icon,
                       const SizedBox(height: 3),
                       AnimatedDefaultTextStyle(
                         duration: const Duration(milliseconds: 200),
@@ -585,6 +695,42 @@ class MainNav extends StatelessWidget {
               ),
             );
           }),
+        ),
+      ),
+    );
+  }
+}
+
+/// Badge angka kecil (merah) di pojok ikon tab Pesanan pada MainNav —
+/// menampilkan jumlah event realtime pesanan yang belum dilihat (9+ bila
+/// lebih dari sembilan). Border putih agar kontras di atas ikon aktif.
+class _UnseenBadge extends StatelessWidget {
+  final int count;
+  const _UnseenBadge({required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '$count pembaruan pesanan belum dibaca',
+      excludeSemantics: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        constraints: const BoxConstraints(minWidth: 13, minHeight: 13),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: AppColors.coral,
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white, width: 1),
+        ),
+        child: Text(
+          count > 9 ? '9+' : '$count',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 8,
+            fontWeight: FontWeight.w800,
+            height: 1,
+          ),
         ),
       ),
     );

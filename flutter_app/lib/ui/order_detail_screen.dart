@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -22,10 +24,25 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   static const _pipeline = [BookingStatus.pending, BookingStatus.paid, BookingStatus.inProgress, BookingStatus.completed];
 
+  // Realtime: status pesanan ini berubah dari luar (mis. admin menyetujui
+  // bukti bayar, teknisi mulai/selesai) → segarkan otomatis.
+  StreamSubscription<BookingUpdate>? _tickSub;
+
   @override
   void initState() {
     super.initState();
     _b = widget.booking;
+    _tickSub = bookingUpdatesTick.stream.listen((u) {
+      if (u.id == widget.booking.id) _reload();
+    });
+    // Detail pesanan terbuka — perubahan item ini langsung tampak, reset badge.
+    unseenBookingUpdates.value = 0;
+  }
+
+  @override
+  void dispose() {
+    unawaited(_tickSub?.cancel());
+    super.dispose();
   }
 
   /// Segarkan data pesanan setelah kembali dari chat (mis. ada status baru).
@@ -67,6 +84,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       final r = await Api.setJobStatus(_b.id, status);
       if (!mounted) return;
       if (r.ok) {
+        // Event realtime pantulan RPC sudah direfresh lewat tick di layar
+        // ini — tahan snack ganda di MainShell.
+        suppressBookingNotify(_b.code);
         if (status == 'completed' && r.commission != null) {
           _showCommissionDialog(r.commission!, r.balance);
         } else {

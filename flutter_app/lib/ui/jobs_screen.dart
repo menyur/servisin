@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../format.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'balance_screen.dart';
 import 'common.dart';
 import 'order_detail_screen.dart';
 
@@ -23,6 +26,7 @@ class _JobsScreenState extends State<JobsScreen> {
   List<AvailableJob>? _available;
   List<Booking>? _assigned;
   Profile? _profile;
+  TechnicianBalanceSummary? _bal;
   String? _error;
   int _tab = 0; // 0 = tersedia, 1 = tugas saya
   String? _claimingId;
@@ -31,10 +35,27 @@ class _JobsScreenState extends State<JobsScreen> {
   /// true = tampilkan semua pekerjaan (opsi "Lihat semua").
   bool _showAllAreas = false;
 
+  /// false = hanya pekerjaan sesuai keahlian utama teknisi (default),
+  /// true = tampilkan semua kategori (opsi "Semua keahlian").
+  bool _showAllSkills = false;
+
+  // Realtime: pekerjaan baru diklaim teknisi lain / tugas berubah status
+  // (dari web, admin, atau HP lain) → segarkan kedua daftar.
+  StreamSubscription<void>? _tickSub;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _tickSub = bookingUpdatesTick.stream.listen((_) => _load());
+    // Pekerjaan tampil data pesanan teknisi — badge Pesanan ikut dianggap dilihat.
+    unseenBookingUpdates.value = 0;
+  }
+
+  @override
+  void dispose() {
+    unawaited(_tickSub?.cancel());
+    super.dispose();
   }
 
   /// Area layanan teknisi (lowercase & trim) — kosong berarti tanpa filter,
@@ -51,12 +72,15 @@ class _JobsScreenState extends State<JobsScreen> {
         Api.fetchAssignedJobs(),
         // profil opsional — gagal muat tidak boleh mematikan daftar pekerjaan
         Api.myProfile().catchError((_) => null),
+        // saldo opsional — null bila migrasi balance belum dijalankan
+        Api.fetchMyBalanceSummarySafe(),
       ]);
       if (!mounted) return;
       setState(() {
         _available = results[0] as List<AvailableJob>;
         _assigned = results[1] as List<Booking>;
         _profile = results[2] as Profile?;
+        _bal = results[3] as TechnicianBalanceSummary?;
       });
     } catch (_) {
       if (mounted) {
@@ -89,6 +113,9 @@ class _JobsScreenState extends State<JobsScreen> {
       final r = await Api.claimJob(job.id);
       if (!mounted) return;
       if (r.ok) {
+        // Tahan snack realtime pantulan klaim ("teknisi ditugaskan") —
+        // snack hasil RPC di bawah sudah cukup.
+        suppressBookingNotify(job.code);
         showSnack(context, 'Berhasil! #${job.code} kini tugasmu.');
         setState(() => _tab = 1); // langsung lihat tugas baru
         await _load();
@@ -115,6 +142,7 @@ class _JobsScreenState extends State<JobsScreen> {
   Future<void> _release(Booking b) async {
     final ok = await releaseJobFlow(context, b.id);
     if (ok) {
+      suppressBookingNotify(b.code);
       setState(() => _tab = 0); // lihat pesanan kembali di Tersedia
       await _load();
     }
@@ -131,15 +159,26 @@ class _JobsScreenState extends State<JobsScreen> {
         ScreenHeader(
           title: 'Pekerjaan',
           subtitle: 'Ambil pekerjaan baru atau lanjutkan tugasmu',
-          bottom: SizedBox(
-            height: 46,
-            child: Row(children: [
-              const SizedBox(width: 16),
-              _pill('Tersedia', available.length, _tab == 0, () => setState(() => _tab = 0)),
-              const SizedBox(width: 8),
-              _pill('Tugas Saya', assigned.length, _tab == 1, () => setState(() => _tab = 1)),
-            ]),
-          ),
+          bottom: Column(mainAxisSize: MainAxisSize.min, children: [
+            // Strip saldo — hidup hanya untuk teknisi (summary terisi).
+            if (_bal != null)
+              _BalanceStrip(
+                summary: _bal!,
+                onTap: () async {
+                  await Navigator.push(context, MaterialPageRoute(builder: (_) => const BalanceScreen()));
+                  _load();
+                },
+              ),
+            SizedBox(
+              height: 46,
+              child: Row(children: [
+                if (_bal == null) const SizedBox(width: 16),
+                _pill('Tersedia', available.length, _tab == 0, () => setState(() => _tab = 0)),
+                const SizedBox(width: 8),
+                _pill('Tugas Saya', assigned.length, _tab == 1, () => setState(() => _tab = 1)),
+              ]),
+            ),
+          ]),
         ),
         Expanded(
           child: Transform.translate(
@@ -213,57 +252,93 @@ class _JobsScreenState extends State<JobsScreen> {
     // sebagai substring alamat pesanan.
     final area = _areaFilter;
     final hasArea = area.isNotEmpty;
-    final filtered = (!hasArea || _showAllAreas)
-        ? jobs
-        : jobs
-            .where((j) => j.address.toLowerCase().contains(area))
-            .toList(growable: false);
 
-    // Ada pekerjaan, tapi tidak satu pun di area teknisi → ajak lihat semua.
-    if (hasArea && !_showAllAreas && filtered.isEmpty) {
+    // Filter keahlian utama (server-side juga, paritas dengan push):
+    // kategori layanan pesanan harus = profiles.skill teknisi.
+    final skill = (_profile?.skill ?? '').trim();
+    final hasSkill = skill.isNotEmpty;
+    final filtered = jobs.where((j) {
+      if (hasArea && !_showAllAreas && !j.address.toLowerCase().contains(area)) {
+        return false;
+      }
+      if (hasSkill && !_showAllSkills) {
+        // RPC lama tanpa kolom kategori (migrasi skill-filter belum
+        // dijalankan): jangan menutup daftar — tampilkan apa adanya.
+        if (j.serviceCategory == null) return true;
+        return j.serviceCategory == skill;
+      }
+      return true;
+    }).toList(growable: false);
+
+    final filterBar = (hasArea || hasSkill)
+        ? _AreaFilterBar(
+            area: _profile?.serviceArea ?? '',
+            skillName: hasSkill
+                ? (filtered.isNotEmpty
+                    ? filtered.first.serviceCategoryName
+                    : _skillLabel(skill))
+                : null,
+            showAll: _showAllAreas,
+            showAllSkills: _showAllSkills,
+            shown: filtered.length,
+            total: jobs.length,
+            hasSkillFilter: hasSkill,
+            onPick: (all) => setState(() => _showAllAreas = all),
+            onPickSkill: (all) => setState(() => _showAllSkills = all),
+          )
+        : null;
+
+    if (filterBar == null) {
+      return ListView.separated(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: filtered.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        itemBuilder: (context, i) => _card(filtered[i]),
+      );
+    }
+
+    // Ada pekerjaan, tapi tidak satu pun lolos filter → tampilkan bar
+    // filter + ajakan membuka filter.
+    if (filtered.isEmpty) {
       return ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
-          _AreaFilterBar(
-            area: _profile?.serviceArea ?? '',
-            showAll: _showAllAreas,
-            shown: 0,
-            total: jobs.length,
-            onPick: (all) => setState(() => _showAllAreas = all),
-          ),
+          filterBar,
           const SizedBox(height: 12),
           const ScreenStateView(
               loading: false,
               empty: true,
               emptyMessage:
-                  'Belum ada pekerjaan di area layananmu.\nCoba "Lihat semua" untuk pekerjaan di luar area.'),
+                  'Tidak ada pekerjaan yang cocok dengan area & keahlianmu.\nCoba "Lihat semua" atau "Semua keahlian".'),
         ],
       );
     }
 
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: filtered.length + (hasArea ? 1 : 0),
+      itemCount: filtered.length + 1,
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, i) {
-        if (hasArea && i == 0) {
-          return _AreaFilterBar(
-            area: _profile?.serviceArea ?? '',
-            showAll: _showAllAreas,
-            shown: filtered.length,
-            total: jobs.length,
-            onPick: (all) => setState(() => _showAllAreas = all),
-          );
-        }
-        final job = filtered[hasArea ? i - 1 : i];
-        return _AvailableCard(
-          job: job,
-          claiming: _claimingId == job.id,
-          onClaim: () => _claim(job),
-        );
+        if (i == 0) return filterBar;
+        return _card(filtered[i - 1]);
       },
     );
   }
+
+  Widget _card(AvailableJob job) => _AvailableCard(
+        job: job,
+        claiming: _claimingId == job.id,
+        onClaim: () => _claim(job),
+      );
+
+  /// Label ramah kode skill — fallback bila kategori belum tahu.
+  String _skillLabel(String code) => switch (code) {
+        'ac' => 'Service AC',
+        'tukang' => 'Tukang rumah',
+        'kendaraan' => 'Service kendaraan',
+        'kebersihan' => 'Kebersihan & laundry',
+        _ => code,
+      };
 
   Widget _assignedList(List<Booking> bookings) {
     if (bookings.isEmpty) {
@@ -286,14 +361,21 @@ class _JobsScreenState extends State<JobsScreen> {
   }
 }
 
-/// Bar filter area layanan untuk daftar Tersedia:
-/// chip "Area saya" (default) vs "Lihat semua" + ringkasan jumlah.
+/// Bar filter daftar Tersedia: chip area layanan ("Area saya" vs
+/// "Lihat semua") + chip keahlian ("Keahlianku" vs "Semua keahlian"),
+/// plus ringkasan jumlah pekerjaan yang lolos filter.
 class _AreaFilterBar extends StatelessWidget {
   final String area;
+
+  /// Label kategori keahlian teknisi (null = teknisi tanpa filter skill).
+  final String? skillName;
   final bool showAll;
+  final bool showAllSkills;
+  final bool hasSkillFilter;
   final int shown;
   final int total;
   final ValueChanged<bool> onPick;
+  final ValueChanged<bool>? onPickSkill;
 
   const _AreaFilterBar({
     required this.area,
@@ -301,10 +383,23 @@ class _AreaFilterBar extends StatelessWidget {
     required this.shown,
     required this.total,
     required this.onPick,
+    this.skillName,
+    this.showAllSkills = false,
+    this.hasSkillFilter = false,
+    this.onPickSkill,
   });
+
+  bool get _hasArea => area.trim().isNotEmpty;
 
   @override
   Widget build(BuildContext context) {
+    final info = [
+      if (!_hasArea && !hasSkillFilter) 'Menampilkan semua pekerjaan',
+      if (_hasArea) (showAll ? 'Semua area' : 'Area: $area'),
+      if (hasSkillFilter && skillName != null)
+        (showAllSkills ? 'Semua keahlian' : 'Keahlian: $skillName'),
+    ].join(' · ');
+
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
       decoration: BoxDecoration(
@@ -318,7 +413,7 @@ class _AreaFilterBar extends StatelessWidget {
           const SizedBox(width: 6),
           Expanded(
             child: Text(
-              showAll ? 'Menampilkan semua pekerjaan' : 'Hanya area layananmu: $area',
+              info,
               style: const TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.brandDeep),
               overflow: TextOverflow.ellipsis,
@@ -329,10 +424,15 @@ class _AreaFilterBar extends StatelessWidget {
               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.inkSoft)),
         ]),
         const SizedBox(height: 8),
-        Row(children: [
-          _chip('Area saya', !showAll, () => onPick(false)),
-          const SizedBox(width: 8),
-          _chip('Lihat semua', showAll, () => onPick(true)),
+        Wrap(spacing: 8, runSpacing: 6, children: [
+          if (_hasArea) ...[
+            _chip('Area saya', !showAll, () => onPick(false)),
+            _chip('Lihat semua', showAll, () => onPick(true)),
+          ],
+          if (hasSkillFilter && onPickSkill != null) ...[
+            _chip('Keahlianku', !showAllSkills, () => onPickSkill!(false)),
+            _chip('Semua keahlian', showAllSkills, () => onPickSkill!(true)),
+          ],
         ]),
       ]),
     );
@@ -543,5 +643,79 @@ class _AssignedCard extends StatelessWidget {
         ]),
       ),
     );
+  }
+}
+
+/// Strip saldo yang tampil di bawah header tab Pekerjaan (teknisi):
+/// saldo aktif + statistik pendapatan/komisi — ketuk untuk buka layar
+/// Saldo lengkap dengan riwayat mutasi.
+class _BalanceStrip extends StatelessWidget {
+  final TechnicianBalanceSummary summary;
+  final VoidCallback onTap;
+
+  const _BalanceStrip({required this.summary, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final saldo = summary.balance;
+    final negative = saldo < 0;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.navy.withValues(alpha: 0.10),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: const BoxDecoration(color: AppColors.brandTint, shape: BoxShape.circle),
+            child: const Icon(Icons.account_balance_wallet_rounded, size: 20, color: AppColors.brandDeep),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Saldo Aktif',
+                  style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: AppColors.inkSoft)),
+              Text(
+                formatRupiah(saldo),
+                style: TextStyle(
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.w800,
+                  color: negative ? AppColors.coral : AppColors.navy,
+                ),
+              ),
+            ]),
+          ),
+          // Komisi terpotong & pendapatan kotor — sembunyi saat masih nol
+          // supaya teknisi baru tidak bingung dengan angka kosong.
+          if (summary.commissionTotal > 0 || summary.earnedTotal > 0) ...[
+            _stat(AppColors.navy, formatRupiah(summary.earnedTotal), 'Pendapatan'),
+            const SizedBox(width: 10),
+            _stat(AppColors.coral, formatRupiah(summary.commissionTotal), 'Komisi'),
+          ],
+          const SizedBox(width: 8),
+          const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.inkSoft),
+        ]),
+      ),
+    );
+  }
+
+  Widget _stat(Color color, String value, String label) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+      Text(value, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: color)),
+      const SizedBox(height: 1),
+      Text(label, style: const TextStyle(fontSize: 9.5, color: AppColors.inkSoft)),
+    ]);
   }
 }
