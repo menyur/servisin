@@ -31,6 +31,7 @@ import TechnicianBalancesTab from "@/components/TechnicianBalancesTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import JobReleasesAdminTab from "@/components/JobReleasesAdminTab";
+import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
 
@@ -55,6 +56,43 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   const [sortMode, setSortMode] = useState("newest"); // newest | oldest | upcoming
   const [historyMode, setHistoryMode] = useState("customer"); // customer | technician
   const [expandedId, setExpandedId] = useState(null);
+
+  // ===== Realtime panel admin (postgres_changes INSERT) =====
+  // Baris baru langsung masuk antrian tanpa refresh; event dari sesi
+  // browser ini sendiri dide-dup lewat pengecekan id (aksi admin sudah
+  // meng-update state lokal dulu).
+  const [lastLiveAt, setLastLiveAt] = useState(null);
+  const live = useAdminRealtime({
+    onNewBooking: (row) => {
+      if (!row?.id) return;
+      setBookings((bs) => (bs.some((b) => b.id === row.id) ? bs : [row, ...bs]));
+      setLastLiveAt(Date.now());
+    },
+    onNewReport: (row) => {
+      if (!row?.id) return;
+      setReports((rs) => (rs.some((r) => r.id === row.id) ? rs : [row, ...rs]));
+      setLastLiveAt(Date.now());
+    },
+  });
+  const liveAgo = useAgoLabel(lastLiveAt);
+  // Badge "+N baru" hanya ketika admin sedang DI LUAR tab antrian; baris
+  // tetap masuk state (list ter-update di background) — admin memutuskan
+  // kapan pindah, tidak dilompat paksa saat sedang mengedit.
+  const [newCount, setNewCount] = useState(0);
+  const lastSeenCount = useRef(0);
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  useEffect(() => {
+    const total = bookings.length + reports.length;
+    const delta = total - lastSeenCount.current;
+    lastSeenCount.current = total;
+    if (delta > 0 && tabRef.current !== "bookings" && tabRef.current !== "reports") {
+      setNewCount((n) => n + delta);
+    }
+  }, [bookings.length, reports.length]);
+  useEffect(() => {
+    if (tab === "bookings" || tab === "reports") setNewCount(0);
+  }, [tab]);
 
   const technicians = users.filter((u) => u.role === "technician" && u.approval_status === "approved");
   const pendingTechs = users.filter((u) => u.role === "technician" && u.approval_status === "pending");
@@ -202,9 +240,88 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
     }
   }
 
+  // ===== Ringkasan harian (agregat dari state tab — tanpa query baru) =====
+  // "Hari ini" mengikuti kalender WIB (UTC+7, tanpa DST) — bukan UTC —
+  // supaya kartu harian cocok dengan jadwal & kebiasaan admin Indonesia.
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+  const incomingToday = bookings.filter(
+    (b) =>
+      b.created_at &&
+      new Date(Date.parse(b.created_at) + 7 * 3600000).toISOString().slice(0, 10) === today
+  ).length;
+  const newReportsDash = reports.filter((r) => r.status === "open").length;
+  // Teknisi idle per area: approved, tidak sedang in_progress, hari ini (WIB)
+  // tidak punya tugas berjadwal — dikelompokkan menurut service_area.
+  const busyTechIds = new Set(
+    bookings
+      .filter((b) => b.status === "in_progress" || (b.technician_id && b.booking_date === today))
+    .map((b) => b.technician_id)
+  );
+  const idleTechs = technicians.filter((t) => !busyTechIds.has(t.id));
+  const idleByArea = idleTechs.reduce((acc, t) => {
+    const key = (t.service_area || "").trim() || "Tanpa area";
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+  const idleSummary = Object.entries(idleByArea)
+    .sort((a, b) => b[1] - a[1])
+    .map(([area, n]) => `${area} (${n})`)
+    .join(" · ") || "—";
+
   return (
     <div className="max-w-5xl mx-auto px-5 py-12">
-      <h1 className="font-display text-2xl text-navy mb-6">Panel Admin</h1>
+      {/* ===== Kartu ringkasan harian ===== */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <button
+          onClick={() => { setTab("bookings"); setBookingFilter("all"); }}
+          className="card !p-4 text-left hover:!border-brand transition-colors"
+        >
+          <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-wide">Pesanan masuk hari ini</p>
+          <p className="font-display text-2xl text-navy font-bold mt-1">{incomingToday}</p>
+        </button>
+        <button
+          onClick={() => { setTab("bookings"); setBookingFilter("unpaid"); }}
+          className={`card !p-4 text-left hover:!border-brand transition-colors ${unpaidCount ? "!border-amber ring-2 ring-amber/15" : ""}`}
+        >
+          <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-wide">Menunggu konfirmasi bayar</p>
+          <p className={`font-display text-2xl font-bold mt-1 ${unpaidCount ? "text-amber" : "text-navy"}`}>{unpaidCount}</p>
+        </button>
+        <button
+          onClick={() => setTab("tech-balances")}
+          className="card !p-4 text-left hover:!border-brand transition-colors"
+          title={idleSummary}
+        >
+          <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-wide">Teknisi idle</p>
+          <p className="font-display text-2xl text-mint font-bold mt-1">{idleTechs.length}</p>
+          <p className="text-[11px] text-ink-soft truncate" title={idleSummary}>per area: {idleSummary}</p>
+        </button>
+        <button
+          onClick={() => { setTab("reports"); }}
+          className={`card !p-4 text-left hover:!border-brand transition-colors ${newReportsDash ? "!border-coral/60 ring-2 ring-coral/15" : ""}`}
+        >
+          <p className="text-[11px] font-semibold text-ink-soft uppercase tracking-wide">Laporan baru</p>
+          <p className={`font-display text-2xl font-bold mt-1 ${newReportsDash ? "text-coral" : "text-navy"}`}>{newReportsDash}</p>
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
+        <h1 className="font-display text-2xl text-navy">Panel Admin</h1>
+        <div
+          className={`flex items-center gap-2 text-xs font-semibold rounded-full px-3 py-1.5 border ${
+            live
+              ? "text-mint border-mint/40 bg-mint/10"
+              : "text-ink-soft border-line bg-white"
+          }`}
+          title={live ? "Antrian Pesanan & Laporan ter-update otomatis" : "Koneksi realtime tidak tersambung — data disegarkan berkala"}
+        >
+          <span className={`inline-block w-2 h-2 rounded-full ${live ? "bg-mint animate-pulse" : "bg-ink-soft/50"}`} />
+          {live ? "Live" : "Offline"}
+          {live && liveAgo && <span className="text-ink-soft font-normal">· pembaruan {liveAgo}</span>}
+          {newCount > 0 && (
+            <span className="bg-navy text-white rounded-full px-2 py-0.5 text-[10px] font-bold">+{newCount} baru</span>
+          )}
+        </div>
+      </div>
 
       <div className="flex gap-2 mb-8 flex-wrap">
         <TabButton active={tab === "bookings"} onClick={() => setTab("bookings")} icon={ClipboardList} label={`Pesanan Masuk${unpaidCount ? ` (${unpaidCount} bayar)` : ""}`} />
@@ -402,11 +519,61 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   className="input !w-auto !py-1.5 text-sm"
                 >
                   <option value="">Belum ditugaskan</option>
-                  {technicians.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}{t.rating_avg ? ` — ★ ${t.rating_avg} (${t.rating_count})` : " (belum ada rating)"}
-                    </option>
-                  ))}
+                  {/* Kelompok sesuai kategori layanan pesanan — saran dari
+                      migrasi skill (profiles.skill = categories.id):
+                      kecocokan SKILL + AREA paling atas; admin tetap bisa
+                      memilih siapa pun (tidak ada yang disembunyikan). */}
+                  {(() => {
+                    const catId = b.services?.category_id || null;
+                    const addr = (b.address || "").toLowerCase();
+                    const areaOf = (t) => (t.service_area || "").trim().toLowerCase();
+                    const score = (t) => {
+                      let s = 0;
+                      if (!t.skill || !catId) s += 1; // tanpa data skill = netral, bukan minus
+                      else if (t.skill !== catId) s += 4; // keahlian tak cocok = paling bawah
+                      const area = areaOf(t);
+                      if (area && addr && addr.includes(area)) s -= 2; // area cocok = naik
+                      else if (area) s += 1;
+                      return s;
+                    };
+                    const label = (t) =>
+                      `${t.name}${t.skill && catId && t.skill !== catId ? " (beda keahlian)" : !t.skill ? " (tanpa data skill)" : ""}${t.rating_avg ? ` — ★ ${t.rating_avg} (${t.rating_count})` : " (belum ada rating)"}`;
+                    const sorted = technicians
+                      .filter((t) => t.id !== b.technician_id)
+                      .sort((a, c) => score(a) - score(c));
+                    if (!catId) {
+                      // Kategori layanan tidak diketahui: satu daftar tersortir
+                      // netral, tanpa header grup kosong.
+                      return sorted.map((t) => (
+                        <option key={t.id} value={t.id}>{label(t)}</option>
+                      ));
+                    }
+                    const matches = sorted.filter((t) => t.skill === catId);
+                    const others = sorted.filter((t) => t.skill !== catId);
+                    const matchLabel = (t) => {
+                      const area = areaOf(t);
+                      const areaOk = area && addr && addr.includes(area);
+                      return `${label(t)}${areaOk ? " — ✓ area" : ""}`;
+                    };
+                    return (
+                      <>
+                        {matches.length > 0 && (
+                          <optgroup label="Direkomendasikan (skill cocok)">
+                            {matches.map((t) => (
+                              <option key={t.id} value={t.id}>{matchLabel(t)}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {others.length > 0 && (
+                          <optgroup label={matches.length ? "Teknisi lain" : "Semua teknisi"}>
+                            {others.map((t) => (
+                              <option key={t.id} value={t.id}>{label(t)}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </>
+                    );
+                  })()}
                 </select>
                 {b.technician_id && ratingOf(b.technician_id) && (
                   <span className="text-xs text-amber font-semibold flex items-center gap-1" title="Rating rata-rata dari ulasan pelanggan">
