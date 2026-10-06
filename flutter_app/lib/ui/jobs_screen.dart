@@ -693,7 +693,8 @@ class _BalanceStrip extends StatelessWidget {
           if (summary.commissionTotal > 0 || summary.earnedTotal > 0) ...[
             _stat(AppColors.navy, formatRupiah(summary.earnedTotal), 'Pendapatan'),
             const SizedBox(width: 10),
-            _stat(AppColors.coral, formatRupiah(summary.commissionTotal), 'Komisi'),
+            // Label sama dengan layar Saldo: potongan riil = komisi + biaya app.
+            _stat(AppColors.coral, formatRupiah(summary.platformCutTotal), 'Komisi + biaya app'),
           ],
           const SizedBox(width: 8),
           const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.inkSoft),

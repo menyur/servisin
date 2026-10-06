@@ -340,7 +340,8 @@ class BalanceTransaction {
   final double? commissionAmount; // komisi terpotong (earning pesanan selesai)
   final String? note;
   final String? bookingCode; // join ke bookings(code) bila terpasang
-  final int? bookingTotalPrice; // join ke bookings(total_price) — dasar pendapatan kotor
+  final int? bookingTotalPrice; // join ke bookings(total_price) — nilai pekerjaan
+  final int? bookingAppFee; // join ke bookings(app_fee) — biaya app ikut dipotong dari saldo
   final DateTime createdAt;
 
   BalanceTransaction({
@@ -351,6 +352,7 @@ class BalanceTransaction {
     this.note,
     this.bookingCode,
     this.bookingTotalPrice,
+    this.bookingAppFee,
     required this.createdAt,
   });
 
@@ -364,6 +366,7 @@ class BalanceTransaction {
       note: m['note'] as String?,
       bookingCode: bk?['code'] as String?,
       bookingTotalPrice: (bk?['total_price'] as num?)?.toInt(),
+      bookingAppFee: (bk?['app_fee'] as num?)?.toInt(),
       createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ?? DateTime.now(),
     );
   }
@@ -390,9 +393,13 @@ class TechnicianBalanceSummary {
   /// (diambil dari booking tiap transaksi earning — bukan 2× komisi).
   final int earnedTotal;
 
-  /// Komisi platform yang benar-benar dipotong dari saldo
-  /// (Σ −amount pada baris earning — efek riil ke saldo).
+  /// Komisi platform (persen, kolom commission_amount) yang dipotong
+  /// dari saldo saat pesanan selesai.
   final int commissionTotal;
+
+  /// Total biaya aplikasi pesanan selesai — aturan platform: biaya app
+  /// pelanggan IKUT dipotong langsung dari saldo teknisi (bersama komisi).
+  final int appFeeTotal;
 
   /// Total setor yang disetujui admin.
   final int topupTotal;
@@ -412,11 +419,15 @@ class TechnicianBalanceSummary {
     required this.balance,
     this.earnedTotal = 0,
     this.commissionTotal = 0,
+    this.appFeeTotal = 0,
     this.topupTotal = 0,
     this.withdrawalTotal = 0,
     this.refundTotal = 0,
     this.expectedBalance = 0,
   });
+
+  /// Total potongan platform dari saldo = komisi + biaya aplikasi.
+  int get platformCutTotal => commissionTotal + appFeeTotal;
 
   /// Selisih saldo aktual vs ledger (≠ 0 = ada anomali data).
   int get mismatch => balance.round() - expectedBalance;
@@ -532,11 +543,11 @@ class Report {
 
 const appFee = 5000; // sama dengan APP_FEE di lib/pricing.js web
 const timeSlots = ['08:00-10:00', '10:00-12:00', '13:00-15:00', '15:00-17:00'];
+/// Metode pembayaran hanya 2 (pilihan admin): COD atau transfer manual ke
+/// rekening yang diinput admin (tabel app_settings, dibaca via Api.transferAccount).
 const paymentMethods = [
-  ('qris', 'QRIS', 'Scan & bayar lewat aplikasi apa saja'),
-  ('virtual_account', 'Transfer Bank (VA)', 'Virtual account bank pilihanmu'),
-  ('e_wallet', 'E-Wallet', 'GoPay, ShopeePay, dan lainnya'),
-  ('cod', 'Bayar di Tempat', 'Tunai saat teknisi datang'),
+  ('cod', 'Bayar di Tempat (COD)', 'Tunai saat teknisi datang'),
+  ('transfer', 'Transfer Bank', 'Transfer manual ke rekening resmi Fixify'),
 ];
 
 /// Label ramah kode keahlian teknisi ('ac' → 'Service AC'; id sama dengan
@@ -550,10 +561,15 @@ String skillLabel(String? code) => switch (code) {
       _ => code ?? '',
     };
 
-/// Label ramah kode metode bayar ('qris' → 'QRIS'); null bila tak dikenal.
+/// Label ramah kode metode bayar ('transfer' → 'Transfer Bank'; kode lama
+/// qris/virtual_account/e_wallet ditangani fallback di bawah). Null bila tak dikenal.
 String? paymentMethodLabel(String code) {
   for (final m in paymentMethods) {
     if (m.$1 == code) return m.$2;
   }
-  return null;
+  // Pesanan historis sebelum penyederhanaan metode bayar.
+  return switch (code) {
+    'qris' || 'virtual_account' || 'e_wallet' => 'Transfer Bank',
+    _ => null,
+  };
 }

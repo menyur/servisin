@@ -132,7 +132,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
 
   /// Bottom sheet pilih metode bayar → simpan lewat Api.updatePaymentMethod.
   Future<void> _editPaymentMethod() async {
-    String selected = _b.paymentMethod ?? 'qris';
+    String selected = _b.paymentMethod ?? 'transfer';
     final ok = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -208,7 +208,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Komisi platform terpotong:', style: TextStyle(fontSize: 13, color: AppColors.inkSoft)),
+            const Text('Komisi + biaya app terpotong:', style: TextStyle(fontSize: 13, color: AppColors.inkSoft)),
             const SizedBox(height: 4),
             Text(
               '- ${formatRupiah(commission)}',
@@ -241,6 +241,8 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     final bytes = await Api.pickAndCompressImage();
     if (bytes == null) return;
     if (!mounted) return;
+    final account = await Api.transferAccount();
+    if (!mounted) return;
     final amountCtrl = TextEditingController(text: '${_b.totalPrice}');
     final ok = await showModalBottomSheet<bool>(
       context: context,
@@ -255,6 +257,23 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             const SizedBox(height: 4),
             const Text('Foto terpilih ✓ — masukkan jumlah yang ditransfer',
                 style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+            if (account != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(color: AppColors.brandTint, borderRadius: BorderRadius.circular(10)),
+                child: Text.rich(
+                  TextSpan(style: const TextStyle(fontSize: 12.5, color: AppColors.navy), children: [
+                    const WidgetSpan(child: Icon(Icons.account_balance_rounded, size: 15, color: AppColors.brandDeep)),
+                    const TextSpan(text: ' '),
+                    TextSpan(text: 'Transfer ke ${account['bank']} '),
+                    TextSpan(text: account['number'], style: const TextStyle(fontWeight: FontWeight.w800)),
+                    TextSpan(text: ' a.n. ${account['name']}'),
+                  ]),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             TextField(
               controller: amountCtrl,

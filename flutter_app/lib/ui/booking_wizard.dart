@@ -36,7 +36,19 @@ class _BookingWizardState extends State<BookingWizard> {
   ServiceOption? _option;
   String? _date;
   String? _time;
-  String _payment = 'qris';
+  String _payment = 'transfer';
+
+  /// Rekening resmi dari app_settings (diisi admin); null = belum diisi.
+  Map<String, String>? _transferAccount;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_service.hasOptions) _option = _service.options.first;
+    Api.transferAccount().then((a) {
+      if (mounted) setState(() => _transferAccount = a);
+    });
+  }
   Voucher? _voucher;
   List<Voucher>? _vouchers;
   Uint8ListWrap? _attachment;
@@ -51,12 +63,6 @@ class _BookingWizardState extends State<BookingWizard> {
   int get _unitPrice => _option?.price ?? _service.basePrice;
   int get _discount => _voucher?.amount ?? 0;
   int get _total => (_unitPrice + appFee - _discount).clamp(0, 1 << 31);
-
-  @override
-  void initState() {
-    super.initState();
-    if (_service.hasOptions) _option = _service.options.first;
-  }
 
   Future<void> _pickVoucher() async {
     _vouchers ??= await Api.fetchMyVouchers().catchError((_) => <Voucher>[]);
@@ -332,6 +338,10 @@ class _BookingWizardState extends State<BookingWizard> {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       const Text('Metode pembayaran', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
       const SizedBox(height: 8),
+      if (_payment == 'transfer') ...[
+        _TransferAccountBox(account: _transferAccount),
+        const SizedBox(height: 8),
+      ],
       RadioGroup<String>(
         groupValue: _payment,
         onChanged: (v) => setState(() => _payment = v!),
@@ -373,6 +383,44 @@ class _BookingWizardState extends State<BookingWizard> {
     if (picked != null) {
       setState(() => _date = picked.toIso8601String().substring(0, 10));
     }
+  }
+}
+
+/// Kotak info rekening transfer resmi (dari app_settings, diisi admin).
+/// Ditempel di wizard sebelum daftar metode saat "Transfer Bank" dipilih.
+class _TransferAccountBox extends StatelessWidget {
+  final Map<String, String>? account;
+  const _TransferAccountBox({required this.account});
+
+  @override
+  Widget build(BuildContext context) {
+    final a = account;
+    final filled = a != null && a['name']!.isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.brandTint,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.account_balance_rounded, size: 18, color: AppColors.brandDeep),
+        const SizedBox(width: 8),
+        Expanded(
+          child: filled
+              ? Text.rich(
+                  TextSpan(style: const TextStyle(fontSize: 12.5, color: AppColors.navy), children: [
+                    TextSpan(text: 'Transfer ke ${a['bank']} '),
+                    TextSpan(
+                        text: a['number'],
+                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                    TextSpan(text: ' a.n. ${a['name']}'),
+                  ]),
+                )
+              : const Text('Transfer manual ke rekening resmi Fixify — bukti transfer dikirim setelah pesanan dibuat.',
+                  style: TextStyle(fontSize: 12.5, color: AppColors.navy)),
+        ),
+      ]),
+    );
   }
 }
 
@@ -519,9 +567,7 @@ class _PaymentCard extends StatelessWidget {
   });
 
   IconData get _icon => switch (value) {
-        'qris' => Icons.qr_code_2_rounded,
-        'virtual_account' => Icons.account_balance_rounded,
-        'e_wallet' => Icons.account_balance_wallet_rounded,
+        'transfer' => Icons.account_balance_rounded,
         _ => Icons.payments_rounded,
       };
 

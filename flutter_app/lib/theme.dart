@@ -21,6 +21,12 @@ class AppColors {
   static const coralTint = Color(0xFFFBEAE5);
   static const line = Color(0xFFD7E7F0);
   static const paper = Color(0xFFFBFDFE);
+
+  /// Varian TERANG mint/coral khusus teks nominal di atas gradien/kartu
+  /// gelap (kartu saldo): versi normal gelap dan kehilangan kontras di
+  /// atas biru brand — mint bahkan menyatu dengan latar.
+  static const mintBright = Color(0xFF7DEBB4);
+  static const coralBright = Color(0xFFFFB3A3);
 }
 
 class AppTheme {

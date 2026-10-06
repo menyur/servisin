@@ -74,54 +74,60 @@ void main() {
   });
 
   group('Agregat summary from transactions (Api.summarizeBalance)', () {
-    test('earning amount negatif: pendapatan = total booking − appFee, komisi = debit', () {
+    test('earning: pendapatan = nilai pekerjaan; potongan = komisi + biaya app', () {
       final tx = [
-        // booking total 125.000 → base = 125.000 − 5.000 = 120.000;
-        // komisi 10% = 12.000 → amount = −12.000 (debit saldo, bentuk riil)
-        _tx(type: 'earning', amount: -12000, commission: 12000, bookingTotal: 125000),
+        // booking total 125.000, fee 5.000; komisi 10% × (125.000 − 5.000)
+        // = 12.000 → potongan saldo = 12.000 + 5.000 = 17.000 (aturan baru)
+        _tx(type: 'earning', amount: -17000, commission: 12000, bookingTotal: 125000, appFee: 5000),
         _tx(type: 'topup', amount: 200000),
       ];
       final s = Api.summarizeBalance(null, tx);
-      expect(s.earnedTotal, 120000); // bukan 2× komisi (bug lama)
+      expect(s.earnedTotal, 125000); // nilai pekerjaan penuh
       expect(s.commissionTotal, 12000);
+      expect(s.appFeeTotal, 5000);
+      expect(s.platformCutTotal, 17000); // komisi + biaya app
       expect(s.topupTotal, 200000);
-      // expected = 200.000 − 12.000 = 188.000
-      expect(s.expectedBalance, 188000);
+      // expected = 200.000 − 12.000 − 5.000 = 183.000
+      expect(s.expectedBalance, 183000);
     });
 
-    test('earning backfill ber-amount POSITIF tidak dihitung komisi (anomali → selisih)', () {
+    test('earning backfill ber-amount POSITIF tidak dihitung komisi/fee (anomali → selisih)', () {
       final tx = [
         _tx(type: 'topup', amount: 50000),
         // backfill salah tanda: amount +6.250, komisi 6.250
-        _tx(type: 'earning', amount: 6250, commission: 6250, bookingTotal: 67500),
+        _tx(type: 'earning', amount: 6250, commission: 6250, bookingTotal: 67500, appFee: 5000),
       ];
       final s = Api.summarizeBalance(null, tx);
       expect(s.commissionTotal, 0); // tidak pernah benar-benar dipotong
-      expect(s.earnedTotal, 62500); // base dari booking tetap dihitung
+      expect(s.appFeeTotal, 0); // fee juga belum pernah dipotong
+      expect(s.earnedTotal, 67500); // nilai pekerjaan tetap dihitung
       expect(s.topupTotal, 50000);
       // ledger: 50.000 + 6.250 = 56.250, tapi expected 50.000 → selisih 6.250
       expect(s.expectedBalance, 50000);
     });
 
-    test('penarikan & refund ikut dalam expectedBalance', () {
+    test('penarikan (amount negatif, bentuk riil DB) & refund ikut expectedBalance', () {
       final tx = [
         _tx(type: 'topup', amount: 100000),
-        _tx(type: 'earning', amount: -8000, commission: 8000, bookingTotal: 130000),
-        _tx(type: 'withdrawal', amount: 30000),
+        _tx(type: 'earning', amount: -13000, commission: 8000, bookingTotal: 130000, appFee: 5000),
+        // Baris withdrawal di DB ber-amount NEGATIF (debit saldo).
+        _tx(type: 'withdrawal', amount: -30000),
         _tx(type: 'refund', amount: 12000),
       ];
       final s = Api.summarizeBalance(null, tx);
-      // 100.000 − 8.000 − 30.000 + 12.000 = 74.000
-      expect(s.expectedBalance, 74000);
-      expect(s.withdrawalTotal, 30000);
+      // 100.000 − 8.000 − 5.000 − 30.000 + 12.000 = 69.000
+      expect(s.expectedBalance, 69000);
+      expect(s.withdrawalTotal, 30000); // tampil positif sebagai "Ditarik"
       expect(s.refundTotal, 12000);
     });
 
-    test('earning tanpa booking: fallback = komisi', () {
-      final tx = [_tx(type: 'earning', amount: -9000, commission: 9000)];
+    test('earning tanpa booking: komisi fallback |amount|, pendapatan 0 (row riil selalu ber-booking)', () {
+      final tx = [_tx(type: 'earning', amount: -9000, commission: null)];
       final s = Api.summarizeBalance(null, tx);
-      expect(s.earnedTotal, 9000);
+      expect(s.earnedTotal, 0);
       expect(s.commissionTotal, 9000);
+      expect(s.appFeeTotal, 0);
+      expect(s.expectedBalance, -9000);
     });
 
     test('mismatch = saldo aktual − expectedBalance', () {
@@ -157,6 +163,7 @@ BalanceTransaction _tx({
   double amount = 1000,
   double? commission,
   int? bookingTotal,
+  int? appFee,
 }) =>
     BalanceTransaction(
       id: 'tx',
@@ -165,6 +172,7 @@ BalanceTransaction _tx({
       commissionAmount: commission,
       bookingCode: bookingTotal != null ? 'SV-X' : null,
       bookingTotalPrice: bookingTotal,
+      bookingAppFee: appFee,
       createdAt: DateTime(2026, 1, 15),
     );
 

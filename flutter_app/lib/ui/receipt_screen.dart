@@ -26,11 +26,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 
   Booking get booking => widget.booking;
 
+  // Nilai lama (qris/virtual_account/e_wallet) ditampilkan sebagai Transfer
+  // Bank karena metode bayar kini hanya COD & transfer manual.
   String get _paymentLabel => switch (booking.paymentMethod) {
-        'qris' => 'QRIS',
-        'virtual_account' => 'Transfer Bank (VA)',
-        'e_wallet' => 'E-Wallet',
-        'cod' => 'Bayar di Tempat',
+        'cod' => 'Bayar di Tempat (COD)',
+        'transfer' => 'Transfer Bank',
+        'qris' || 'virtual_account' || 'e_wallet' => 'Transfer Bank',
         _ => booking.paymentMethod ?? '—',
       };
 

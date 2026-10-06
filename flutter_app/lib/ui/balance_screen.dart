@@ -147,10 +147,14 @@ class _SummaryCard extends StatelessWidget {
     final saldo = s.balance;
     final negative = saldo < 0;
 
+    // Nominal pakai varian TERANG agar terbaca di atas gradien biru
+    // (mint/coral gelap kontrasnya rendah, brand malah menyatu).
+    // Aturan platform: potongan dari saldo = komisi + biaya aplikasi.
     final stats = <(String, int, Color)>[
-      ('Pendapatan', s.earnedTotal, AppColors.mint),
-      ('Komisi', s.commissionTotal, AppColors.coral),
-      ('Setoran', s.topupTotal, AppColors.brand),
+      ('Pendapatan', s.earnedTotal, AppColors.mintBright),
+      ('Komisi + biaya app', s.platformCutTotal, AppColors.coralBright),
+      ('Setoran', s.topupTotal, AppColors.brandLight),
+      ('Ditarik', s.withdrawalTotal, Colors.white),
     ];
 
     return Container(
@@ -195,36 +199,33 @@ class _SummaryCard extends StatelessWidget {
                 style: TextStyle(fontSize: 11.5, color: Colors.white.withValues(alpha: 0.85))),
           ),
         const SizedBox(height: 15),
-        Row(children: [
-          for (final st in stats)
-            Expanded(
-              child: Opacity(
-                // Statistik yang masih kosong tetap ditampilkan lebih redup
-                // agar layout kartu konsisten sejak teknisi baru.
-                opacity: st.$2 == 0 ? 0.62 : 1,
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(formatRupiah(st.$2),
-                      overflow: TextOverflow.ellipsis,
-                      maxLines: 1,
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w800, color: st.$3)),
-                  const SizedBox(height: 2),
-                  Text(
-                    st.$1,
-                    style: TextStyle(
-                        fontSize: 10.5,
-                        color: Colors.white.withValues(alpha: 0.85)),
-                  ),
-                ]),
-              ),
-            ),
-        ]),
-        if (s.withdrawalTotal > 0)
+        // Statistik 2×2 — semua selalu tampil (redup saat 0), termasuk
+        // total saldo yang berhasil ditarik teknisi.
+        for (final row in [stats.sublist(0, 2), stats.sublist(2)])
           Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: Text(
-                'Penarikan disetujui: ${formatRupiah(s.withdrawalTotal)} (sudah ditarik dari saldo)',
-                style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.85))),
+            padding: const EdgeInsets.only(bottom: 10),
+            child: Row(children: [
+              for (final st in row)
+                Expanded(
+                  child: Opacity(
+                    opacity: st.$2 == 0 ? 0.62 : 1,
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(formatRupiah(st.$2),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w800, color: st.$3)),
+                      const SizedBox(height: 2),
+                      Text(st.$1,
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                          style: TextStyle(
+                              fontSize: 10.5,
+                              color: Colors.white.withValues(alpha: 0.85))),
+                    ]),
+                  ),
+                ),
+            ]),
           ),
         const SizedBox(height: 12),
         Container(
@@ -244,7 +245,7 @@ class _SummaryCard extends StatelessWidget {
             Expanded(
               child: s.mismatch == 0
                   ? const Text(
-                      'Saldo = Setoran − Komisi − Penarikan + Refund. Pendapatan = nilai pekerjaan selesai (belum otomatis masuk saldo).',
+                      'Saldo = Setoran − Komisi − Biaya app − Penarikan + Refund. Pendapatan = nilai pekerjaan selesai (belum otomatis masuk saldo).',
                       style: TextStyle(fontSize: 10.5, color: Colors.white))
                   : Text(
                       'Ada selisih ${formatRupiah(s.mismatch.abs())} antara saldo dan riwayat mutasi — minta admin koreksi lewat penyesuaian saldo.',
@@ -275,7 +276,7 @@ class _MoneyFlowCard extends StatelessWidget {
       (
         Icons.work_history_rounded,
         AppColors.mint,
-        'Pesanan selesai → komisi platform dipotong dari saldo. Nilai pekerjaan tampil sebagai Pendapatan (kotor), tidak langsung masuk saldo.',
+        'Pesanan selesai → komisi (sesuai rate admin) + biaya aplikasi pelanggan dipotong dari saldo. Nilai pekerjaan tampil sebagai Pendapatan.',
       ),
       (
         Icons.south_west_rounded,
@@ -374,6 +375,8 @@ class _TxTile extends StatelessWidget {
                   '#${tx.bookingCode}',
                 if (tx.commissionAmount != null && tx.commissionAmount! > 0)
                   'komisi ${formatRupiah(tx.commissionAmount!)}',
+                if (tx.type == 'earning' && (tx.bookingAppFee ?? 0) > 0)
+                  'biaya app ${formatRupiah(tx.bookingAppFee!)}',
                 if (tx.note?.isNotEmpty == true && tx.bookingCode?.isNotEmpty != true)
                   tx.note!,
               ].whereType<String>().join(' · '),

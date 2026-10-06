@@ -1,7 +1,7 @@
 name: fixify_app
 description: "Fixify — Aplikasi pelanggan: booking teknisi terpercaya datang ke lokasi."
 publish_to: "none"
-version: 1.2.3+6
+version: 1.2.3+7
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -15,7 +15,6 @@ dependencies:
   intl: ^0.19.0                   # format rupiah & tanggal id-ID
   http: ^1.2.0                    # panggil API web (notifikasi admin saat lepas tugas)
   shared_preferences: ^2.3.2      # cache preferensi notifikasi lokal
-  cupertino_icons: ^1.0.8
   path_provider: 2.1.4
   share_plus: ^11.0.0  # v7 hardcode compileSdk 33 -> gagal AAR metadata di CI
 

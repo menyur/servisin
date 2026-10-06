@@ -20,6 +20,28 @@ class Api {
   Api._();
   static final SupabaseClient db = Supabase.instance.client;
 
+  /// Rekening transfer resmi dari tabel app_settings (diisi admin di panel
+  /// web). Gagal (tabel belum ada / offline) → null, UI menampilkan teks
+  /// generik. Dipakai wizard booking & dialog kirim bukti.
+  static Future<Map<String, String>?> transferAccount() async {
+    try {
+      final row = await db.from('app_settings').select(
+        'transfer_bank_name, transfer_account_number, transfer_account_name',
+      ).eq('id', 1).maybeSingle();
+      if (row == null) return null;
+      final bank = (row['transfer_bank_name'] as String?)?.trim() ?? '';
+      final number = (row['transfer_account_number'] as String?)?.trim() ?? '';
+      if (bank.isEmpty || number.isEmpty) return null;
+      return {
+        'bank': bank,
+        'number': number,
+        'name': ((row['transfer_account_name'] as String?) ?? '').trim(),
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ============ auth ============
 
   static Session? get session => db.auth.currentSession;
@@ -303,8 +325,7 @@ class Api {
   /// Beri tahu server web (pemegang kunci push & email) bahwa tugas ini baru
   /// saja dilepas — server memverifikasi token, lalu meneruskan notifikasi
   /// berisi kode pesanan + alasan ke semua admin.
-  /// Best-effort: gagal jaringan/env diabaikan; admin tetap bisa melihat
-  /// lewat tab "Pelepasan Tugas" di panel admin.
+  /// Best-effort: gagal jaringan/env diabaikan.
   static Future<void> notifyAdminOfRelease(String bookingId) async {
     try {
       final token = db.auth.currentSession?.accessToken;
@@ -394,7 +415,9 @@ class Api {
       'p_address': address,
       if (notes != null && notes.isNotEmpty) 'p_notes': notes,
       if (attachmentUrl != null) 'p_attachment': attachmentUrl,
-      'p_payment': paymentMethod,
+      'p_payment': paymentMethod == 'qris' || paymentMethod == 'virtual_account' || paymentMethod == 'e_wallet'
+          ? 'transfer'
+          : paymentMethod,
       if (voucherId != null) 'p_voucher_id': voucherId,
     });
     final map = res is List ? (res.first as Map<String, dynamic>) : (res as Map<String, dynamic>);
@@ -551,50 +574,58 @@ class Api {
 
   /// Hitung summary dari profil + transaksi (dipakai dua fungsi di atas).
   ///
-  /// Definisi (model TOP-UP):
-  /// * Pendapatan kotor = total harga pesanan − biaya aplikasi (appFee)
-  ///   — dari booking tiap earning, BUKAN 2× komisi (bug lama:
-  ///   amount earning = −komisi, jadi komisi + |amount| menghitung
-  ///   komisi dua kali).
-  /// * Komisi terpotong = Σ −amount baris earning (efek riil ke saldo;
-  ///   baris backfill lama ber-amount POSITIF tidak dihitung komisi —
-  ///   itu anomali yang dikoreksi fix-earning-amount-sign.sql dan
-  ///   tampak sebagai selisih di expectedBalance).
-  /// * expectedBalance = setoran − komisi − penarikan + refund; kalau
-  ///   ≠ profiles.balance, ada perubahan saldo tanpa baris mutasi.
+  /// Definisi (model TOP-UP, aturan potongan = komisi + biaya aplikasi):
+  /// * Pendapatan = nilai pekerjaan selesai (total harga dari booking tiap
+  ///   earning, BUKAN 2× komisi — bug lama yang sudah dikoreksi).
+  /// * Komisi = Σ commission_amount baris earning (persen sesuai rate
+  ///   admin); fallback Σ |amount| bila kolom kosong (row lama).
+  /// * Biaya app = Σ bookings.app_fee tiap earning ber-amount negatif —
+  ///   aturan platform: biaya aplikasi pelanggan IKUT dipotong langsung
+  ///   dari saldo teknisi, bersama komisi.
+  /// * expectedBalance = setoran − komisi − biaya app − penarikan + refund;
+  ///   kalau ≠ profiles.balance ada anomali — termasuk state SEBELUM
+  ///   migrate-earning-fee.sql dijalankan (fee belum dipotong DB →
+  ///   selisih = total biaya app).
   static TechnicianBalanceSummary summarizeBalance(
       Profile? p, List<BalanceTransaction> tx) {
     var earned = 0;
     var commission = 0;
+    var appFee = 0;
     var topup = 0;
     var withdrawal = 0;
     var refund = 0;
     for (final t in tx) {
       switch (t.type) {
         case 'earning':
-          if (t.amount < 0) commission += (-t.amount).round();
-          // Pendapatan kotor: total harga − biaya aplikasi.
+          // Nilai pekerjaan (kotor) — fee tak lagi dikurangi di sini
+          // karena fee kini item potongan tersendiri dari saldo.
           final total = t.bookingTotalPrice;
-          if (total != null) {
-            final base = total - appFee;
-            if (base > 0) earned += base;
-          } else {
-            // Tanpa booking (kasus langka): komisi sebagai perkiraan.
-            earned += (t.commissionAmount ?? 0).round();
+          if (total != null && total > 0) earned += total;
+          if (t.amount < 0) {
+            // Komisi murni dari kolom; fallback |amount| untuk row lama
+            // yang kolomnya kosong.
+            commission += (t.commissionAmount ?? (-t.amount)).round();
+            // Biaya app ikut dipotong dari saldo (aturan platform).
+            final fee = t.bookingAppFee ?? 0;
+            if (fee > 0) appFee += fee;
           }
         case 'topup':
           topup += t.amount.round();
         case 'withdrawal':
-          withdrawal += t.amount.round();
+          // DB menyimpan amount penarikan NEGATIF (debit saldo) —
+          // ambil mutlaknya agar total "Ditarik" positif dan rumus
+          // expected tidak dobel tanda (akar selisih 300rb yang lama).
+          withdrawal += (-t.amount).round();
         case 'refund':
           refund += t.amount.round();
       }
     }
-    final expected = topup - commission - withdrawal + refund;
+    final expected = topup - commission - appFee - withdrawal + refund;
     return TechnicianBalanceSummary(
       balance: p?.balance ?? 0,
       earnedTotal: earned,
       commissionTotal: commission,
+      appFeeTotal: appFee,
       topupTotal: topup,
       withdrawalTotal: withdrawal,
       refundTotal: refund,
@@ -614,11 +645,13 @@ class Api {
   }
 
   /// Riwayat mutasi saldo (100 terbaru, terbaru dulu).
-  /// join bookings(code) supaya transaksi komisi menampilkan kode pesanan.
+  /// join bookings supaya transaksi komisi menampilkan kode pesanan,
+  /// nilai pekerjaan, dan biaya aplikasi yang ikut dipotong dari saldo.
   static Future<List<BalanceTransaction>> fetchMyBalanceTransactions({int limit = 100}) async {
     final rows = await db
         .from('balance_transactions')
-        .select('id, type, amount, commission_amount, note, created_at, bookings(code, total_price)')
+        .select(
+            'id, type, amount, commission_amount, note, created_at, bookings(code, total_price, app_fee)')
         .order('created_at', ascending: false)
         .limit(limit);
     return rows.map<BalanceTransaction>((m) => BalanceTransaction.fromMap(m)).toList();

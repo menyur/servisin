@@ -49,10 +49,13 @@ void main() {
 
   group('Label metode bayar (tombol edit metode bayar)', () {
     test('kode yang dikenal → label ramah', () {
-      expect(paymentMethodLabel('qris'), 'QRIS');
-      expect(paymentMethodLabel('virtual_account'), 'Transfer Bank (VA)');
-      expect(paymentMethodLabel('e_wallet'), 'E-Wallet');
-      expect(paymentMethodLabel('cod'), 'Bayar di Tempat');
+      // Metode baru: hanya cod & transfer.
+      expect(paymentMethodLabel('cod'), 'Bayar di Tempat (COD)');
+      expect(paymentMethodLabel('transfer'), 'Transfer Bank');
+      // Pesanan historis (pra-penyederhanaan) ditampilkan sebagai Transfer Bank.
+      expect(paymentMethodLabel('qris'), 'Transfer Bank');
+      expect(paymentMethodLabel('virtual_account'), 'Transfer Bank');
+      expect(paymentMethodLabel('e_wallet'), 'Transfer Bank');
     });
 
     test('kode tak dikenal → null (UI fallback ke kode mentah)', () {
