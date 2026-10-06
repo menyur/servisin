@@ -5,7 +5,7 @@
  * jadi tidak butuh sesi user.
  */
 import { createAdminClient } from "@/lib/supabase/admin";
-import { computeSplit } from "@/lib/pricing";
+import { computeSplit, commissionBase } from "@/lib/pricing";
 
 function csvEscape(value) {
   const s = value === null || value === undefined ? "" : String(value);
@@ -33,7 +33,7 @@ export function buildMonthlyReportCsv(rows, { year, month }) {
     "Bersih Teknisi",
   ];
 
-  const payLabelMap = { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" };
+  const payLabelMap = { cod: "Bayar di Tempat (COD)", transfer: "Transfer Bank", qris: "Transfer Bank", virtual_account: "Transfer Bank", e_wallet: "Transfer Bank" };
   const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-");
 
   let totalRevenue = 0;
@@ -42,7 +42,9 @@ export function buildMonthlyReportCsv(rows, { year, month }) {
 
   for (const b of rows) {
     const total = Number(b.total_price) || 0;
-    const split = computeSplit(total, b.technician?.commission_rate ?? undefined);
+    // Dasar komisi = total − biaya aplikasi — sama dengan yang benar-benar
+    // dipotong sistem (debitTechnicianCommission / RPC set_job_status).
+    const split = computeSplit(commissionBase(total), b.technician?.commission_rate ?? undefined);
     totalRevenue += total;
     totalCommission += split.commission;
 

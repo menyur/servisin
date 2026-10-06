@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
-import { computeSplit } from "@/lib/pricing";
+import { computeSplit, commissionBase } from "@/lib/pricing";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/push";
 import { ICONS } from "@/lib/icons";
@@ -13,9 +13,12 @@ import { revalidatePath } from "next/cache";
 // Nama ikon yang boleh dipakai layanan baru (validasi server-side).
 const ICON_NAMES = Object.keys(ICONS);
 
-/** Label metode pembayaran untuk email & UI. */
+/**
+ * Label metode pembayaran untuk email & UI. Metode kini hanya cod/transfer;
+ * kode lama (qris/virtual_account/e_wallet) ditampilkan sebagai Transfer Bank.
+ */
 function payLabel(m) {
-  return { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" }[m] || m || "-";
+  return { cod: "Bayar di Tempat (COD)", transfer: "Transfer Bank", qris: "Transfer Bank", virtual_account: "Transfer Bank", e_wallet: "Transfer Bank" }[m] || m || "-";
 }
 
 /**
@@ -872,7 +875,7 @@ export async function getCompletedBookingsCsvAdmin() {
     "Bersih Teknisi",
   ];
 
-  const payLabelMap = { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" };
+  const payLabelMap = { cod: "Bayar di Tempat (COD)", transfer: "Transfer Bank", qris: "Transfer Bank", virtual_account: "Transfer Bank", e_wallet: "Transfer Bank" };
   const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-");
 
   let totalRevenue = 0;
@@ -884,7 +887,8 @@ export async function getCompletedBookingsCsvAdmin() {
     const discount = Number(b.discount_amount) || 0;
     const fee = Number(b.app_fee) || 0;
     const total = Number(b.total_price) || 0;
-    const split = computeSplit(total, b.technician?.commission_rate ?? undefined);
+    // Dasar komisi = total − biaya app — paritas dengan debitTechnicianCommission.
+    const split = computeSplit(commissionBase(total), b.technician?.commission_rate ?? undefined);
     totalRevenue += total;
     totalCommission += split.commission;
 
@@ -1306,7 +1310,9 @@ export async function rejectWithdrawalAdmin(withdrawalId, reason) {
  * Ringkasan keuangan platform untuk admin:
  * - totalBalance   : jumlah saldo aktif semua teknisi (kewajiban platform)
  * - totalTopup     : semua setor disetujui (uang masuk)
- * - totalCommission: komisi platform dari pesanan selesai (pendapatan)
+ * - totalCommission: komisi platform dari pesanan selesai
+ * - totalAppFee    : biaya app per pesanan selesai (|amount| − komisi)
+ * - platformRevenue: pendapatan platform riil (komisi + biaya app)
  * - totalWithdrawn : penarikan terkirim (uang keluar)
  * - pendingHold    : dana tertahan di pengajuan penarikan pending
  * - month          : versi bulan berjalan
@@ -1342,16 +1348,38 @@ export async function getFinanceSummaryAdmin() {
   const approvedWd = wds.filter((w) => w.status === "approved");
   const pendingWd = wds.filter((w) => w.status === "pending");
 
+  // Potongan tiap baris earning (amount < 0) = komisi + biaya app.
+  // Komisi dari commission_amount (fallback: seluruh |amount| bila null,
+  // konsisten dengan summarizeBalance di Flutter); sisanya biaya app.
+  const commissionOf = (t) => {
+    const amt = Math.abs(Number(t.amount) || 0);
+    return t.commission_amount == null ? amt : Number(t.commission_amount) || 0;
+  };
+  const appFeeOf = (t) => {
+    if (!(Number(t.amount) < 0)) return 0;
+    return Math.max(0, Math.abs(Number(t.amount) || 0) - commissionOf(t));
+  };
+
+  const totalCommission = sum(earnings, commissionOf);
+  const totalAppFee = sum(earnings, appFeeOf);
+  const monthEarnings = earnings.filter(inMonth);
+  const monthCommission = sum(monthEarnings, commissionOf);
+  const monthAppFee = sum(monthEarnings, appFeeOf);
+
   const summary = {
     totalBalance: sum(balances, (b) => b.balance),
     totalTopup: sum(topups, (t) => t.amount),
-    totalCommission: sum(earnings, (t) => t.commission_amount),
+    totalCommission,
+    totalAppFee,
+    platformRevenue: totalCommission + totalAppFee,
     totalWithdrawn: sum(approvedWd, (w) => w.amount),
     pendingHold: sum(pendingWd, (w) => w.amount),
     techCount: balances.length,
     month: {
       topup: sum(topups.filter(inMonth), (t) => t.amount),
-      commission: sum(earnings.filter(inMonth), (t) => t.commission_amount),
+      commission: monthCommission,
+      appFee: monthAppFee,
+      platformRevenue: monthCommission + monthAppFee,
       withdrawn: sum(approvedWd.filter(inMonth), (w) => w.amount),
     },
   };
@@ -1549,33 +1577,58 @@ export async function getAllBannersAdmin() {
   return { banners: data || [] };
 }
 
-/* ========================= PELEPASAN TUGAS (JOB RELEASES) ========================= */
+/* ========================= PENGATURAN REKENING TRANSFER ========================= */
 
 /**
- * Daftar pelepasan tugas oleh teknisi beserta alasannya (tabel audit
- * job_releases, dibuat oleh supabase/migrate-job-release.sql).
- * Dibaca lewat sesi admin — policy RLS "admin can read job releases"
- * yang mengizinkan, tidak butuh service-role key.
+ * Rekening transfer resmi (tabel app_settings, diisi supabase/migrate-transfer-settings.sql).
+ * Dibaca oleh wizard booking web & aplikasi Flutter via RLS "authenticated can read".
  */
-export async function getJobReleasesAdmin() {
+export async function getPaymentSettingsAdmin() {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
   if (!admin) return { error: "Akses ditolak." };
 
   const { data, error } = await supabase
-    .from("job_releases")
-    .select(
-      "*, booking:bookings(code, status, address, booking_date, booking_time, services(name)), " +
-        "technician:profiles!job_releases_technician_id_fkey(id, name, email, avatar_url)"
-    )
-    .order("created_at", { ascending: false })
-    .limit(200);
+    .from("app_settings")
+    .select("transfer_bank_name, transfer_account_number, transfer_account_name")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error && /relation|does not exist|Could not find the table|schema cache/i.test(error.message || "")) {
+    return { error: "Tabel app_settings belum ada — jalankan supabase/migrate-transfer-settings.sql di SQL Editor dulu." };
+  }
+  if (error) return { error: error.message };
+  return {
+    bank: (data?.transfer_bank_name || "").trim(),
+    number: (data?.transfer_account_number || "").trim(),
+    name: (data?.transfer_account_name || "").trim(),
+  };
+}
 
+/** Simpan rekening transfer (dipanggil tab "Rekening Transfer" panel admin). */
+export async function savePaymentSettingsAdmin({ bank, number, name }) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!bank?.trim() || !number?.trim()) {
+    return { error: "Nama bank dan nomor rekening wajib diisi." };
+  }
+
+  const { error } = await supabase
+    .from("app_settings")
+    .update({
+      transfer_bank_name: bank.trim(),
+      transfer_account_number: number.trim(),
+      transfer_account_name: (name || "").trim(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", 1);
   if (error) {
-    if (/relation|does not exist/i.test(error.message || "")) {
-      return { error: "Tabel job_releases belum ada — jalankan supabase/migrate-job-release.sql dulu." };
+    if (/relation|does not exist|Could not find the table|schema cache/i.test(error.message || "")) {
+      return { error: "Tabel app_settings belum ada — jalankan supabase/migrate-transfer-settings.sql di SQL Editor dulu." };
     }
     return { error: error.message };
   }
-  return { releases: data || [] };
+
+  revalidatePath("/admin");
+  return { ok: true };
 }

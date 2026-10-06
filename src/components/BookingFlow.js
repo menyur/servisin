@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ChevronLeft, Paperclip, QrCode, Wallet, Landmark, Banknote, Ticket } from "lucide-react";
+import { CheckCircle2, ChevronLeft, Paperclip, Landmark, Banknote, Ticket } from "lucide-react";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { calculateTotal, formatRupiah } from "@/lib/pricing";
-import { createBooking, confirmSimulatedPayment } from "@/app/actions/bookings";
+import { createBooking, getTransferAccount } from "@/app/actions/bookings";
 import { getMyVouchers } from "@/app/actions/reviews";
 import { createClient } from "@/lib/supabase/client";
 import { optimizeImage } from "@/components/ServiceImageUpload";
@@ -13,11 +13,11 @@ import Link from "next/link";
 
 const STEP_LABELS = ["Layanan", "Detail & Jadwal", "Rincian Biaya", "Pembayaran"];
 
+// Metode pembayaran hanya 2: COD & transfer manual ke rekening resmi
+// (diinput admin di tabel app_settings, dibaca lewat getTransferAccount).
 const PAYMENT_METHODS = [
-  { id: "qris", label: "QRIS", icon: QrCode, desc: "Scan & bayar lewat aplikasi apa saja" },
-  { id: "virtual_account", label: "Transfer Bank (VA)", icon: Landmark, desc: "Virtual account bank pilihanmu" },
-  { id: "e_wallet", label: "E-Wallet", icon: Wallet, desc: "GoPay, ShopeePay, dan lainnya" },
-  { id: "cod", label: "Cash on Delivery", icon: Banknote, desc: "Bayar tunai saat teknisi datang" },
+  { id: "cod", label: "Bayar di Tempat (COD)", icon: Banknote, desc: "Bayar tunai saat teknisi datang" },
+  { id: "transfer", label: "Transfer Bank", icon: Landmark, desc: "Transfer manual ke rekening resmi Fixify" },
 ];
 
 export default function BookingFlow({ categories, services, serviceOptions = [], preselectedServiceId }) {
@@ -26,6 +26,7 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   const [optionId, setOptionId] = useState("");
   const [form, setForm] = useState({ notes: "", address: "", date: "", time: "", attachment: null });
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [transferAccount, setTransferAccount] = useState(null); // { bank, number, name } dari app_settings
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const [result, setResult] = useState(null); // { booking, service, payment }
@@ -62,6 +63,12 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
     getMyVouchers().then(({ vouchers: data }) => {
       if (alive && data) setVouchers(data);
     });
+    // Rekening transfer resmi (diisi admin) — gagal/tabel belum ada → null.
+    getTransferAccount()
+      .then((a) => {
+        if (alive) setTransferAccount(a);
+      })
+      .catch(() => {});
     return () => {
       alive = false;
     };
@@ -137,15 +144,8 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
     goStep(5);
   }
 
-  async function handleConfirmPaid() {
-    setSubmitting(true);
-    await confirmSimulatedPayment(result.booking.id);
-    setSubmitting(false);
-    setResult((r) => ({ ...r, booking: { ...r.booking, status: "paid" } }));
-  }
-
   if (step === 5 && result) {
-    return <ConfirmationScreen result={result} paymentMethod={paymentMethod} onConfirmPaid={handleConfirmPaid} submitting={submitting} />;
+    return <ConfirmationScreen result={result} paymentMethod={paymentMethod} transferAccount={transferAccount} />;
   }
 
   return (
@@ -211,6 +211,7 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
         <StepPayment
           paymentMethod={paymentMethod}
           setPaymentMethod={setPaymentMethod}
+          transferAccount={transferAccount}
           totals={totals}
           appliedVoucher={appliedVoucher}
           errors={errors}
@@ -409,11 +410,12 @@ function Row({ label, value, bold, mint }) {
 }
 
 /* ---------- STEP 4 ---------- */
-function StepPayment({ paymentMethod, setPaymentMethod, totals, appliedVoucher, errors, submitting, onBack, onSubmit }) {
+function StepPayment({ paymentMethod, setPaymentMethod, transferAccount, totals, appliedVoucher, errors, submitting, onBack, onSubmit }) {
+  const account = paymentMethod === "transfer" ? transferAccount : null;
   return (
     <div>
       <h3 className="font-display font-semibold text-navy mb-4">Pilih metode pembayaran</h3>
-      <div className="grid sm:grid-cols-2 gap-3 mb-6">
+      <div className="grid sm:grid-cols-2 gap-3 mb-3">
         {PAYMENT_METHODS.map((m) => {
           const Icon = m.icon;
           return (
@@ -433,6 +435,21 @@ function StepPayment({ paymentMethod, setPaymentMethod, totals, appliedVoucher, 
           );
         })}
       </div>
+
+      {account && (
+        <div className="bg-brand-tint rounded-xl p-4 mb-6">
+          <p className="text-xs font-semibold text-brand-deep mb-1">Rekening tujuan transfer</p>
+          {account.bank && account.number ? (
+            <p className="text-sm text-navy font-semibold">
+              {account.bank} {account.number}
+              {account.name ? <span className="font-normal text-ink-soft"> a.n. {account.name}</span> : null}
+            </p>
+          ) : (
+            <p className="text-xs text-ink-soft">Nomor rekening resmi belum diatur oleh admin — hubungi admin sebelum transfer.</p>
+          )}
+          <p className="text-xs text-ink-soft mt-1">Setelah transfer, kirim bukti pembayaran dari halaman Pesanan untuk diverifikasi admin.</p>
+        </div>
+      )}
 
       <div className="card mb-6 flex justify-between items-center">
         <span className="text-sm text-ink-soft">
@@ -460,7 +477,7 @@ function StepPayment({ paymentMethod, setPaymentMethod, totals, appliedVoucher, 
 }
 
 /* ---------- STEP 5 ---------- */
-function ConfirmationScreen({ result, paymentMethod, onConfirmPaid, submitting }) {
+function ConfirmationScreen({ result, paymentMethod, transferAccount }) {
   const { booking, payment } = result;
   const isPaid = booking.status === "paid";
 
@@ -477,20 +494,19 @@ function ConfirmationScreen({ result, paymentMethod, onConfirmPaid, submitting }
 
         {!isPaid && paymentMethod !== "cod" && (
           <div className="bg-brand-tint rounded-xl p-4 text-left mb-6">
-            <p className="text-xs font-semibold text-brand-deep mb-2">
-              {payment.mode === "simulation" ? "Simulasi pembayaran (payment gateway belum dikonfigurasi)" : "Instruksi pembayaran"}
-            </p>
-            {payment.qrisPayload && <p className="text-xs text-ink-soft break-all">Kode QRIS: {payment.qrisPayload}</p>}
-            {payment.vaNumber && <p className="text-xs text-ink-soft">No. VA {payment.bank}: <strong>{payment.vaNumber}</strong></p>}
-            {payment.deeplink && <p className="text-xs text-ink-soft break-all">Buka e-wallet: {payment.deeplink}</p>}
-            {payment.redirectUrl && (
-              <a href={payment.redirectUrl} target="_blank" rel="noreferrer" className="text-xs text-brand font-semibold underline">
-                Buka halaman pembayaran Midtrans
-              </a>
+            <p className="text-xs font-semibold text-brand-deep mb-2">Instruksi pembayaran</p>
+            {transferAccount?.bank && transferAccount?.number ? (
+              <p className="text-xs text-ink-soft">
+                Transfer tepat <strong className="text-navy">{formatRupiah(booking.total_price)}</strong> ke{" "}
+                <strong className="text-navy">
+                  {transferAccount.bank} {transferAccount.number}
+                </strong>
+                {transferAccount.name ? <span> a.n. {transferAccount.name}</span> : null}
+              </p>
+            ) : (
+              <p className="text-xs text-ink-soft">Transfer manual ke rekening resmi Fixify — nomor rekening belum diatur admin, hubungi admin dulu.</p>
             )}
-            <button className="btn-primary w-full mt-4 !py-2 text-sm" onClick={onConfirmPaid} disabled={submitting}>
-              {submitting ? "Memproses..." : "Saya sudah membayar"}
-            </button>
+            <p className="text-xs text-ink-soft mt-2">Lalu kirim bukti transfer dari halaman <strong>Pesanan</strong> untuk diverifikasi admin.</p>
           </div>
         )}
 

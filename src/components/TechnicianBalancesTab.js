@@ -155,7 +155,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
         </table>
       </div>
       <p className="text-xs text-ink-soft mt-3">
-        "Siap ditarik" = saldo aktif dikurangi penarikan yang masih diproses. Komisi dipotong otomatis saat pesanan ditandai selesai.
+        "Siap ditarik" = saldo aktif dikurangi penarikan yang masih diproses. Komisi + biaya aplikasi dipotong otomatis saat pesanan ditandai selesai.
       </p>
     </div>
   );

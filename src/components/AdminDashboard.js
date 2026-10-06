@@ -21,16 +21,16 @@ import {
   getMonthlyReportDownloadUrlAdmin,
   getKtpSignedUrlAdmin,
 } from "@/app/actions/admin";
-import { formatRupiah, computeSplit } from "@/lib/pricing";
+import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, Link2Off, PieChart } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
 import TechnicianBalancesTab from "@/components/TechnicianBalancesTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
-import JobReleasesAdminTab from "@/components/JobReleasesAdminTab";
+import PaymentSettingsTab from "@/components/PaymentSettingsTab";
 import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
@@ -44,7 +44,7 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialReleases = [], releasesError = null, initialTechnicianBalances = [], technicianBalancesError = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null }) {
   const [tab, setTab] = useState("bookings");
   const [bookings, setBookings] = useState(initialBookings);
   const [services, setServices] = useState(initialServices);
@@ -334,7 +334,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
-        <TabButton active={tab === "releases"} onClick={() => setTab("releases")} icon={Link2Off} label={`Pelepasan Tugas${initialReleases.length ? ` (${initialReleases.length})` : ""}`} />
+        <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
       </div>
 
       {tab === "bookings" && (
@@ -703,7 +703,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
 
       {tab === "banners" && <BannerAdminTab banners={initialBanners} bannersError={bannersError} />}
 
-      {tab === "releases" && <JobReleasesAdminTab releases={initialReleases} releasesError={releasesError} />}
+      {tab === "pay-settings" && <PaymentSettingsTab />}
     </div>
   );
 }
@@ -1049,8 +1049,11 @@ function HistoryView({ bookings, mode, expandedId, onToggle, users = [] }) {
       const completed = sorted.filter((b) => b.status === "completed");
       const cancelled = sorted.filter((b) => b.status === "cancelled");
       const totalSpent = completed.reduce((sum, b) => sum + Number(b.total_price || 0), 0);
-      // komisi memakai rate per teknisi dari profiles (fallback 10%)
-      const split = computeSplit(totalSpent, commissionById.get(id) ?? 10);
+      // Komisi dihitung PER PESANAN dengan dasar total − biaya app (aturan
+      // pemotongan saldo riil), lalu dijumlahkan — bukan di-split dari
+      // agregat (fee hanya boleh dikurangi sekali per pesanan).
+      const rate = commissionById.get(id) ?? 10;
+      const splits = completed.map((b) => computeSplit(commissionBase(b.total_price), rate));
       const last = sorted[0];
       return {
         id,
@@ -1065,9 +1068,9 @@ function HistoryView({ bookings, mode, expandedId, onToggle, users = [] }) {
         completed: completed.length,
         cancelled: cancelled.length,
         totalSpent,
-        commission: split.commission,
-        net: split.net,
-        commissionRate: commissionById.get(id) ?? 10,
+        commission: splits.reduce((s, x) => s + x.commission, 0),
+        net: splits.reduce((s, x) => s + x.net, 0),
+        commissionRate: rate,
         lastDate: last?.created_at,
       };
     })

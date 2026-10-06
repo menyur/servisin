@@ -33,7 +33,7 @@ async function sendMail({ to, subject, html, attachments }) {
 }
 
 function paymentLabel(m) {
-  return { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" }[m] || m || "-";
+  return { cod: "Bayar di Tempat (COD)", transfer: "Transfer Bank", qris: "Transfer Bank", virtual_account: "Transfer Bank", e_wallet: "Transfer Bank" }[m] || m || "-";
 }
 
 function detailRow(label, value) {
@@ -344,8 +344,7 @@ export async function sendAdminJobReleaseEmail(adminEmails, release) {
       <p style="margin:16px 0;background:#FFF4EC;border-left:4px solid #FF7001;padding:10px 14px;border-radius:6px;">
         <strong>Alasan teknisi:</strong><br/>${escHtml(release.reason).replace(/\n/g, "<br />")}
       </p>
-      <p>Pesanan otomatis kembali ke daftar &quot;Tersedia&quot; dan bisa diambil teknisi lain.
-      Riwayat lengkap ada di panel Admin → tab &quot;Pelepasan Tugas&quot;.</p>
+      <p>Pesanan otomatis kembali ke daftar &quot;Tersedia&quot; dan bisa diambil teknisi lain.</p>
     `
   );
 

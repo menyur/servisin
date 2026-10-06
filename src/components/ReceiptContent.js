@@ -108,7 +108,7 @@ export default function ReceiptContent({ booking, customerName, customerPhone })
 }
 
 function paymentLabel(m) {
-  return { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" }[m] || m || "-";
+  return { cod: "Bayar di Tempat (COD)", transfer: "Transfer Bank", qris: "Transfer Bank", virtual_account: "Transfer Bank", e_wallet: "Transfer Bank" }[m] || m || "-";
 }
 
 function isPaid(b) {

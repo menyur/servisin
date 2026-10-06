@@ -215,26 +215,6 @@ async function finishBookingCreation(supabase, { booking, service, profile, user
   return { booking, service, payment, voucherWarning: voucherWarning || null };
 }
 
-export async function confirmSimulatedPayment(bookingId) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Belum login." };
-
-  const { data, error } = await supabase
-    .from("bookings")
-    .update({ status: "paid" })
-    .eq("id", bookingId)
-    .eq("user_id", user.id)
-    .select("*")
-    .single();
-
-  if (error) return { error: error.message };
-  revalidatePath("/dashboard");
-  return { booking: data };
-}
-
 /**
  * Simpan bukti pembayaran pelanggan: foto bukti transfer + jumlah dibayar.
  * Dipanggil dari PaymentConfirmModal setelah gambar diunggah ke Storage.
@@ -435,4 +415,25 @@ export async function downloadMyReceiptPdf(bookingId) {
   });
 
   return { base64: pdfBuffer.toString("base64"), filename: `struk-${b.code}.pdf` };
+}
+
+/**
+ * Rekening transfer resmi dari tabel app_settings (diisi admin di panel).
+ * Dipakai BookingFlow (step pembayaran + layar konfirmasi) dan modal bukti.
+ * Tabel belum ada / belum diisi → field kosong, UI menampilkan teks generik.
+ */
+export async function getTransferAccount() {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("transfer_bank_name, transfer_account_number, transfer_account_name")
+    .eq("id", 1)
+    .maybeSingle();
+  // error (tabel belum ada dsb.) → field kosong; UI menampilkan teks generik.
+  if (error || !data) return { bank: "", number: "", name: "" };
+  return {
+    bank: (data.transfer_bank_name || "").trim(),
+    number: (data.transfer_account_number || "").trim(),
+    name: (data.transfer_account_name || "").trim(),
+  };
 }

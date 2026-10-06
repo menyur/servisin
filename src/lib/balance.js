@@ -3,21 +3,15 @@
  *
  * Alur dana:
  *   - Saldo HANYA bertambah saat admin menyetujui bukti setor
- *     (transfer bank/ tunai teknisi) atau menambah manual.
- *   - Saat pesanan selesai, komisi platform (commission_rate
- *     teknisi, default 10%) Dipotong dari saldo. Net pendapatan
- *     tetap dicatat sebagai transaksi 'earning' untuk transparansi,
- *     tapi yang mengurangi saldo adalah komisinya.
+ *     (transfer bank/ tunai teknisi) atau menambah manual.  *   - Saat pesanan selesai, KOMISI platform (commission_rate
+ *     teknisi, default 10%) + BIAYA APLIKASI pelanggan (app_fee,
+ *     Rp 5.000) Dipotong langsung dari saldo. Net pendapatan
+ *     tetap dicatat sebagai transaksi 'earning' untuk transparansi.
  *
  * Semua fungsi aman-dipanggil (tidak melempar) dan idempoten.
  * Kolom/tabel yang belum dimigrasi di-skip tanpa menggagalkan alur.
  */
-import { computeSplit, APP_FEE } from "@/lib/pricing";
-
-/** Nilai pekerjaan yang jadi dasar komisi: total bayar dikurangi biaya aplikasi. */
-function commissionBase(totalPrice) {
-  return Math.max(0, Number(totalPrice) - APP_FEE);
-}
+import { computeSplit, commissionBase } from "@/lib/pricing";
 
 /**
  * Potong komisi pesanan selesai dari saldo teknisi.
@@ -28,7 +22,7 @@ export async function debitTechnicianCommission(supabase, bookingId) {
   try {
     const { data: b } = await supabase
       .from("bookings")
-      .select("id, code, status, technician_id, total_price")
+      .select("id, code, status, technician_id, total_price, app_fee")
       .eq("id", bookingId)
       .maybeSingle();
     if (!b || !b.technician_id || b.status !== "completed") return { ok: false, skipped: true };
@@ -52,15 +46,19 @@ export async function debitTechnicianCommission(supabase, bookingId) {
 
     const gross = commissionBase(b.total_price);
     const split = computeSplit(gross, Number(tech.commission_rate ?? 10));
+    // Aturan platform: potongan saldo = komisi + biaya aplikasi pelanggan.
+    const fee = Math.max(0, Number(b.app_fee ?? 0));
+    const totalCut = split.commission + fee;
 
-    // Catat transaksi komisi (amount negatif = saldo berkurang)
+    // Catat transaksi (amount negatif = saldo berkurang).
+    // commission_amount = komisi murni (persen); fee tersimpan di booking.
     const { error: txErr } = await supabase.from("balance_transactions").insert({
       technician_id: b.technician_id,
       booking_id: bookingId,
       type: "earning",
-      amount: -split.commission, // saldo dipotong sebesar komisi
+      amount: -totalCut, // saldo dipotong komisi + biaya app
       commission_amount: split.commission,
-      note: `Komisi ${Number(tech.commission_rate ?? 10)}% pesanan ${b.code || ""} selesai`.trim(),
+      note: `Komisi ${Number(tech.commission_rate ?? 10)}% + biaya app pesanan ${b.code || ""} selesai`.trim(),
     });
     if (txErr) {
       if (/relation|does not exist|permission|duplicate key/i.test(txErr.message || "")) {
@@ -71,7 +69,7 @@ export async function debitTechnicianCommission(supabase, bookingId) {
     }
 
     // Kurangi saldo profil (boleh negatif sementara — teknisi setor untuk menutup)
-    const newBalance = Number(tech.balance || 0) - split.commission;
+    const newBalance = Number(tech.balance || 0) - totalCut;
     const { error: updErr } = await supabase
       .from("profiles")
       .update({ balance: newBalance })
@@ -80,7 +78,7 @@ export async function debitTechnicianCommission(supabase, bookingId) {
       return { ok: false, error: updErr.message };
     }
 
-    return { ok: true, commission: split.commission, balance: newBalance };
+    return { ok: true, commission: totalCut, balance: newBalance };
   } catch (e) {
     return { ok: false, error: e?.message };
   }

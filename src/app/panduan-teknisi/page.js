@@ -14,7 +14,7 @@ import {
   Wrench,
   AlertTriangle,
 } from "lucide-react";
-import { computeSplit, formatRupiah, DEFAULT_COMMISSION_RATE } from "@/lib/pricing";
+import { computeSplit, commissionBase, formatRupiah, DEFAULT_COMMISSION_RATE, APP_FEE } from "@/lib/pricing";
 
 export const metadata = {
   title: "Panduan Teknisi — Fixify",
@@ -136,7 +136,7 @@ const FAQ = [
   },
   {
     q: "Bagaimana cara kerja komisi?",
-    a: `Dari setiap pekerjaan selesai, platform memotong komisi (default ${DEFAULT_COMMISSION_RATE}%, bisa berbeda per teknisi — ditentukan admin). Sisanya adalah pendapatan bersihmu, terlihat di tab Laporan. Contoh: pekerjaan ${formatRupiah(100000)} dengan komisi ${DEFAULT_COMMISSION_RATE}% → bersih ${formatRupiah(computeSplit(100000).net)}.`,
+    a: `Dari setiap pekerjaan selesai, platform memotong komisi (default ${DEFAULT_COMMISSION_RATE}%, bisa berbeda per teknisi — ditentukan admin, dihitung dari nilai pekerjaan setelah biaya aplikasi) plus biaya aplikasi ${formatRupiah(APP_FEE)} — keduanya langsung dari saldo. Sisanya adalah pendapatanmu, terlihat di tab Laporan. Contoh: pekerjaan ${formatRupiah(100000)} dengan komisi ${DEFAULT_COMMISSION_RATE}% → terpotong ${formatRupiah(computeSplit(commissionBase(100000)).commission + APP_FEE)} (komisi + biaya app), bersih ${formatRupiah(computeSplit(commissionBase(100000)).net)}.`,
   },
   {
     q: "Apakah pelanggan bisa melihat ulasan untuk saya?",

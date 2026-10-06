@@ -5,6 +5,15 @@ export const APP_FEE = 5000;
 export const DEFAULT_COMMISSION_RATE = 10;
 
 /**
+ * Nilai pekerjaan yang jadi DASAR komisi: total bayar dikurangi biaya
+ * aplikasi — SATU SUMBER untuk web, RPC DB, dan aplikasi agar angka
+ * komisi di laporan selalu sama dengan yang benar-benar dipotong.
+ */
+export function commissionBase(totalPrice) {
+  return Math.max(0, Number(totalPrice) - APP_FEE);
+}
+
+/**
  * Pecah nilai pekerjaan menjadi komisi platform & pendapatan bersih teknisi.
  * rate: persen (mis. 10 = 10%).
  */

@@ -74,7 +74,7 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
             </p>
             <p className="font-display text-3xl font-bold mt-1.5">{formatRupiah(balance)}</p>
             <p className="text-xs text-white/60 mt-1">
-              Komisi {commissionRate}% otomatis dipotong dari saldo saat pesanan selesai.
+              Komisi {commissionRate}% + biaya aplikasi otomatis dipotong dari saldo saat pesanan selesai.
             </p>
           </div>
           <div className="text-right space-y-1.5">

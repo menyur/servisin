@@ -20,9 +20,13 @@ export default function FinanceSummary({ summary }) {
       cls: "text-mint",
     },
     {
-      label: "Komisi Platform",
-      value: summary.totalCommission,
-      sub: summary.month.commission > 0 ? `Bulan ini: ${formatRupiah(summary.month.commission)}` : null,
+      label: "Pendapatan Platform",
+      value: summary.platformRevenue ?? (summary.totalCommission || 0) + (summary.totalAppFee || 0),
+      sub:
+        `Komisi ${formatRupiah(summary.totalCommission || 0)} · Biaya app ${formatRupiah(summary.totalAppFee || 0)}` +
+        (summary.month.platformRevenue > 0
+          ? ` · Bulan ini: ${formatRupiah(summary.month.platformRevenue)}`
+          : ""),
       icon: Landmark,
       cls: "text-brand",
     },

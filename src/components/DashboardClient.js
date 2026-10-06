@@ -237,7 +237,8 @@ export default function DashboardClient({ initialBookings, customerName, custome
 }
 
 function paymentLabel(m) {
-  return { qris: "QRIS", virtual_account: "Virtual Account", e_wallet: "E-Wallet", cod: "Cash on Delivery" }[m] || m;
+  // Metode bayar kini hanya cod/transfer; kode lama (qris/va/e-wallet) ditampilkan sebagai Transfer Bank.
+  return { cod: "Bayar di Tempat (COD)", transfer: "Transfer Bank", qris: "Transfer Bank", virtual_account: "Transfer Bank", e_wallet: "Transfer Bank" }[m] || m;
 }
 
 function payPaid(b) {

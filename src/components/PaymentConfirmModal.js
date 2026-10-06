@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { submitPaymentProof, resetPaymentRejection } from "@/app/actions/bookings";
+import { submitPaymentProof, resetPaymentRejection, getTransferAccount } from "@/app/actions/bookings";
 import { formatRupiah } from "@/lib/pricing";
 import { createClient } from "@/lib/supabase/client";
 import { optimizeImage } from "@/components/ServiceImageUpload";
@@ -22,6 +22,7 @@ export default function PaymentConfirmModal({ booking, onClose, onSubmitted }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [resubmit, setResubmit] = useState(false); // true bila mengganti bukti yang ditolak
+  const [account, setAccount] = useState(null); // rekening resmi dari app_settings
 
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -32,6 +33,19 @@ export default function PaymentConfirmModal({ booking, onClose, onSubmitted }) {
       document.body.style.overflow = "";
     };
   }, [onClose]);
+
+  // Tampilkan rekening resmi (diisi admin) agar pelanggan transfer ke tempat yang benar.
+  useEffect(() => {
+    let alive = true;
+    getTransferAccount()
+      .then((a) => {
+        if (alive) setAccount(a);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   function pickFile(e) {
     const f = e.target.files?.[0];
@@ -160,6 +174,12 @@ export default function PaymentConfirmModal({ booking, onClose, onSubmitted }) {
               <p className="text-ink-soft mt-0.5">
                 Tagihan: <span className="font-semibold text-navy">{formatRupiah(booking.total_price)}</span>
               </p>
+              {account?.bank && account?.number && (
+                <p className="text-ink-soft mt-0.5">
+                  Transfer ke: <span className="font-semibold text-navy">{account.bank} {account.number}</span>
+                  {account.name ? <span> a.n. {account.name}</span> : null}
+                </p>
+              )}
             </div>
 
             {/* jumlah pembayaran */}

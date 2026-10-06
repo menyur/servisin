@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { formatRupiah, computeSplit } from "@/lib/pricing";
+import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
 import { StatusPill } from "@/components/StatusPipeline";
 import { Calendar, TrendingUp, CheckCircle2, XCircle, Package, ChevronDown, FileBarChart, Banknote } from "lucide-react";
 
@@ -60,7 +60,9 @@ export default function OrderReport({ bookings, role = "customer", commissionRat
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }, [filtered]);
 
-  // rincian pendapatan per bulan (6 bulan terakhir) — hanya mode teknisi
+  // rincian pendapatan per bulan (6 bulan terakhir) — hanya mode teknisi.
+  // Komisi dihitung PER PESANAN (dasar = total − biaya app, sama dengan
+  // pemotongan saldo riil), lalu dijumlahkan per bulan.
   const monthlyEarnings = useMemo(() => {
     if (!isTech) return [];
     const map = new Map(); // key: "YYYY-MM"
@@ -69,15 +71,18 @@ export default function OrderReport({ bookings, role = "customer", commissionRat
       const d = new Date(b.booking_date || b.created_at);
       if (Number.isNaN(d.getTime())) continue;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const entry = map.get(key) || { key, count: 0, value: 0 };
+      const split = computeSplit(commissionBase(b.total_price), commissionRate);
+      const entry = map.get(key) || { key, count: 0, value: 0, commission: 0, net: 0 };
       entry.count += 1;
       entry.value += Number(b.total_price) || 0;
+      entry.commission += split.commission;
+      entry.net += split.net;
       map.set(key, entry);
     }
     return [...map.values()]
       .sort((a, b) => (a.key < b.key ? 1 : -1))
       .slice(0, 6)
-      .map((m) => ({ ...m, split: computeSplit(m.value, commissionRate) }));
+      .map((m) => ({ ...m, split: { gross: m.value, commission: m.commission, net: m.net } }));
   }, [bookings, isTech, commissionRate]);
 
   const maxCat = byCategory.length ? byCategory[0][1] : 1;
