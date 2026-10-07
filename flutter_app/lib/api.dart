@@ -104,6 +104,40 @@ class Api {
 
   static Future<void> signOut() => db.auth.signOut();
 
+  // ============ push FCM (Android) ============
+
+  /// Daftarkan token FCM perangkat ini ke tabel fcm_tokens agar server
+  /// bisa mengirim push (tugas baru, status pesanan) walau app tertutup.
+  /// on-conflict token → baris diambil alih user sekarang (pindah akun
+  /// di perangkat sama). Dipanggil pasca-login & tiap app start.
+  static Future<void> registerFcmToken(String token) async {
+    final uid = session?.user.id;
+    if (uid == null || token.isEmpty) return;
+    try {
+      await db.from('fcm_tokens').upsert(
+        {
+          'user_id': uid,
+          'token': token,
+          'platform': 'android',
+          'user_agent': 'flutter-app',
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        },
+        onConflict: 'token',
+      );
+    } catch (_) {
+      // tabel belum ada / offline — push saja yang tidak aktif, app tetap normal
+    }
+  }
+
+  /// Hapus token perangkat ini saat logout agar push berhenti ke
+  /// perangkat ini (kecuali diambil alih user lain yang login berikutnya).
+  static Future<void> unregisterFcmToken(String token) async {
+    if (token.isEmpty) return;
+    try {
+      await db.from('fcm_tokens').delete().eq('token', token);
+    } catch (_) {}
+  }
+
   /// Profil user saat ini (row di tabel profiles).
   static Future<Profile?> myProfile() async {
     final uid = db.auth.currentUser?.id;

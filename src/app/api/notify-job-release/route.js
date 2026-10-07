@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendPushToUser } from "@/lib/push";
+import { sendPushToUser } from "@/lib/notify";
 import { sendAdminJobReleaseEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";

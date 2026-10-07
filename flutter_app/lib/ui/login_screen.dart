@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
+import '../push_service.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
@@ -30,6 +31,8 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
     try {
       await Api.signIn(email, pass);
+      // Ikat token FCM perangkat ini ke user baru (push tugas baru/status).
+      await PushService.onLoggedIn();
       if (!mounted) return;
       Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
     } on AuthException catch (e) {

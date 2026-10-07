@@ -1,7 +1,7 @@
 name: fixify_app
 description: "Fixify — Aplikasi pelanggan: booking teknisi terpercaya datang ke lokasi."
 publish_to: "none"
-version: 1.2.3+7
+version: 1.2.3+8
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -10,6 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
   supabase_flutter: ^2.5.0        # auth + database + storage
+  firebase_core: ^4.2.0           # inisialisasi Firebase (wajib untuk FCM)
+  firebase_messaging: ^16.0.3     # push notification Android (tugas baru, status pesanan)
   image_picker: ^1.1.2            # pilih foto (bukti bayar, lampiran keluhan)
   flutter_image_compress: ^2.3.0  # resize+compress sebelum upload (paritas dgn web)
   intl: ^0.19.0                   # format rupiah & tanggal id-ID

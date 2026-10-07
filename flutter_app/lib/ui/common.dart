@@ -359,6 +359,10 @@ class _StaggerInState extends State<StaggerIn> with SingleTickerProviderStateMix
 /// tab Profil) untuk pindah tab tanpa pushNamed.
 final ValueNotifier<int> mainTabIndex = ValueNotifier<int>(0);
 
+/// GlobalKey navigator — dipakai PushService (FCM) menampilkan SnackBar
+/// notifikasi foreground dari luar widget tree biasa.
+final navigatorKey = GlobalKey<NavigatorState>();
+
 /// Tick realtime perubahan status pesanan. MainShell berlangganan Supabase
 /// Realtime (Api.subscribeBookingUpdates) sekali untuk seluruh aplikasi,
 /// lalu menyiarkan event ke sini. Layar yang menampilkan pesanan (Pesanan,

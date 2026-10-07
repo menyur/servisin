@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../api.dart';
 import '../models.dart';
+import '../push_service.dart';
 import '../theme.dart';
 import 'common.dart';
 import 'auth_widgets.dart';
@@ -127,6 +128,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
     if (ok == true) {
+      // Lepas ikatan token FCM dulu agar push berhenti ke perangkat ini.
+      await PushService.onLoggedOut();
       await Api.signOut();
       if (!mounted) return;
       Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);

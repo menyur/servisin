@@ -19,6 +19,8 @@ import 'ui/splash_screen.dart';
 import 'ui/common.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'push_service.dart';
+
 import 'web_error_probe.dart';
 
 int _errCount = 0;
@@ -58,6 +60,9 @@ Future<void> main() async {
     url: AppConfig.supabaseUrl,
     publishableKey: AppConfig.supabaseAnonKey,
   );
+  // Push FCM (Android): init Firebase + izin notifikasi + pendaftaran token.
+  // No-op di web/iOS; kegagalan (service tidak ada) tidak menghentikan app.
+  await PushService.init();
   // Onboarding hanya sekali: bila belum pernah diselesaikan, mulai dari
   // '/onboarding'; selain itu langsung '/' atau '/login' sesuai sesi.
   final prefs = await SharedPreferences.getInstance();
@@ -77,6 +82,7 @@ class FixifyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Fixify',
       debugShowCheckedModeBanner: false,
+      navigatorKey: navigatorKey,
       theme: AppTheme.light,
       initialRoute: '/splash',
       routes: {

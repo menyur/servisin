@@ -6,7 +6,7 @@ import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmai
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
 import { computeSplit, commissionBase } from "@/lib/pricing";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
-import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/push";
+import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
 

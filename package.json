@@ -15,6 +15,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
+    "firebase-admin": "^14.5.0",
     "lucide-react": "^0.454.0",
     "next": "^16.3.5",
     "pdfkit": "^0.20.2",
