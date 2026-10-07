@@ -2,7 +2,7 @@
 // 1) App shell (halaman) → network-first dengan fallback offline.html
 // 2) Aset statis (_next/static, ikon, font) → cache-first (ubah hash tiap build)
 // 3) Supabase/API → TIDAK di-cache (data harus selalu segar)
-const VERSION = "fixify-v1";
+const VERSION = "fixify-v2";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const OFFLINE_URL = "/offline.html";
@@ -91,6 +91,14 @@ self.addEventListener("fetch", (event) => {
   }
   // Request lintas-origin ke Supabase — biarkan lewat tanpa cache
   if (url.origin !== self.location.origin && /supabase\.(co|in)/.test(url.hostname)) {
+    return;
+  }
+
+  // Server lokal (mode dev): SELALU jaringan murni tanpa cache. Chunk dev
+  // bernama stabil (bukan hash konten), jadi cache mana pun (SW maupun HTTP
+  // immutable) membuat PWA dev menampilkan kode lama setelah kode diedit.
+  if (/^(localhost|127\.0\.0\.1|\[::1\])$/.test(url.hostname)) {
+    event.respondWith(fetch(request, { cache: "no-store" }));
     return;
   }
 

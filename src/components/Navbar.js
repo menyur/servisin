@@ -47,7 +47,7 @@ export default function Navbar({ user, profile, pendingTechnicians = 0, pendingB
               </Link>
             </HideIfStandalone>
           )}
-          {(profile?.role === "technician" || profile?.role === "admin") && (
+          {profile?.role === "technician" && (
             <Link href="/technician" className="hover:text-brand flex items-center gap-1.5">
               <HardHat size={16} /> Tugas Saya
             </Link>

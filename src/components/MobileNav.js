@@ -32,7 +32,7 @@ export default function MobileNav({ user, profile, pendingTechnicians = 0, pendi
           ],
         }]
       : []),
-    ...(profile?.role === "technician" || profile?.role === "admin"
+    ...(profile?.role === "technician"
       ? [{ href: "/technician", label: "Tugas Saya", icon: HardHat }]
       : []),
     ...(!user ? [{ href: "/gabung", label: "Gabung jadi teknisi", icon: HardHat, amber: true }] : []),
