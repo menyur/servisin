@@ -22,7 +22,9 @@ Catatan metode: ronde 1–2 memakai probe **read-only** (kunci anon). Sejak rond
 
 **Update 8 Okt 2026 (ronde 4 — gate regresi + E2E F7 menemukan regresi produksi):** seluruh probe dirangkai jadi satu perintah (`npm run verify:live`) dan dipasang sebagai **prasyarat** workflow build APK. Uji E2E transaksional otomatis ([scripts/verify-e2e-lifecycle.mjs](../scripts/verify-e2e-lifecycle.mjs)) langsung menemukan **F8 🔴 BLOKIR RILIS**: trigger guard F2 menolak potongan saldo yang dilakukan RPC `set_job_status`, sehingga **teknisi tidak bisa menyelesaikan pekerjaan** dan komisi tidak pernah terpotong. Perbaikannya sudah disiapkan: [supabase/fix-balance-guard-server-writes.sql](../supabase/fix-balance-guard-server-writes.sql).
 
-**Perlu tindakan sebelum go-live: (1) jalankan F8 — WAJIB, ini memblokir alur penyelesaian pekerjaan; (2) setelah F8, jalankan `npm run verify:live` sampai GATE LULUS.** F1 · F2 · F3 · F4 · F5 · F6 ✅ tertutup (F9 paritas skema `reviews` = kerapian opsional).
+**Update 8 Okt 2026 (ronde 5 — F8 diperbaiki & diverifikasi):** [supabase/fix-balance-guard-server-writes.sql](../supabase/fix-balance-guard-server-writes.sql) sudah dijalankan. `node scripts/verify-e2e-lifecycle.mjs` → **`E2E_F7_LULUS`** (32/32 asersi) dan `npm run verify:live` → **GATE LULUS (4/4, exit 0)**. Guard F2 tetap ketat untuk klien. F8 **TERTUTUP** ✅.
+
+**Perlu tindakan sebelum go-live: (1) tambahkan secret CI `SUPABASE_SERVICE_ROLE_KEY` supaya gate & build APK berjalan (tanpa itu build APK tertahan — lihat bukti run #24); (2) F9 paritas skema `reviews` = kerapian opsional.** F1 · F2 · F3 · F4 · F5 · F6 · F8 ✅ semuanya tertutup dan terverifikasi live.
 
 ---
 
@@ -112,12 +114,15 @@ Catatan efek samping diperiksa: satu review lama yang sudah ada (`SV-3379`) mene
 **F6 — `payment_method` lama `qris/virtual_account/e_wallet` masih di CHECK constraint. ✅ TERTUTUP (8 Okt 2026)**
 **Verifikasi live:** `INSERT` booking dengan `payment_method='qris'` **ditolak** constraint, sedangkan `'transfer'` dan `'cod'` (dua nilai yang dipakai UI/Flutter) **diterima** → [migrate-transfer-settings.sql](../supabase/migrate-transfer-settings.sql) sudah jalan. Perhatikan arah pentingnya: penolakan `qris` saja tidak cukup — kalau `transfer` ikut ditolak, itu bug nyata karena app memakai nilai itu; probe menguji keduanya.
 
-**F8 — 🔴 BLOKIR RILIS: trigger guard F2 menolak potongan komisi di `set_job_status` (teknisi tidak bisa menyelesaikan pekerjaan). TERBUKA (8 Okt 2026)**
+**F8 — trigger guard F2 menolak potongan komisi di `set_job_status` (teknisi tidak bisa menyelesaikan pekerjaan). ✅ TERTUTUP & TERVERIFIKASI LIVE (8 Okt 2026)**
 **Ditemukan oleh:** uji E2E otomatis ronde 4 ([scripts/verify-e2e-lifecycle.mjs](../scripts/verify-e2e-lifecycle.mjs)) — bukan oleh tinjauan manual.
 **Gejala live:** `rpc set_job_status(<booking>, 'completed')` dijalankan teknisi → gagal `42501` "Perubahan role/balance/approval_status/commission_rate/email profil hanya oleh admin"; status pesanan tetap `in_progress`, tidak ada baris komisi, saldo teknisi tidak berubah. Artinya **tombol "Selesaikan pekerjaan" di aplikasi gagal** (Flutter memanggil RPC ini di [flutter_app/lib/api.dart](../flutter_app/lib/api.dart)).
 **Penyebab:** `set_job_status` adalah SECURITY DEFINER, tetapi trigger [fix-profiles-f1-f2.sql](../supabase/fix-profiles-f1-f2.sql) memblokir perubahan `profiles.balance` kecuali `service_role` / tanpa JWT / `is_admin()`. Saat dipanggil teknisi, `auth.role()` = `authenticated` → ditolak. Rantai ini baru muncul setelah hardening F2 dijalankan pada ronde 2 (pesanan `completed` yang ada sebelumnya selesai sebelum itu).
 **Tindakan:** [supabase/fix-balance-guard-server-writes.sql](../supabase/fix-balance-guard-server-writes.sql) — fungsi server memasang penanda transaksi `app.trusted_server_write` (hanya bisa di-set dari dalam database; klien PostgREST tidak punya jalur untuk itu) dan guard mengizinkannya. Cabang lama (service_role / admin / tanpa JWT) tidak berubah, jadi jalur [src/lib/balance.js](../src/lib/balance.js) dan panel admin tetap sama.
-**Verifikasi setelah dijalankan:** `node scripts/verify-e2e-lifecycle.mjs` harus `E2E_F7_LULUS`; lalu `npm run verify:live` harus GATE LULUS. Guard juga harus tetap menolak pelanggan (`PATCH profiles` menyetel `balance` sendiri → `42501`).
+**Verifikasi setelah perbaikan dijalankan (semua terbukti live):**
+  * `node scripts/verify-e2e-lifecycle.mjs` → **`E2E_F7_LULUS`**, 32/32 asersi lulus. `set_job_status(... 'completed')` mengembalikan `{ok:true, commission:20000, balance:-20000}`, komisi terpotong **tepat sekali**, dan panggilan kedua tidak memotong lagi.
+  * `npm run verify:live` → **GATE LULUS (4/4, exit 0)**.
+  * Guard **tidak menjadi longgar**: pelanggan biasa tetap ditolak saat menyetel `balance` atau `role` miliknya (`42501`), dan penanda `app.trusted_server_write` **tidak bisa di-set dari luar** — `rpc set_config(...)` dari klien dijawab `Could not find the function public.set_config(...)`.
 
 **F7 — Uji end-to-end dengan 2 akun sungguhan** (pelanggan + teknisi): booking → bukti bayar → admin approve → klaim job → mulai → selesai → komisi terpotong → review → voucher insentif. **Kini OTOMATIS** ([scripts/verify-e2e-lifecycle.mjs](../scripts/verify-e2e-lifecycle.mjs), ikut dalam `npm run verify:live`) dan **sedang GAGAL karena F8** — itu memang cara gate menunjukkan regresi. Setelah F8 diperbaiki, jalannya harus hijau tanpa perlu intervensi manual.
 **Yang masih manual/perlu sadar:** dua langkah yang aslinya server action Next.js direproduksi efek DB-nya dengan peran yang sama — approve pembayaran (efek DB `confirmBookingPaymentAdmin`) dan pembuatan voucher insentif (pola `grantReviewVoucher`), bukan menjalankan server action-nya; langkah lain memakai RPC asli (`create_booking_security_definer`, `claim_job`, `set_job_status`, `available_jobs`). Unggah berkas bukti ke storage juga tidak dilakukan (hanya kolom `payment_amount`/`payment_proof_url`).
@@ -164,6 +169,8 @@ Di CI ada dua tempat:
 2. **`.github/workflows/build-apk.yml`** — gate dipasang sebagai job **prasyarat** (`build-apk` → `needs: live-probe`), jadi **rilis/publish APK tidak berjalan bila ada regresi**. Untuk keadaan darurat ada input `skip_gate=true` saat menjalankan manual.
 
 ⚠️ **Konsekuensinya: secret `SUPABASE_SERVICE_ROLE_KEY` wajib ada** (Settings → Secrets and variables → Actions). Tanpa secret itu, job gate gagal (dengan pesan yang menjelaskan pilihan: tambahkan secret, pakai `skip_gate`, atau lepas `needs: live-probe`) — jadi build APK berikutnya akan tertahan sampai salah satu dipilih.
+
+**Bukti nyata (8 Okt 2026):** setelah commit gate di-push, GitHub menjalankan **Build APK Android #24** (sha `5fbb215`) dan hasilnya persis sesuai desain: job `live-probe` **failure** pada langkah "Pastikan secret service-role tersedia", job `build-apk` **skipped** — artinya gate benar-benar menahan build/publish APK sampai konfigurasi beres. Perilaku ini bukan bug wiring, melainkan jalur "gagal dengan pesan jelas" yang diminta.
 
 Kenapa gate utama tetap manual di `live-probe.yml`: probe ini **menulis data uji ke produksi** (baris + akun sementara, termasuk saldo & voucher pada langkah E2E) lalu menghapusnya — untuk build APK ia hanya ikut sebagai prasyarat, bukan dijalankan pada setiap push. Hanya **satu** secret yang dibutuhkan: `SUPABASE_SERVICE_ROLE_KEY` (URL proyek & kunci publishable bersifat publik, sudah terisi di workflow karena juga dibundel di APK).
 
