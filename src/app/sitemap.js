@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { siteUrl } from "@/lib/site";
 
 // Sitemap dinamis: halaman statis + semua teknisi approved.
@@ -21,7 +21,7 @@ export default async function sitemap() {
   ];
 
   try {
-    const supabase = await createClient();
+    const supabase = createAdminClient();
     const { data: technicians } = await supabase
       .from("profiles")
       .select("id")

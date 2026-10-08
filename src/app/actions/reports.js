@@ -172,3 +172,31 @@ export async function getMyReports() {
 
   return { reports: data || [] };
 }
+
+/**
+ * Signed URL lampiran foto laporan milik user (bucket privat "attachments",
+ * folder report-photos). Hanya PENULIS laporan yang bisa memintanya;
+ * token berumur 1 jam supaya path tidak bocor permanen.
+ */
+export async function getMyReportAttachmentUrl(reportId) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Kamu harus login terlebih dahulu." };
+
+  const { data: row, error } = await supabase
+    .from("reports")
+    .select("attachment_url, author_id")
+    .eq("id", reportId)
+    .single();
+  if (error || !row) return { error: "Laporan tidak ditemukan." };
+  if (row.author_id !== user.id) return { error: "Akses ditolak." };
+  if (!row.attachment_url) return { error: "Laporan ini tanpa lampiran." };
+
+  const { data, error: urlErr } = await supabase.storage
+    .from("attachments")
+    .createSignedUrl(row.attachment_url, 3600);
+  if (urlErr || !data?.signedUrl) return { error: "Gagal menyiapkan lampiran." };
+  return { url: data.signedUrl };
+}

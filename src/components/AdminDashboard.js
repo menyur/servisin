@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import {
+  getBookingDistancesAdmin,
+  assignNearestTechnicianAdmin,
   updateBookingStatusAdmin,
   updateServicePriceAdmin,
   createServiceAdmin,
@@ -10,6 +12,7 @@ import {
   updateUserRoleAdmin,
   updateCommissionRateAdmin,
   assignTechnicianAdmin,
+  fetchNearestTechniciansAdmin,
   setTechnicianApprovalAdmin,
   updateReportAdmin,
   confirmBookingPaymentAdmin,
@@ -26,6 +29,7 @@ import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
 import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
+import LocationPickerMap from "@/components/LocationPickerMap";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
 import TechnicianBalancesTab from "@/components/TechnicianBalancesTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
@@ -53,7 +57,40 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   const [vouchers, setVouchers] = useState(initialVouchers);
   const [busyId, setBusyId] = useState(null);
   const [bookingFilter, setBookingFilter] = useState("all"); // all | unassigned | <status>
-  const [sortMode, setSortMode] = useState("newest"); // newest | oldest | upcoming
+  const [sortMode, setSortMode] = useState("newest"); // newest | oldest | upcoming | nearest
+
+  // ============ Jarak dari titik referensi admin ============
+  // Admin memasang pin titik (peta) → jarak tiap booking ber-pin diambil
+  // via RPC bookings_nearby (radius maks 50 km, klamp server). Booking tanpa
+  // pin tidak punya jarak (tanda “tanpa titik”). Data jarak disimpan per
+  // titik: refKey berubah → cache lama dibuang.
+  const [refPoint, setRefPoint] = useState(null); // { lat, lng }
+  const [showRefMap, setShowRefMap] = useState(false);
+  const [bookingDist, setBookingDist] = useState({}); // id → meter (null = tanpa pin)
+  const [distLoading, setDistLoading] = useState(false);
+  const [distError, setDistError] = useState(null);
+
+  async function loadDistances(point) {
+    setDistLoading(true);
+    setDistError(null);
+    try {
+      const res = await getBookingDistancesAdmin(point.lat, point.lng);
+      if (res.error) throw new Error(res.error);
+      const map = {};
+      for (const row of res.bookings || []) map[row.id] = row.distance_m;
+      setBookingDist(map); // booking di luar 50 km tidak ada di hasil → tak ber-badge
+    } catch (e) {
+      setDistError(e.message);
+    } finally {
+      setDistLoading(false);
+    }
+  }
+
+  function setRefAndLoad(p) {
+    setRefPoint(p);
+    setShowRefMap(false);
+    loadDistances(p);
+  }
   const [historyMode, setHistoryMode] = useState("customer"); // customer | technician
   const [expandedId, setExpandedId] = useState(null);
 
@@ -129,6 +166,11 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       if (bFuture) return 1;
       return bookingStart(b) - bookingStart(a); // yang sudah lewat: terbaru dulu
     }
+    if (sortMode === "nearest" && refPoint) {
+      // jarak (null = luar radius/tanpa pin) paling belakang; lalu terbaru masuk
+      const d = (x) => bookingDist[x.id];
+      return (d(a) ?? Infinity) - (d(b) ?? Infinity) || new Date(b.created_at) - new Date(a.created_at);
+    }
     return new Date(b.created_at) - new Date(a.created_at); // newest (default)
   });
 
@@ -155,6 +197,35 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   async function changeRole(userId, role) {
     const res = await updateUserRoleAdmin(userId, role);
     if (!res.error) setUsers((us) => us.map((u) => (u.id === userId ? { ...u, role } : u)));
+  }
+
+  // Peta bookingId → hasil pencarian teknisi terdekat (GPS on-duty):
+  // {loading?} | {error} | {list: [{technician_id, name, distance_m, located_at}]}
+  const [nearby, setNearby] = useState({});
+  async function loadNearby(bid) {
+    setNearby((s) => ({ ...s, [bid]: { loading: true } }));
+    const res = await fetchNearestTechniciansAdmin(bid);
+    setNearby((s) => ({
+      ...s,
+      [bid]: res.error ? { error: res.error } : { list: res.technicians || [] },
+    }));
+  }
+
+  // Kirim bahu-membahu rekomendasi one-click (hasil assignNearestTechnicianAdmin)
+  // — dipakai banner rekomendasi yang tampil di kartu.
+  const [recResult, setRecResult] = useState({});
+  async function assignNearest(bid) {
+    setRecResult((s) => ({ ...s, [bid]: { loading: true } }));
+    const res = await assignNearestTechnicianAdmin(bid);
+    setRecResult((s) => ({
+      ...s,
+      [bid]: res.error
+        ? { error: res.error }
+        : { done: true, name: res.name, distance_m: res.distance_m, skillMatched: res.skillMatched },
+    }));
+    if (!res.error) {
+      setBookings((bs) => bs.map((b) => (b.id === bid ? { ...b, technician_id: res.assigned } : b)));
+    }
   }
 
   async function assignTechnician(bookingId, technicianId) {
@@ -389,7 +460,33 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
               <option value="newest">Terbaru masuk</option>
               <option value="oldest">Terlama masuk</option>
               <option value="upcoming">Jadwal terdekat</option>
+              <option value="nearest" disabled={!refPoint}>Terdekat dari titik{refPoint ? " ✓" : " (pasang titik dulu)"}</option>
             </select>
+
+            {/* titik referensi jarak: peta collapsible pakai komponen pin booking */}
+            <button
+              type="button"
+              onClick={() => setShowRefMap((v) => !v)}
+              className={`btn-outline !py-1.5 text-xs flex items-center gap-1.5 ${refPoint ? "!border-mint !text-mint" : ""}`}
+              title="Pilih titik untuk menghitung jarak tiap pesanan dan mengurutkan terdekat"
+            >
+              <MapPin size={13} />
+              {distLoading ? "Memuat jarak..." : refPoint ? `Titik ✓ (${refPoint.lat.toFixed(4)}, ${refPoint.lng.toFixed(4)})` : "Pilih titik jarak"}
+            </button>
+            {showRefMap && (
+              <div className="w-full mt-2">
+                <LocationPickerMap
+                  value={refPoint}
+                  onChange={(p) => setRefAndLoad(p)}
+                />
+              </div>
+            )}
+            {refPoint && !distLoading && !distError && (
+              <span className="text-[11px] text-ink-soft">
+                Jarak dihitung untuk {Object.keys(bookingDist).length} pesanan ber-pin (radius ≤ 50 km)
+              </span>
+            )}
+            {distError && <span className="text-[11px] text-coral">{distError}</span>}
           </div>
 
           <div className="space-y-4">
@@ -433,13 +530,39 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
               </div>
               <div className="text-sm text-ink-soft grid sm:grid-cols-2 gap-x-6 gap-y-1 mb-3">
                 <span>Telepon: {b.profiles?.phone || "-"}</span>
-                <span>Email: {b.profiles?.email}</span>
-                {Number(b.discount_amount) > 0 && (
+                <span>Email: {b.profiles?.email}</span>                  {Number(b.discount_amount) > 0 && (
                   <span className="text-mint">Diskon voucher: - {formatRupiah(b.discount_amount)}</span>
                 )}
+                {refPoint && bookingDist[b.id] != null && (() => {
+                  const d = bookingDist[b.id];
+                  return (
+                    <span
+                      className="text-mint font-semibold"
+                      title={`Jarak dari titik referensi admin (${refPoint.lat.toFixed(4)}, ${refPoint.lng.toFixed(4)})`}
+                    >
+                      ≈ {d < 1000 ? `${Math.round(d)} m` : `${(d / 1000).toFixed(1)} km`}
+                    </span>
+                  );
+                })()}
                 <span>Total: {formatRupiah(b.total_price)}</span>
                 <span>Metode bayar: {b.payment_method}</span>
-                <span className="sm:col-span-2">Alamat: {b.address}</span>
+                <span className="sm:col-span-2">
+                  Alamat: {b.address}
+                  {b.lat != null && b.lng != null && (
+                    <>
+                      {" "}
+                      <a
+                        href={`https://www.google.com/maps?q=${b.lat},${b.lng}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-brand underline decoration-dotted hover:text-brand-deep"
+                        title="Buka titik lokasi rumah pelanggan di Google Maps"
+                      >
+                        Titik lokasi (peta)
+                      </a>
+                    </>
+                  )}
+                </span>
                 {b.notes && <span className="sm:col-span-2">Catatan: {b.notes}</span>}
               </div>
               {needsPayConfirm && (
@@ -587,6 +710,74 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   <span className="text-xs text-amber font-semibold">Pilih teknisi sebelum jadwal kedatangan.</span>
                 )}
               </div>
+              {/* Panel teknisi terdekat — hanya untuk booking unassigned yang
+                  punya titik lokasi (pin). Jarak dihitung server dari posisi
+                  GPS on-duty teknisi; koordinat teknisi tidak pernah tampil. */}
+              {unassigned && b.lat != null && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => loadNearby(b.id)}
+                    disabled={nearby[b.id]?.loading}
+                    className="btn-outline !py-1.5 text-xs flex items-center gap-1.5"
+                  >
+                    <MapPin size={13} />
+                    {nearby[b.id]?.loading ? "Mencari..." : "Cari teknisi terdekat (GPS on-duty)"}
+                  </button>
+                  {nearby[b.id]?.error && (
+                    <p className="text-xs text-coral mt-2">{nearby[b.id].error}</p>
+                  )}
+
+                  {/* younger technology: rekomendasi one-click gabungan
+                      jarak teknisi-on-duty + kesesuaian skill → assign. */}
+                  {recResult[b.id]?.done ? (
+                    <span className="text-xs mint font-semibold flex items-center gap-1">
+                      ✓ Ditugaskan: {recResult[b.id].name} ({recResult[b.id].distance_m < 1000
+                        ? `${Math.round(recResult[b.id].distance_m)} m`
+                        : `${(recResult[b.id].distance_m / 1000).toFixed(1)} km`}
+                      {recResult[b.id].skillMatched ? " — ✓ skill" : " — beda skill"})
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => assignNearest(b.id)}
+                      disabled={recResult[b.id]?.loading || busyId === b.id}
+                      className="btn-primary !py-1.5 text-xs flex items-center gap-1.5"
+                    >
+                      <MapPin size={13} />
+                      {recResult[b.id]?.loading ? "Menugaskan..." : "Tugaskan teknisi terdekat"}
+                    </button>
+                  )}
+                  {nearby[b.id]?.list && (
+                    <ul className="mt-2 space-y-1">
+                      {nearby[b.id].list.length === 0 && (
+                        <li className="text-xs text-ink-soft">
+                          Belum ada teknisi on-duty ber-GPS dalam radius 20 km dari titik lokasi ini.
+                        </li>
+                      )}
+                      {nearby[b.id].list.map((t) => {
+                        const mins = Math.max(0, Math.round((Date.now() - new Date(t.located_at).getTime()) / 60000));
+                        return (
+                          <li key={t.technician_id} className="flex items-center gap-2 text-xs flex-wrap">
+                            <span className="font-semibold text-navy">{t.name}</span>
+                            <span className="font-semibold text-mint">
+                              {t.distance_m < 1000 ? `${Math.round(t.distance_m)} m` : `${(t.distance_m / 1000).toFixed(1)} km`}
+                            </span>
+                            <span className="text-ink-soft text-[11px]">lokasi {mins} mnt lalu</span>
+                            <button
+                              onClick={() => assignTechnician(b.id, t.technician_id)}
+                              disabled={busyId === b.id}
+                              className="btn-primary !px-2.5 !py-1 text-[11px]"
+                            >
+                              Tugaskan
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              )}
             </div>
             );
           })}

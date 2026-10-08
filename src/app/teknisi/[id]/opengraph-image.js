@@ -1,5 +1,5 @@
 import { ImageResponse } from "next/og";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 // Kartu OG dinamis per teknisi — menggambar nama, rating, dan jumlah ulasan.
 export const size = { width: 1200, height: 630 };
@@ -8,7 +8,7 @@ export const alt = "Profil teknisi Fixify";
 
 export default async function OgImage({ params }) {
   const { id } = await params;
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data: tech } = await supabase
     .from("profiles")
     .select("name")

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getMyReports } from "@/app/actions/reports";
-import { FileText, ChevronDown } from "lucide-react";
+import { getMyReports, getMyReportAttachmentUrl } from "@/app/actions/reports";
+import { FileText, ChevronDown, Loader2 } from "lucide-react";
 
 const STATUS_META = {
   open: { label: "Menunggu review", cls: "bg-amber-tint text-amber" },
@@ -14,6 +14,20 @@ export default function MyReportsList({ reports: initialReports = null, refreshK
   const [reports, setReports] = useState(initialReports);
   const [loading, setLoading] = useState(initialReports === null);
   const [openId, setOpenId] = useState(null);
+  // Peta reportId → lampiran: {loading?} | {error?} | {url} (signed, 1 jam).
+  // Diminta saat kartu dibuka — bucket privat, path tidak pernah jadi URL publik.
+  const [att, setAtt] = useState({});
+
+  function ensureAttachment(r) {
+    if (!r.attachment_url || att[r.id]) return;
+    setAtt((s) => ({ ...s, [r.id]: {} }));
+    getMyReportAttachmentUrl(r.id).then((res) => {
+      setAtt((s) => ({
+        ...s,
+        [r.id]: res.error ? { error: res.error } : { url: res.url },
+      }));
+    });
+  }
 
   useEffect(() => {
     let alive = true;
@@ -49,7 +63,10 @@ export default function MyReportsList({ reports: initialReports = null, refreshK
         return (
           <div key={r.id} className="card !p-4">
             <button
-              onClick={() => setOpenId(open ? null : r.id)}
+              onClick={() => {
+                setOpenId(open ? null : r.id);
+                if (!open) ensureAttachment(r);
+              }}
               className="w-full flex items-center justify-between gap-3 text-left"
               aria-expanded={open}
             >
@@ -69,6 +86,33 @@ export default function MyReportsList({ reports: initialReports = null, refreshK
             {open && (
               <div className="mt-3 pt-3 border-t border-line text-sm text-ink-soft space-y-2">
                 <p className="whitespace-pre-wrap">{r.content}</p>
+                {r.attachment_url && (
+                  <div>
+                    {att[r.id]?.url ? (
+                      <a
+                        href={att[r.id].url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Buka lampiran ukuran penuh"
+                        className="block"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={att[r.id].url}
+                          alt={`Lampiran foto laporan ${r.title}`}
+                          className="w-full max-w-md rounded-xl border border-line cursor-zoom-in"
+                          loading="lazy"
+                        />
+                      </a>
+                    ) : att[r.id]?.error ? (
+                      <p className="text-xs text-coral">{att[r.id].error}</p>
+                    ) : (
+                      <p className="text-xs text-ink-soft flex items-center gap-1.5">
+                        <Loader2 size={13} className="animate-spin" /> Menyiapkan lampiran…
+                      </p>
+                    )}
+                  </div>
+                )}
                 {r.admin_note && (
                   <div className="bg-brand-tint rounded-xl p-3">
                     <p className="flex items-center gap-1.5 text-xs font-semibold text-brand-deep mb-1">

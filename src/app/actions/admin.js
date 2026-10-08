@@ -144,6 +144,38 @@ async function requireAdmin(supabase) {
   return user;
 }
 
+/**
+ * Jarak tiap booking ber-pin dari titik referensi admin — via RPC
+ * bookings_nearby (radius dibatasi 50 km oleh klamp server).
+ * Hasil dipakai badge jarak di kartu booking + opsi urut "Terdekat".
+ */
+export async function getBookingDistancesAdmin(lat, lng) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln) ||
+      la < -90 || la > 90 || ln < -180 || ln > 180) {
+    return { error: "Titik referensi tidak valid." };
+  }
+
+  const { data, error } = await supabase.rpc("bookings_nearby", {
+    p_lat: la,
+    p_lng: ln,
+    p_radius_m: 50000,
+    p_limit: 200,
+  });
+  if (error) {
+    if (/does not exist|not found/i.test(error.message)) {
+      return { error: "Migrasi PostGIS belum dijalankan di database." };
+    }
+    return { error: error.message };
+  }
+  return { bookings: (data || []).filter((r) => r.distance_m != null) };
+}
+
 export async function getAllBookingsAdmin() {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
@@ -617,18 +649,35 @@ export async function updateReportAdmin(reportId, status, adminNote) {
     return { error: "Status laporan tidak valid." };
   }
 
-  // ambil kondisi lama untuk mendeteksi transisi ke "resolved" (untuk email ke pelapor)
+  // ambil kondisi lama: transisi ke "resolved" (email) + perubahan admin_note (push balasan)
   const { data: before } = await supabase
     .from("reports")
-    .select("status, title, author_id, bookings(code)")
+    .select("status, title, admin_note, author_id, bookings(code)")
     .eq("id", reportId)
     .single();
 
+  const cleanNote = (adminNote || "").trim();
+
   const { error } = await supabase
     .from("reports")
-    .update({ status, admin_note: (adminNote || "").trim() || null })
+    .update({ status, admin_note: cleanNote || null })
     .eq("id", reportId);
   if (error) return { error: error.message };
+
+  // Push balasan ke pelapor saat admin mengisi/mengubah catatan (web-push + FCM
+  // sekaligus via sendPushToUser; event bisa dimatikan pelanggan di pengaturan
+  // notifikasi). Fire-and-forget — jangan perlambat simpanan admin.
+  if (cleanNote && before?.author_id && cleanNote !== (before.admin_note || "")) {
+    sendPushToUser(before.author_id, {
+      title: "Balasan laporan admin",
+      event: "report_replied",
+      body: before.bookings?.code
+        ? `Admin membalas laporanmu untuk pesanan ${before.bookings.code}.`
+        : `Admin membalas laporanmu${before.title ? ` "${before.title}"` : ""}.`,
+      url: "/dashboard",
+      tag: `report-${reportId}`,
+    }).catch(() => {});
+  }
 
   // email konfirmasi ke pelapor saat laporan diselesaikan (bukan saat dibuka kembali)
   if (status === "resolved" && before?.status !== "resolved") {
@@ -763,6 +812,99 @@ export async function updateCommissionRateAdmin(userId, rate) {
 
   revalidatePath("/admin");
   return { ok: true };
+}
+
+/**
+ * Cari teknisi on-duty (GPS aktif ≤ 2 jam) terdekat dari titik lokasi (pin)
+ * sebuah booking — untuk membantu penugasan manual. RPC security definer
+ * khusus admin: mengembalikan id + nama + jarak + kesegaran lokasi;
+ * koordinat teknisi TIDAK pernah keluar. Baris kosong = belum ada teknisi
+ * ber-GPS di radius, atau booking belum punya pin.
+ */
+export async function fetchNearestTechniciansAdmin(bookingId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase.rpc("technicians_nearby_booking", {
+    p_booking: bookingId,
+  });
+  if (error) {
+    if (/does not exist|not found/i.test(error.message)) {
+      return { error: "Migrasi GPS teknisi belum dijalankan di database." };
+    }
+    return { error: error.message };
+  }
+  return { technicians: data || [] };
+}
+
+/**
+ * SATU-KLIK "Tugaskan teknisi terdekat":
+ * 1) validasi booking (milik tabel, unassigned) — ambil pin + kategori;
+ * 2) ambil teknisi on-duty terdekat (technicians_nearby_booking);
+ * 3) pilih kandidat terdekat yang skill-nya cocok (bila data skill ada);
+ * 4) assign DENGAN jalur hero yang sama dgn assignTechnicianAdmin —
+ *    sehingga email penugasan + push tugas baru tetap terkirim.
+ * Tidak mengubah status booking — hanya technician_id.
+ */
+export async function assignNearestTechnicianAdmin(bookingId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: booking, error: bkErr } = await supabase
+    .from("bookings")
+    .select("id, code, technician_id, lat, lng, service_id, services(category_id)")
+    .eq("id", bookingId)
+    .single();
+  if (bkErr || !booking) return { error: "Pesanan tidak ditemukan." };
+  if (!booking.technician_id && booking.lat == null) {
+    return { error: "Pesanan belum punya titik lokasi — gunakan dropdown manual." };
+  }
+  if (booking.technician_id) {
+    return { error: "Pesanan sudah ditugaskan." };
+  }
+
+  const { data: near, error: nearErr } = await supabase.rpc(
+    "technicians_nearby_booking",
+    { p_booking: bookingId }
+  );
+  if (nearErr) {
+    if (/does not exist|not found/i.test(nearErr.message)) {
+      return { error: "Migrasi GPS teknisi belum dijalankan di database." };
+    }
+    return { error: nearErr.message };
+  }
+  if (!near || near.length === 0) {
+    return {
+      error:
+        "Belum ada teknisi on-duty ber-GPS dalam radius 20 km dari pesanan.",
+    };
+  }
+
+  const catId = booking.services?.category_id || null;
+  // RPC tidak membawa skill — ambil sekali untuk semua kandidat (≤15 id).
+  const { data: skillRows } = await supabase
+    .from("profiles")
+    .select("id, skill")
+    .in("id", near.map((t) => t.technician_id));
+  const skillOf = new Map((skillRows || []).map((r) => [r.id, r.skill]));
+
+  const chosen =
+    // skill cocok dulu; tanpa info kategori = ambil terdekat apa adanya
+    (catId && near.find((t) => skillOf.get(t.technician_id) === catId)) ||
+    near[0];
+
+  // assign manual + notifikasi (email teknisi/pelanggan) — disalin dari jalur hero
+  const res = await assignTechnicianAdmin(bookingId, chosen.technician_id);
+  if (res.error) return { error: res.error };
+  return {
+    ok: true,
+    assigned: chosen.technician_id,
+    name: chosen.name,
+    distance_m: chosen.distance_m,
+    skillMatched: catId != null,
+  };
 }
 
 export async function assignTechnicianAdmin(bookingId, technicianId) {

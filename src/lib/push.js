@@ -40,6 +40,8 @@ export const PUSH_EVENTS = {
   order_completed: "Pesanan selesai",
   new_job_available: "Pekerjaan baru tersedia (teknisi)",
   job_released: "Tugas dilepas teknisi (admin)",
+  report_replied: "Balasan laporan dari admin",
+  chat_message: "Pesan chat baru",
 };
 
 /** Baca preferensi user dari profiles.notification_prefs (aman bila kolom belum ada). */

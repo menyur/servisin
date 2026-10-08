@@ -16,10 +16,24 @@ export async function createBooking(input) {
     return { error: "Kamu harus login terlebih dahulu untuk membuat booking." };
   }
 
-  const { serviceId, optionId, bookingDate, bookingTime, address, notes, attachmentUrl, paymentMethod, voucherId } = input;
+  const { serviceId, optionId, bookingDate, bookingTime, address, notes, attachmentUrl, paymentMethod, voucherId, lat, lng } = input;
 
   if (!serviceId || !bookingDate || !bookingTime || !address || !paymentMethod) {
     return { error: "Semua data booking wajib diisi." };
+  }
+
+  // ---- Titik lokasi (pin rumah, opsional) ----
+  // Pasangan lat+lng harus lengkap; rentang koordinat dikunci server.
+  let pin = null;
+  if (lat != null || lng != null) {
+    if (lat == null || lng == null) {
+      return { error: "Titik lokasi tidak lengkap; pasang pin ulang." };
+    }
+    const la = Number(lat), ln = Number(lng);
+    if (!Number.isFinite(la) || !Number.isFinite(ln) || la < -90 || la > 90 || ln < -180 || ln > 180) {
+      return { error: "Titik lokasi di luar rentang koordinat." };
+    }
+    pin = { la, ln };
   }
 
   const { data: service, error: svcErr } = await supabase
@@ -103,6 +117,7 @@ export async function createBooking(input) {
       discount_amount: voucher?.amount || 0,
       status: "pending",
       payment_method: paymentMethod,
+      ...(pin ? { lat: pin.la, lng: pin.ln } : {}),
     })
     .select("*")
     .single();

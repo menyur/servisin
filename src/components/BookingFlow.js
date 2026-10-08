@@ -8,6 +8,7 @@ import { createBooking, getTransferAccount } from "@/app/actions/bookings";
 import { getMyVouchers } from "@/app/actions/reviews";
 import { createClient } from "@/lib/supabase/client";
 import { optimizeImage } from "@/components/ServiceImageUpload";
+import LocationPickerMap from "@/components/LocationPickerMap";
 import { EmptyBoxIllustration } from "@/components/Illustrations";
 import Link from "next/link";
 
@@ -32,6 +33,8 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   const [result, setResult] = useState(null); // { booking, service, payment }
   const [vouchers, setVouchers] = useState([]); // voucher aktif milik user
   const [voucherId, setVoucherId] = useState("");
+  const [showPin, setShowPin] = useState(false);
+  const [pin, setPin] = useState(null); // { lat, lng } titik lokasi rumah (opsional)
 
   const selectedService = useMemo(() => services.find((s) => s.id === serviceId), [services, serviceId]);
   // Varian milik layanan terpilih (mis. ukuran PK); kosong = layanan tanpa varian.
@@ -132,6 +135,7 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
       attachmentUrl,
       paymentMethod,
       voucherId: voucherId || null,
+      ...(pin ? { lat: pin.lat, lng: pin.lng } : {}),
     });
 
     setSubmitting(false);
@@ -324,6 +328,48 @@ function StepDetails({ form, update, errors, onBack, onNext }) {
         <label className="label">Alamat lengkap</label>
         <textarea className="input" rows={2} value={form.address} onChange={(e) => update("address", e.target.value)} placeholder="Nama jalan, nomor rumah, kelurahan, kota" />
         {errors.address && <p className="text-coral text-xs mt-1">{errors.address}</p>}
+      </div>
+      {/* Pin lokasi (opsional): teknisi dapat titik + rute navigasi. */}
+      <div>
+        <button
+          type="button"
+          className={`btn-outline !py-2 text-sm ${pin ? "!border-mint !text-mint" : ""}`}
+          onClick={() => setShowPin((v) => !v)}
+        >
+          {pin ? "✓ Titik lokasi terpasang (buka/ubah)" : "＋ Pasang titik lokasi (opsional)"}
+        </button>
+        {showPin && (
+          <div className="mt-2">
+            <LocationPickerMap
+              value={pin}
+              onChange={(p) => setPin(p)}
+            />
+            {/* Hapus pin (paritas Flutter): booking tetap sah tanpa pin —
+                server action hanya ikut payload lat/lng bila tersedia. */}
+            {pin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPin(null);
+                  setShowPin(false);
+                }}
+                className="text-xs text-coral font-semibold mt-2 hover:underline inline-flex items-center gap-1"
+              >
+                ✕ Hapus pin lokasi
+              </button>
+            )}
+          </div>
+        )}
+        {/* Tombol hapus tetap tersedia walau peta ditutup (paritas Flutter). */}
+        {pin && !showPin && (
+          <button
+            type="button"
+            onClick={() => setPin(null)}
+            className="text-xs text-coral font-semibold mt-2 block hover:underline inline-flex items-center gap-1"
+          >
+            ✕ Hapus pin lokasi
+          </button>
+        )}
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div>
