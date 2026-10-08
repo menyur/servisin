@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../api.dart';
 import '../models.dart';
@@ -169,6 +170,37 @@ String? friendlyNetworkError(Object e) {
     return 'Tidak ada koneksi internet.\nPeriksa WiFi/data lalu coba lagi.';
   }
   return null;
+}
+
+/// Tanya sumber gambar (galeri / ambil kamera) lewat bottom sheet; layar
+/// bawah bisa ditutup tanpa memilih → return null (pemanggil berhenti).
+/// Dipakai lampiran booking, bukti bayar, laporan, foto profil, dan KTP.
+Future<ImageSource?> chooseImageSource(BuildContext context, {String title = 'Pilih Gambar'}) async {
+  return showModalBottomSheet<ImageSource>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+        ),
+        ListTile(
+          leading: const Icon(Icons.photo_library_rounded, color: AppColors.brand),
+          title: const Text('Pilih dari Galeri'),
+          onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+        ),
+        ListTile(
+          leading: const Icon(Icons.photo_camera_rounded, color: AppColors.brand),
+          title: const Text('Ambil Foto dengan Kamera'),
+          onTap: () => Navigator.pop(ctx, ImageSource.camera),
+        ),
+        const SizedBox(height: 8),
+      ]),
+    ),
+  );
 }
 
 /// showSnack dengan terjemahan error jaringan: bila [error] adalah exception
@@ -574,11 +606,14 @@ class MainNav extends StatelessWidget {
   final bool isTechnician;
   const MainNav({super.key, required this.currentIndex, this.onTabSelected, this.isTechnician = false});
 
+  // Urutan HARUS sama dengan _screens pelanggan & routes ['/orders',
+  // '/reports', '/vouchers']: idx 2 = Laporan, idx 3 = Voucher — sebelumnya
+  // label nav tertukar sehingga tap "Voucher" membuka layar Laporan.
   static const _customerItems = [
     (Icons.home_outlined, Icons.home_rounded, 'Beranda'),
     (Icons.receipt_long_outlined, Icons.receipt_long_rounded, 'Pesanan'),
-    (Icons.local_activity_outlined, Icons.local_activity_rounded, 'Voucher'),
     (Icons.feedback_outlined, Icons.feedback_rounded, 'Laporan'),
+    (Icons.local_activity_outlined, Icons.local_activity_rounded, 'Voucher'),
     (Icons.person_outline, Icons.person_rounded, 'Profil'),
   ];
 

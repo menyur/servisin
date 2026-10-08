@@ -5,6 +5,7 @@ import '../api.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
+import 'google_signin_button.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -175,6 +176,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       loading: _loading,
                       onPressed: _submit,
                     ),
+                    const SizedBox(height: 14),
+                    const Row(children: [
+                      Expanded(child: Divider(color: AppColors.line)),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text('atau daftar dengan',
+                            style: TextStyle(
+                                color: AppColors.inkSoft, fontSize: 12.5)),
+                      ),
+                      Expanded(child: Divider(color: AppColors.line)),
+                    ]),
+                    const SizedBox(height: 14),
+                    // Daftar via Google: akun dibuat otomatis saat OAuth
+                    // (profil role=customer diisi trigger handle_new_user),
+                    // sama seperti tombol di layar Login.
+                    const GoogleSignInButton(),
                     const SizedBox(height: 16),
                     // Syarat ringkas
                     const Text.rich(

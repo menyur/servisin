@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../format.dart';
@@ -238,7 +241,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   }
 
   Future<void> _uploadProof() async {
-    final bytes = await Api.pickAndCompressImage();
+    // sumber gambar: galeri atau kamera (foto struk/rekening bisa diambil langsung)
+    final source = await chooseImageSource(context, title: 'Bukti Pembayaran');
+    if (source == null || !mounted) return; // pengguna menutup pilihan
+    final bytes = await Api.pickAndCompressImage(source: source);
     if (bytes == null) return;
     if (!mounted) return;
     final account = await Api.transferAccount();
@@ -308,7 +314,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             paymentMethod: _b.paymentMethod, paymentProofUrl: path,
             technicianId: _b.technicianId, technicianName: _b.technicianName, hasReview: _b.hasReview,
             createdAt: _b.createdAt, paymentConfirmedAt: _b.paymentConfirmedAt,
-            completedAt: _b.completedAt,
+            completedAt: _b.completedAt, lat: _b.lat, lng: _b.lng,
           ));
     } catch (e) {
       if (mounted) showSnackError(context, e, 'Gagal mengirim bukti.');
@@ -366,17 +372,38 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     );
     if (ok != true) return;
     try {
-      await Api.submitReview(
+      final r = await Api.submitReview(
         bookingId: _b.id,
         technicianId: _b.technicianId!,
         rating: rating,
         comment: commentCtrl.text.trim(),
       );
       if (!mounted) return;
-      showSnack(context, 'Terima kasih! Penilaianmu tersimpan.');
+      if (!r.ok) {
+        // DB menolak (tabel/policy belum ada) — tampilkan pesan berpandu,
+        // jangan gagal diam-diam.
+        showSnack(context, r.error ?? 'Gagal menyimpan penilaian.', error: true);
+        return;
+      }
+      showSnack(
+        context,
+        r.voucher != null
+            ? 'Penilaian tersimpan! Voucher ${r.voucher!['code']} (${formatRupiah(r.voucher!['amount'] as int)}) masuk ke tab Voucher.'
+            : 'Terima kasih! Penilaianmu tersimpan.',
+      );
       setState(() => _b = _copyWith(hasReview: true));
-    } catch (_) {
-      if (mounted) showSnack(context, 'Gagal menyimpan penilaian.', error: true);
+    } catch (e) {
+      if (!mounted) return;
+      if (e.toString().contains('row-level security') ||
+          e.toString().contains('42501')) {
+        showSnack(
+            context,
+            'Penilaian ditolak database (polici RLS reviews belum terpasang). '
+            'Jalankan supabase/fix-reviews-policies.sql di Supabase SQL Editor.',
+            error: true);
+      } else {
+        showSnackError(context, e, 'Gagal menyimpan penilaian.');
+      }
     }
   }
 
@@ -391,6 +418,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         hasReview: hasReview ?? _b.hasReview,
         createdAt: _b.createdAt, paymentConfirmedAt: _b.paymentConfirmedAt,
         completedAt: _b.completedAt,
+        lat: _b.lat, lng: _b.lng, // jaga pin: hilang → peta pratinjau ikut lenyap
       );
 
   @override
@@ -516,6 +544,25 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           ),
           const SizedBox(height: 12),
 
+          // Peta mini pratinjau + rute ke titik lokasi: teknisi ditugaskan
+          // ATAU pemilik pesanan (pin dikirim bersama pesanan — lihat RLS).
+          // flutter_map sudah ada di pubspec (picker lokasi) → pratinjau
+          // statis OSM tanpa API key; ketuk kartu = buka Google Maps.
+          if (b.lat != null && b.lng != null) ...[
+            _MiniPinMap(
+              lat: b.lat!,
+              lng: b.lng!,
+              onTap: () => launchUrl(_routeTarget(), mode: LaunchMode.externalApplication),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => launchUrl(_routeTarget(), mode: LaunchMode.externalApplication),
+              icon: const Icon(Icons.navigation_rounded, size: 18),
+              label: const Text('Buka Rute ke Titik Lokasi'),
+            ),
+            const SizedBox(height: 10),
+          ],
+
           // aksi teknisi: mulai / selesai pekerjaan
           if (isAssignedTech && b.status == BookingStatus.paid)
             FilledButton.icon(
@@ -531,6 +578,21 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               label: const Text('Tandai Selesai'),
             ),
           if (isAssignedTech && b.status == BookingStatus.inProgress) const SizedBox(height: 10),
+          // teknisi melaporkan hasil pekerjaan (paritas web) — bisa sertakan
+          // foto bukti hasil (galeri/kamera) lewat ReportScreen.
+          if (isAssignedTech &&
+              (b.status == BookingStatus.inProgress || b.status == BookingStatus.completed))
+            OutlinedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => ReportScreen(booking: b)),
+              ),
+              icon: const Icon(Icons.assignment_outlined, size: 18),
+              label: const Text('Laporkan Hasil Pekerjaan'),
+            ),
+          if (isAssignedTech &&
+              (b.status == BookingStatus.inProgress || b.status == BookingStatus.completed))
+            const SizedBox(height: 10),
           // teknisi melepas tugas (paid/in_progress) → kembali ke Tersedia
           if (isAssignedTech &&
               (b.status == BookingStatus.paid || b.status == BookingStatus.inProgress))
@@ -635,7 +697,94 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.line),
       );
+
+  /// Rute ke titik lokasi (pin pelanggan); tanpa pin → jatuh ke pencarian
+  /// alamat di Google Maps (lebih baik daripada tombol mati).
+  Uri _routeTarget() => (_b.lat != null && _b.lng != null)
+      ? Uri.parse(Api.directionsUrl(_b.lat!, _b.lng!))
+      : Uri.parse(
+          'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(_b.address)}');
 }
+
+/// Peta mini pratinjau titik lokasi pesanan — peta OSM statis (non-interaktif)
+/// dengan marker pin di tengah; seluruh kartu tappable (default: buka rute).
+/// Interaksi pan/zoom dinonaktifkan supaya tetap pratinjau di dalam ListView
+/// (scroll layar tidak tersedot peta) — ketuk untuk rute penuh di Google Maps.
+class _MiniPinMap extends StatelessWidget {
+  final double lat;
+  final double lng;
+  final VoidCallback? onTap;
+
+  const _MiniPinMap({required this.lat, required this.lng, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final center = LatLng(lat, lng);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        height: 150,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: AppColors.line),
+        ),
+        child: Stack(children: [
+          FlutterMap(
+            options: MapOptions(
+              initialCenter: LatLng(lat, lng),
+              initialZoom: 16,
+              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.fixify.app',
+              ),
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: center,
+                    width: 40,
+                    height: 40,
+                    child: const Icon(Icons.location_on_rounded,
+                        size: 36, color: AppColors.coral),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          // Pojok kanan bawah: petunjuk ketuk → rute.
+          Positioned(
+            right: 8,
+            bottom: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: .92),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: AppColors.line),
+              ),
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.navigation_rounded, size: 13, color: AppColors.brandDeep),
+                SizedBox(width: 4),
+                Text('Ketuk untuk rute',
+                    style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.navy)),
+              ]),
+            ),
+          ),
+          const RichAttributionWidget(
+            attributions: [TextSourceAttribution('© OpenStreetMap contributors')],
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
 
 /// Timeline vertikal status pesanan dengan stempel waktu:
 /// Pesanan dibuat → Dibayar → Dikerjakan → Selesai (+ Dibatalkan).

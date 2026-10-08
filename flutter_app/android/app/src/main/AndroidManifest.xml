@@ -5,6 +5,28 @@
          build debug/profile mendapat izin dari manifest debug, tapi
          manifest utama TIDAK mewariskannya ke build release. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Ambil foto langsung dengan kamera di wizard booking (lampiran),
+         bukti pembayaran, laporan, foto profil, dan KTP saat pendaftaran.
+         image_picker yang meminta izin runtime ini saat kamera dipakai;
+         tanpa deklarasi di sini, panggilan kamera bisa SecurityException. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- GPS on-duty teknisi: kirim posisi saat layar Pekerjaan aktif supaya
+         jarak ke job terbuka tampil dan admin bisa cari teknisi terdekat.
+         geolocator meminta izin runtime saat dipakai; tanpa deklarasi di
+         sini, getCurrentPosition gagal di build release. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- WAJIB untuk url_launcher di Android 11+ (API 30+, package visibility):
+         tombol rute teknisi membuka Google Maps via URL https. Tanpa blok
+         <queries> ini, canLaunchUrl mengembalikan false di device baru dan
+         tombol rute gagal diam-diam. Sumber: README package url_launcher. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
     <application
         android:label="Fixify"
         android:name="${applicationName}"

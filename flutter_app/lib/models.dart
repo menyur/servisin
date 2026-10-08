@@ -220,6 +220,15 @@ class Booking {
   final String? userId;
   final bool hasReview;
 
+  /// Titik lokasi (pin) yang dipasang pelanggan — null bila tidak dipasang.
+  /// Koordinat rumah: hanya terbaca pemilik pesanan, teknisi ter-assign, admin
+  /// (RLS bookings tidak berubah karena lat/lng kolom di bookings).
+  final double? lat;
+  final double? lng;
+
+  /// Pesanan punya titik lokasi (pin) — dipakai badge di kartu tugas.
+  bool get hasPin => lat != null && lng != null;
+
   /// Stempel waktu untuk timeline status:
   /// * createdAt — pesanan dibuat (kolom created_at, selalu ada);
   /// * paymentConfirmedAt — admin mengonfirmasi pembayaran
@@ -256,6 +265,8 @@ class Booking {
     this.createdAt,
     this.paymentConfirmedAt,
     this.completedAt,
+    this.lat,
+    this.lng,
   });
 
   factory Booking.fromMap(Map<String, dynamic> m, {bool hasReview = false}) {
@@ -278,6 +289,8 @@ class Booking {
       address: (m['address'] as String?) ?? '',
       notes: m['notes'] as String?,
       paymentMethod: m['payment_method'] as String?,
+      lat: (m['lat'] as num?)?.toDouble(),
+      lng: (m['lng'] as num?)?.toDouble(),
       paymentProofUrl: m['payment_proof_url'] as String?,
       paymentRejected: (m['payment_rejected'] as bool?) ?? false,
       paymentRejectionReason: m['payment_rejection_reason'] as String?,
@@ -453,6 +466,18 @@ class AvailableJob {
   final String? serviceCategory;
   final String? serviceCategoryName;
 
+  /// Jarak (meter) dari posisi on-duty teknisi ke titik lokasi job — dari
+  /// RPC available_jobs_nearby; null bila GPS nonaktif atau job belum
+  /// punya pin (available_jobs polos). Koordinat eksak job TIDAK ikut
+  /// sebelum job diklaim (privasi pin).
+  final double? distanceM;
+
+  /// Pesanan punya titik lokasi (pin) — dari kolom has_pin RPC
+  /// available_jobs/nearby. Hanya boolean, tanpa koordinat eksak
+  /// (privasi pin sebelum job diklaim). Null = RPC lama tanpa kolom
+  /// (migrasi has-pin belum dijalankan) → badge disembunyikan.
+  final bool? hasPin;
+
   AvailableJob({
     required this.id,
     required this.code,
@@ -466,6 +491,8 @@ class AvailableJob {
     required this.createdAt,
     this.serviceCategory,
     this.serviceCategoryName,
+    this.distanceM,
+    this.hasPin,
   });
 
   factory AvailableJob.fromMap(Map<String, dynamic> m) => AvailableJob(
@@ -481,6 +508,8 @@ class AvailableJob {
         createdAt: DateTime.tryParse((m['created_at'] as String?) ?? '') ?? DateTime.now(),
         serviceCategory: m['service_category'] as String?,
         serviceCategoryName: m['service_category_name'] as String?,
+        distanceM: (m['distance_m'] as num?)?.toDouble(),
+        hasPin: m['has_pin'] as bool?,
       );
 }
 
@@ -509,6 +538,11 @@ class Report {
   final String status; // open | reviewed | resolved
   final String? adminNote;
   final String? bookingCode;
+
+  /// Path lampiran di bucket privat 'attachments' (mis. report-photos/…).
+  /// JANGAN dipakai langsung sebagai URL — minta signed URL dulu
+  /// (Api.createSignedUrl) karena bucket tidak publik.
+  final String? attachmentUrl;
   final DateTime createdAt;
 
   Report({
@@ -518,6 +552,7 @@ class Report {
     required this.status,
     this.adminNote,
     this.bookingCode,
+    this.attachmentUrl,
     required this.createdAt,
   });
 
@@ -530,6 +565,9 @@ class Report {
       status: (m['status'] as String?) ?? 'open',
       adminNote: m['admin_note'] as String?,
       bookingCode: bk?['code'] as String?,
+      attachmentUrl: (m['attachment_url'] as String?)?.trim().isEmpty == true
+          ? null
+          : (m['attachment_url'] as String?),
       createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ?? DateTime.now(),
     );
   }

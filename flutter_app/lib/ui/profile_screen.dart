@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import '../api.dart';
 import '../models.dart';
@@ -50,31 +49,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// Ganti foto profil: pilih sumber (galeri/kamera) → kompres 512px →
   /// upload ke profile-media → simpan URL ke profil → muat ulang tampilan.
   Future<void> _changeAvatar() async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('Ganti Foto Profil', style: TextStyle(fontWeight: FontWeight.w800)),
-          ),
-          ListTile(
-            leading: const Icon(Icons.photo_library_rounded, color: AppColors.brand),
-            title: const Text('Pilih dari Galeri'),
-            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-          ),
-          ListTile(
-            leading: const Icon(Icons.photo_camera_rounded, color: AppColors.brand),
-            title: const Text('Ambil Foto Baru'),
-            onTap: () => Navigator.pop(ctx, ImageSource.camera),
-          ),
-          const SizedBox(height: 8),
-        ]),
-      ),
-    );
+    final source = await chooseImageSource(context, title: 'Ganti Foto Profil');
     if (source == null || !mounted) return;
     setState(() => _uploadingAvatar = true);
     try {

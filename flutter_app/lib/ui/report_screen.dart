@@ -35,8 +35,11 @@ class _ReportScreenState extends State<ReportScreen> {
   }
 
   Future<void> _pickAttachment() async {
-    final bytes = await Api.pickAndCompressImage();
-    if (bytes == null) return;
+    // sumber gambar: galeri atau kamera (dokumentasi keluhan bisa difoto langsung)
+    final source = await chooseImageSource(context, title: 'Lampiran Foto');
+    if (source == null || !mounted) return; // pengguna menutup pilihan
+    final bytes = await Api.pickAndCompressImage(source: source);
+    if (bytes == null || !mounted) return;
     setState(() => _attachment = bytes);
   }
 

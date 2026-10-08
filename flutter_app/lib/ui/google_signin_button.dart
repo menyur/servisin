@@ -36,16 +36,28 @@ class _GoogleSignInButtonState extends State<GoogleSignInButton> {
       final isAndroidNative = await _isAndroid();
       if (!kIsWeb && isAndroidNative) {
         // Android: tukar idToken Google (dari SDK native) ke sesi Supabase.
-        final args = await _channel
-            .invokeMapMethod<String, dynamic>('signInWithGoogle');
-        final idToken = args?['idToken'] as String?;
-        final accessToken = args?['accessToken'] as String?;
-        if (idToken == null) throw Exception('idToken kosong');
-        await Supabase.instance.client.auth.signInWithIdToken(
-          provider: OAuthProvider.google,
-          idToken: idToken,
-          accessToken: accessToken,
-        );
+        // Bila konfigurasi native belum lengkap (google-services.json tanpa
+        // oauth_client → default_web_client_id tidak ter-generate →
+        // SIGNIN_FAILED di sisi native), jatuh ke OAuth web yang tidak
+        // butuh kredensial native — tombol tetap berfungsi.
+        try {
+          final args = await _channel
+              .invokeMapMethod<String, dynamic>('signInWithGoogle');
+          final idToken = args?['idToken'] as String?;
+          final accessToken = args?['accessToken'] as String?;
+          if (idToken == null) throw Exception('idToken kosong');
+          await Supabase.instance.client.auth.signInWithIdToken(
+            provider: OAuthProvider.google,
+            idToken: idToken,
+            accessToken: accessToken,
+          );
+        } on PlatformException catch (e) {
+          if (e.code == 'SIGNIN_CANCELED') rethrow; // pengguna batal = bukan error
+          await Supabase.instance.client.auth.signInWithOAuth(
+            OAuthProvider.google,
+            redirectTo: Uri.base.origin,
+          );
+        }
       } else {
         // Web: OAuth popup/redirect — sesi ditangani otomatis oleh
         // supabase_flutter lewat detectSessionInUrl.

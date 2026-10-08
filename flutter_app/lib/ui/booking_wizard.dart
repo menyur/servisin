@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../api.dart';
 import '../category_thumbs.dart';
@@ -8,6 +9,7 @@ import '../format.dart';
 import '../models.dart';
 import '../theme.dart';
 import 'common.dart';
+import 'location_picker.dart';
 import 'receipt_screen.dart';
 
 class BookingArgs {
@@ -40,6 +42,25 @@ class _BookingWizardState extends State<BookingWizard> {
 
   /// Rekening resmi dari app_settings (diisi admin); null = belum diisi.
   Map<String, String>? _transferAccount;
+
+  /// Titik lokasi (pin rumah) opsional dipasang pelanggan lewat flutter_map.
+  ({double lat, double lng})? _pin;
+  bool get _pinChosen => _pin != null;
+
+  /// Buka pemilih titik; hasil non-null disimpan untuk dikirim ke RPC.
+  Future<void> _pickPin() async {
+    final result = await Navigator.push<LatLng>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationPickerScreen(
+          initialLat: _pin?.lat,
+          initialLng: _pin?.lng,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return; // pengguna batal
+    setState(() => _pin = (lat: result.latitude, lng: result.longitude));
+  }
 
   @override
   void initState() {
@@ -95,8 +116,11 @@ class _BookingWizardState extends State<BookingWizard> {
   }
 
   Future<void> _pickAttachment() async {
-    final bytes = await Api.pickAndCompressImage();
-    if (bytes == null) return;
+    // sumber gambar: galeri atau kamera (foto AC/lokasi bisa diambil langsung)
+    final source = await chooseImageSource(context, title: 'Lampiran Foto');
+    if (source == null || !mounted) return; // pengguna menutup pilihan
+    final bytes = await Api.pickAndCompressImage(source: source);
+    if (bytes == null || !mounted) return;
     setState(() => _attachment = Uint8ListWrap(bytes));
   }
 
@@ -126,6 +150,8 @@ class _BookingWizardState extends State<BookingWizard> {
         attachmentUrl: attachmentPath,
         paymentMethod: _payment,
         voucherId: _voucher?.id,
+        lat: _pin?.lat,
+        lng: _pin?.lng,
       );
       if (!mounted) return;
       // Tab tujuan setelah struk ditutup = Pesanan. Struk menggantikan
@@ -288,6 +314,32 @@ class _BookingWizardState extends State<BookingWizard> {
               labelText: 'Alamat lengkap',
               hintText: 'Nama jalan, nomor rumah, kelurahan, kota'),
         ),
+        // Pin lokasi (opsional): teknisi dapat titik + rute navigasi Google Maps.
+        const SizedBox(height: 6),
+        OutlinedButton.icon(
+          onPressed: _pickPin,
+          icon: Icon(_pinChosen ? Icons.location_on_rounded : Icons.add_location_alt_rounded,
+              size: 18,
+              color: _pinChosen ? AppColors.mint : null),
+          label: Text(_pinChosen
+              ? 'Titik lokasi terpasang ✓ (ketuk untuk ubah)'
+              : 'Pasang titik lokasi (opsional)'),
+        ),
+        // Hapus pin: muncul hanya bila pin terpasang — pelanggan bisa
+        // membatalkan titik lokasi (booking tetap sah tanpa pin).
+        if (_pinChosen)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: TextButton.icon(
+              onPressed: () => setState(() => _pin = null),
+              icon: const Icon(Icons.delete_outline_rounded, size: 16, color: AppColors.coral),
+              label: const Text('Hapus pin lokasi',
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.coral)),
+            ),
+          ),
         const SizedBox(height: 12),
         Row(children: [
           Expanded(

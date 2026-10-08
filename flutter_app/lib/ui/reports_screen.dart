@@ -18,6 +18,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
   List<Report>? _reports;
   String? _error;
 
+  /// Signed URL (1 jam) per lampiran — bucket privat, path tak bisa dipakai
+  /// langsung. Hanya laporan yang berhasil di-sign yang menampilkan thumbnail.
+  final Map<String, String> _signedUrls = {};
+
   @override
   void initState() {
     super.initState();
@@ -32,9 +36,51 @@ class _ReportsScreenState extends State<ReportsScreen> {
     try {
       final list = await Api.fetchMyReports();
       if (mounted) setState(() => _reports = list);
+      unawaitedSignAttachments(list);
     } catch (_) {
       if (mounted) setState(() => _error = 'Gagal memuat laporan.');
     }
+  }
+
+  /// Sign semua lampiran yang belum. Gagal satu → lampiran itu tanpa
+  /// thumbnail, daftar tetap utuh.
+  Future<void> unawaitedSignAttachments(List<Report> reports) async {
+    for (final r in reports) {
+      final path = r.attachmentUrl;
+      if (path == null || _signedUrls.containsKey(r.id)) continue;
+      try {
+        final url = await Api.createSignedUrl('attachments', path, seconds: 3600);
+        if (mounted) setState(() => _signedUrls[r.id] = url);
+      } catch (_) {
+        // sign gagal — lanjut tanpa thumbnail
+      }
+    }
+  }
+
+  /// Preview lampiran full-screen: zoom/pinch di InteractiveViewer, latar hitam.
+  void _openAttachment(BuildContext context, String url) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => Dialog.fullscreen(
+        backgroundColor: Colors.black,
+        child: Stack(children: [
+          Center(
+            child: InteractiveViewer(
+              maxScale: 5,
+              child: Image.network(url, fit: BoxFit.contain),
+            ),
+          ),
+          Positioned(
+            top: 30,
+            right: 12,
+            child: IconButton(
+              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
+              onPressed: () => Navigator.pop(ctx),
+            ),
+          ),
+        ]),
+      ),
+    );
   }
 
   Color _statusColor(String s) => switch (s) {
@@ -179,6 +225,34 @@ class _ReportsScreenState extends State<ReportsScreen> {
                                                             fontSize: 12,
                                                             color: AppColors.inkSoft)),
                                                   ]),
+                                                  if (_signedUrls[r.id] != null) ...[
+                                                    const SizedBox(height: 10),
+                                                    GestureDetector(
+                                                      onTap: () => _openAttachment(context, _signedUrls[r.id]!),
+                                                      child: ClipRRect(
+                                                        borderRadius: BorderRadius.circular(12),
+                                                        child: Image.network(
+                                                          _signedUrls[r.id]!,
+                                                          height: 140,
+                                                          width: double.infinity,
+                                                          fit: BoxFit.cover,
+                                                          loadingBuilder: (_, child, progress) => progress == null
+                                                              ? child
+                                                              : const SizedBox(
+                                                                  height: 140,
+                                                                  child: Center(
+                                                                      child: CircularProgressIndicator(strokeWidth: 2))),
+                                                          errorBuilder: (_, __, ___) => Container(
+                                                            height: 44,
+                                                            color: AppColors.paper,
+                                                            alignment: Alignment.center,
+                                                            child: const Text('Lampiran gagal dimuat',
+                                                                style: TextStyle(fontSize: 11, color: AppColors.inkSoft)),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
                                                   if (r.adminNote != null &&
                                                       r.adminNote!.isNotEmpty)
                                                     Container(

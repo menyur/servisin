@@ -13,6 +13,18 @@ import 'models.dart';
 /// Fungsi cleanup langganan realtime chat (dipanggil di dispose).
 typedef ChatUnsubscribe = Future<void> Function();
 
+/// Helper kick worker push: POST sederhana, gagal = diam (worker akan
+/// dipicu interaksi berikutnya).
+class WorkerKickHelper {
+  static Future<void> kick(String url) async {
+    try {
+      await http.post(Uri.parse(url)).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // worker tidak terjangkau — biarkan; antrean dikirim saat interaksi berikut
+    }
+  }
+}
+
 /// Satu pintu akses ke Supabase: auth, katalog, booking, bukti bayar,
 /// review, laporan, voucher. Semua query mengikuti aturan RLS yang sama
 /// dengan web (user hanya melihat/mengubah datanya sendiri).
@@ -202,6 +214,9 @@ class Api {
 
   /// Kirim pesan sebagai user yang sedang login (RLS memaksa sender = diri
   /// sendiri dan hanya peserta pesanan yang boleh).
+  ///
+  /// Setelah terkirim: picu worker push (fire-and-forget) agar notifikasi
+  /// antrean (dibuat trigger DB) langsung dibagikan ke lawan bicara.
   static Future<void> sendChatMessage(String bookingId, String body) async {
     final uid = db.auth.currentUser!.id;
     await db.from('chat_messages').insert({
@@ -209,6 +224,17 @@ class Api {
       'sender_id': uid,
       'body': body.trim(),
     });
+    _kickPushWorker();
+  }
+
+  /// Panggil POST /api/push-worker (fire-and-forget, tanpa menunggu).
+  /// Gagal = tidak masalah — worker juga dipicu interaksi berikutnya
+  /// (chat/push berikutnya akan menyapu antrean yang tertunda).
+  static void _kickPushWorker() {
+    // URL web live — dipakai juga sebagai origin OAuth/redirect. Bila nanti
+    // berganti, cukup ubah di sini (dipakai worker push dan deep-link FCM).
+    const siteOrigin = 'https://fixify.id';
+    WorkerKickHelper.kick('$siteOrigin/api/push-worker');
   }
 
   /// Berlangganan pesan baru secara realtime. Mengembalikan fungsi
@@ -301,12 +327,44 @@ class Api {
   /// Daftar pekerjaan tersedia (sudah dibayar, belum diambil teknisi).
   /// Lewat RPC security definer — teknisi melihat alamat & jadwal
   /// sebelum memutuskan mengambil.
-  static Future<List<AvailableJob>> fetchAvailableJobs() async {
+  ///
+  /// Bila [lat]/[lng] tersedia (GPS on-duty), dipakai RPC available_jobs_nearby
+  /// agar tiap job membawa jarak & daftar terurut terdekat; bila RPC itu
+  /// belum ada (migrasi GPS belum dijalankan), jatuh ke available_jobs polos.
+  static Future<List<AvailableJob>> fetchAvailableJobs({double? lat, double? lng}) async {
+    if (lat != null && lng != null) {
+      try {
+        final res = await db.rpc('available_jobs_nearby',
+            params: {'p_lat': lat, 'p_lng': lng});
+        return (res as List)
+            .cast<Map<String, dynamic>>()
+            .map(AvailableJob.fromMap)
+            .toList();
+      } catch (e) {
+        // Migrasi GPS belum dijalankan → fungsi RPC tidak ada. Fallback,
+        // error lain tetap dilempar.
+        final msg = e.toString().toLowerCase();
+        if (!msg.contains('does not exist') && !msg.contains('not found')) {
+          rethrow;
+        }
+      }
+    }
     final res = await db.rpc('available_jobs');
     return (res as List)
         .cast<Map<String, dynamic>>()
         .map(AvailableJob.fromMap)
         .toList();
+  }
+
+  /// GPS on-duty: simpan posisi terakhir teknisi (dipakai jarak ke job
+  /// terbuka & pencarian teknisi terdekat oleh admin). Aman dipanggil
+  /// berulang — upsert satu baris milik sendiri.
+  static Future<({bool ok, String? error})> updateMyLocation(
+      double lat, double lng) async {
+    final res = await db
+        .rpc('upsert_my_location', params: {'p_lat': lat, 'p_lng': lng});
+    final m = (res as Map).cast<String, dynamic>();
+    return (ok: m['ok'] == true, error: m['error'] as String?);
   }
 
   /// Klaim pekerjaan (atomik di server — satu pekerjaan satu teknisi).
@@ -440,6 +498,8 @@ class Api {
     String? attachmentUrl,
     required String paymentMethod,
     String? voucherId,
+    double? lat,
+    double? lng,
   }) async {
     final res = await db.rpc('create_booking_security_definer', params: {
       'p_service_id': serviceId,
@@ -453,6 +513,10 @@ class Api {
           ? 'transfer'
           : paymentMethod,
       if (voucherId != null) 'p_voucher_id': voucherId,
+      // pin lokasi opsional — dikirim hanya bila pasangan lengkap (RPC juga
+      // memvalidasi: lat tanpa lng ditolak).
+      if (lat != null && lng != null) 'p_lat': lat,
+      if (lat != null && lng != null) 'p_lng': lng,
     });
     final map = res is List ? (res.first as Map<String, dynamic>) : (res as Map<String, dynamic>);
     if (map['error'] != null) {
@@ -532,20 +596,106 @@ class Api {
 
   /// Simpan/ubah penilaian untuk pesanan selesai. Satu review per booking
   /// (unique) — kalau sudah ada, update.
-  static Future<void> submitReview({
+  ///
+  /// Kalau reviews/upsert mengembalikan 0 baris (UPDATE ditolak RLS = sukses
+  /// buta, pola sama dgn paymentProof), lempar error jelas: policy update
+  /// belum terpasang → jalankan fix-reviews-policies.sql.
+  ///
+  /// Sertakan kolom `comment` eksplisit (jangan dilepas) supaya upsert
+  /// menimpa ulasan lama dengan null saat dikosongkan — baris UPDATE tetap
+  /// berisi kolom penuh, konsisten dgn submit web.
+  static Future<({bool ok, String? error, Map<String, dynamic>? voucher})>
+      submitReview({
     required String bookingId,
     required String technicianId,
     required int rating,
     String? comment,
   }) async {
     final uid = db.auth.currentUser!.id;
-    await db.from('reviews').upsert({
-      'booking_id': bookingId,
-      'user_id': uid,
-      'technician_id': technicianId,
-      'rating': rating,
-      if (comment != null && comment.isNotEmpty) 'comment': comment,
-    }, onConflict: 'booking_id');
+    final row = await db
+        .from('reviews')
+        .upsert({
+          'booking_id': bookingId,
+          'user_id': uid,
+          'technician_id': technicianId,
+          'rating': rating,
+          'comment': (comment ?? '').trim().isEmpty ? null : comment!.trim(),
+        }, onConflict: 'booking_id')
+        .select('id')
+        .single();
+    if (row['id'] == null) {
+      return (
+        ok: false,
+        error: 'Penilaian tidak tersimpan (RLS menolak). '
+            'Jalankan supabase/fix-reviews-policies.sql di Supabase SQL Editor.',
+        voucher: null,
+      );
+    }
+
+    // ---- Insentif (paritas web): review BARU >3 hari setelah pesanan
+    // selesai → voucher TERIMAKASIH Rp 10.000, berlaku 90 hari.
+    // Kode & aturan identik dgn grantReviewVoucher (src/app/actions/reviews.js);
+    // anti-dobel lintas platform ditopang unique partial index
+    // vouchers_review_incentive_booking_uidx (fix-review-voucher-idempotent.sql)
+    // + pre-check existing di bawah.
+    Map<String, dynamic>? voucher;
+    try {
+      const reviewIncentiveDays = 3;
+      const reviewIncentiveAmount = 10000;
+      const voucherValidityDays = 90;
+
+      // completed_at bisa belum ada di DB lama → nullable, null = lewati insentif
+      final bk = await db
+          .from('bookings')
+          .select('completed_at')
+          .eq('id', bookingId)
+          .maybeSingle();
+      final completedAt = bk?['completed_at'] as String?;
+      final days = completedAt == null
+          ? 0.0
+          : DateTime.now()
+              .difference(DateTime.parse(completedAt))
+              .inMicroseconds /
+              Duration.microsecondsPerDay;
+      if (days > reviewIncentiveDays) {
+        // Pre-check anti-dobel (jalur lambat); race window sempit ditutup
+        // oleh unique index di DB — insert kedua gagal dan ditangkap catch.
+        final existing = await db
+            .from('vouchers')
+            .select('code, amount')
+            .eq('source', 'review_incentive')
+            .eq('booking_id', bookingId)
+            .maybeSingle();
+        if (existing != null) {
+          voucher = Map<String, dynamic>.from(existing as Map);
+        } else {
+          final rand = DateTime.now().microsecondsSinceEpoch
+              .toRadixString(36)
+              .toUpperCase();
+          final code =
+              'TERIMAKASIH-$rand${(DateTime.now().hashCode & 0xFFFFF).toRadixString(36).toUpperCase()}';
+          final v = await db
+              .from('vouchers')
+              .insert({
+                'user_id': uid,
+                'code': code,
+                'amount': reviewIncentiveAmount,
+                'source': 'review_incentive',
+                'booking_id': bookingId,
+                'expires_at': DateTime.now()
+                    .add(const Duration(days: voucherValidityDays))
+                    .toIso8601String(),
+              })
+              .select('code, amount')
+              .single();
+          voucher = Map<String, dynamic>.from(v as Map);
+        }
+      }
+    } catch (_) {
+      // kolom/voucher belum tersedia di DB → insentif dilewati, review tetap valid
+    }
+
+    return (ok: true, error: null, voucher: voucher);
   }
 
   // ============ laporan ============
@@ -560,6 +710,9 @@ class Api {
     return rows.map<Report>((m) => Report.fromMap(m)).toList();
   }
 
+  /// Laporan. Untuk teknisi: [bookingId] wajib dan harus pekerjaan yang
+  /// ditugaskan ke dia (paritas server-action web yang memvalidasi teknisi),
+  /// author_role otomatis 'technician'; selain itu 'customer'.
   static Future<void> createReport({
     required String title,
     required String content,
@@ -567,9 +720,21 @@ class Api {
     String? attachmentPath,
   }) async {
     final uid = db.auth.currentUser!.id;
+    String authorRole = 'customer';
+    if (bookingId != null && bookingId.isNotEmpty) {
+      // pastikan booking ini benar-benar tugasan teknisi yang login;
+      // bukan → tetap dikirim sebagai laporan pelanggan biasa.
+      final own = await db
+          .from('bookings')
+          .select('id')
+          .eq('id', bookingId)
+          .eq('technician_id', uid)
+          .maybeSingle();
+      if (own != null) authorRole = 'technician';
+    }
     await db.from('reports').insert({
       'author_id': uid,
-      'author_role': 'customer',
+      'author_role': authorRole,
       'title': title,
       'content': content,
       if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
@@ -707,21 +872,59 @@ class Api {
   // ============ storage helper ============
 
   /// Pilih gambar dari galeri/kamera lalu kompres (sisi terpanjang ≤ maxSide,
-  /// kualitas [quality]) — pola yang sama dengan web sebelum upload.
+  /// kualitas mulai [quality]) — pola yang sama dengan web sebelum upload.
+  /// Kamera 50 MP (atau mode malam) bisa memaksa hasil >1 MB walau sudah
+  /// di-resize, jadi
+  /// kualitas diturunkan bertahap (−10) sampai hasil ≤ [maxBytes] (default
+  /// 400 KB) atau mentok di [minQuality]; ukuran sepatutnya masih terbaca
+  /// admin. Return null kalau pengguna batal atau gambar gagal dikompres.
   /// Avatar memakai maxSide kecil (512) agar upload cepat.
   static Future<Uint8List?> pickAndCompressImage(
-      {ImageSource source = ImageSource.gallery, int maxSide = 1200, int quality = 75}) async {
+      {ImageSource source = ImageSource.gallery,
+      int maxSide = 1200,
+      int quality = 75,
+      int maxBytes = 400 * 1024,
+      int minQuality = 40}) async {
     final picked = await ImagePicker().pickImage(source: source, imageQuality: 85, maxWidth: 2000);
     if (picked == null) return null;
     final raw = await picked.readAsBytes();
-    final compressed = await FlutterImageCompress.compressWithList(
+    Uint8List compressed;
+    try {
+      compressed = await _compressBytes(raw, maxSide, quality);
+    } catch (_) {
+      rethrow; // gambar tak bisa dikodekan — biarkan pemanggil tampilkan error
+    }
+    // Cap ukuran: turunkan kualitas bertahap sampai ≤ cap atau mentok.
+    var q = quality;
+    while (compressed.length > maxBytes && q > minQuality) {
+      q = (q - 10 < minQuality) ? minQuality : q - 10;
+      Uint8List attempt;
+      try {
+        attempt = await _compressBytes(raw, maxSide, q);
+      } catch (_) {
+        break; // pertahankan iterasi sukses terakhir
+      }
+      if (attempt.length >= compressed.length) break; // kualitas turun tak mengecilkan → stop
+      compressed = attempt;
+    }
+    return compressed;
+  }
+
+  /// Kompres byte gambar ke JPEG (sisi terpanjang ≤ maxSide, kualitas [q]).
+  static Future<Uint8List> _compressBytes(Uint8List raw, int maxSide, int q) async {
+    return FlutterImageCompress.compressWithList(
       raw,
       minWidth: maxSide,
       minHeight: maxSide,
-      quality: quality,
+      quality: q,
       format: CompressFormat.jpeg,
     );
-    return compressed;
+  }
+
+  /// URL navigasi Google Maps ke titik (lat,lng) — dibuka url_launcher:
+  /// aplikasi Maps di Android / peta di browser, dengan rute belokan.
+  static String directionsUrl(double lat, double lng) {
+    return 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving';
   }
 
   /// Upload ke bucket dan kembalikan PATH-nya (bukan publicUrl).

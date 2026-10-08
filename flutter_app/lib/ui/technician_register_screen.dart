@@ -1,7 +1,6 @@
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
@@ -61,34 +60,7 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
   /// Pilih foto KTP (galeri/kamera) → kompres 1200px/kualitas 90 (teks KTP
   /// tetap terbaca admin, pola sama dengan web) → upload ke folder anon.
   Future<void> _pickKtp() async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('Unggah Foto KTP',
-                style: TextStyle(fontWeight: FontWeight.w800)),
-          ),
-          ListTile(
-            leading:
-                const Icon(Icons.photo_library_rounded, color: AppColors.brand),
-            title: const Text('Pilih dari Galeri'),
-            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-          ),
-          ListTile(
-            leading:
-                const Icon(Icons.photo_camera_rounded, color: AppColors.brand),
-            title: const Text('Ambil Foto Baru'),
-            onTap: () => Navigator.pop(ctx, ImageSource.camera),
-          ),
-          const SizedBox(height: 8),
-        ]),
-      ),
-    );
+    final source = await chooseImageSource(context, title: 'Unggah Foto KTP');
     if (source == null || !mounted) return;
     setState(() => _uploadingKtp = true);
     try {

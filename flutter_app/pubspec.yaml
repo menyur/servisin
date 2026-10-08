@@ -14,6 +14,10 @@ dependencies:
   firebase_messaging: ^16.0.3     # push notification Android (tugas baru, status pesanan)
   image_picker: ^1.1.2            # pilih foto (bukti bayar, lampiran keluhan)
   flutter_image_compress: ^2.3.0  # resize+compress sebelum upload (paritas dgn web)
+  flutter_map: ^8.1.1             # peta OSM gratis — pilih titik lokasi (tanpa API key)
+  latlong2: ^0.9.1                # tipe lat/lng companion flutter_map
+  url_launcher: ^6.3.0            # buka rute Google Maps dari detail pesanan teknisi
+  geolocator: ^13.0.1             # GPS on-duty teknisi (simpan lokasi saat layar Pekerjaan aktif)
   intl: ^0.19.0                   # format rupiah & tanggal id-ID
   http: ^1.2.0                    # panggil API web (notifikasi admin saat lepas tugas)
   shared_preferences: ^2.3.2      # cache preferensi notifikasi lokal
