@@ -1,0 +1,94 @@
+# Gate regresi LIVE sebelum rilis — realtime + audit keamanan F3–F6.
+#
+# Kenapa MANUAL, bukan tiap push? Probe ini TIDAK read-only: ia membuat baris
+# uji sementara di tabel produksi (bookings/reports/chat_messages) plus akun
+# auth sementara, memverifikasi perilaku nyata, lalu menghapusnya lagi. Data
+# produksi tidak boleh disentuh pada setiap push, dan kredensial service-role
+# sebaiknya hanya dipakai saat kamu benar-benar menjalankannya.
+#
+# Cara pakai:
+#   GitHub → Actions → "Live Probe (regression gate)" → Run workflow.
+#   Lokal: npm run verify:live   (kredensial dari .env.local)
+#
+# Secret yang dibutuhkan:
+#   SUPABASE_SERVICE_ROLE_KEY  ← satu-satunya rahasia; ada di .env.local lokal
+#                                atau Supabase → Settings → API.
+# URL proyek & kunci publishable TIDAK perlu secret — keduanya publik dan
+# sudah ikut dibundel di APK oleh .github/workflows/build-apk.yml.
+#
+# Ingin dijadwalkan otomatis (mis. tiap Senin 02:00 UTC)? Tambahkan di bawah
+# `on:` — sadari bahwa ini akan menulis data uji ke produksi tanpa diminta:
+#   schedule:
+#     - cron: "0 2 * * 1"
+
+name: Live Probe (regression gate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Batasi langkah (id dipisah koma). Kosong = semua. Lihat: node scripts/ci-probe-gate.mjs --list"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-probe
+  cancel-in-progress: false
+
+jobs:
+  live-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Publik (identik dengan yang dipakai build APK) — bukan rahasia.
+      NEXT_PUBLIC_SUPABASE_URL: https://sgxlnhzezknmdhefsvvu.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef
+      # Rahasia — hanya diisi dari repository secret.
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Pasang dependensi
+        run: npm ci
+
+      - name: Pastikan secret service-role tersedia
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Secret SUPABASE_SERVICE_ROLE_KEY belum di-set. Tambahkan di Settings → Secrets and variables → Actions → New repository secret. Workflow ini hanya berjalan manual, jadi akses service-role hanya dipakai saat kamu menjalankannya."
+            exit 1
+          fi
+
+      # pipefail wajib: tanpa itu `tee` menutupi status keluar gate.
+      - name: Jalankan gate probe live
+        run: |
+          set -o pipefail
+          ONLY="${{ inputs.only }}"
+          if [ -n "$ONLY" ]; then
+            node scripts/ci-probe-gate.mjs --only="$ONLY" 2>&1 | tee probe.log
+          else
+            npm run verify:live 2>&1 | tee probe.log
+          fi
+
+      - name: Ringkas kegagalan sebagai annotation
+        if: failure()
+        run: |
+          tail -30 probe.log 2>/dev/null | while IFS= read -r l; do echo "::error::${l:0:170}"; done
+
+      - name: Simpan log probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-log
+          path: probe.log
+          if-no-files-found: ignore
+          retention-days: 7
