@@ -22,12 +22,65 @@ on:
       # Skrip/docs pendukung tidak perlu build APK ulang:
       - "!flutter_app/android/backup-keystore.sh"
   workflow_dispatch:
+    inputs:
+      skip_gate:
+        description: "Lewati gate probe live (hanya untuk keadaan darurat — rilis tanpa pemeriksaan regresi)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
+  # Gate regresi: probe live (realtime + audit F3–F6 + E2E F7) dijalankan LEBIH
+  # DULU. Bila ada regresi, job ini gagal dan build/publish APK tidak jalan.
+  # Detail: scripts/ci-probe-gate.mjs · workflow manual: live-probe.yml
+  live-probe:
+    if: ${{ !inputs.skip_gate }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Publik (sama seperti yang dibundel di APK) — bukan rahasia.
+      NEXT_PUBLIC_SUPABASE_URL: https://sgxlnhzezknmdhefsvvu.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef
+      # Rahasia → repository secret. Tanpa ini gate berhenti dengan pesan jelas.
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Pasang dependensi
+        run: npm ci
+      - name: Pastikan secret service-role tersedia
+        run: |
+          if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
+            echo "::error::Gate regresi butuh secret SUPABASE_SERVICE_ROLE_KEY, dan build APK tidak jalan tanpanya. Pilih salah satu: (1) tambahkan secret di Settings → Secrets and variables → Actions, atau (2) jalankan workflow ini manual dengan input skip_gate=true (darurat saja), atau (3) hapus 'needs: live-probe' pada job build-apk."
+            exit 1
+          fi
+      - name: Jalankan gate probe live
+        run: |
+          set -o pipefail
+          npm run verify:live 2>&1 | tee probe.log
+      - name: Ringkas kegagalan sebagai annotation
+        if: failure()
+        run: |
+          tail -30 probe.log 2>/dev/null | while IFS= read -r l; do echo "::error::${l:0:170}"; done
+      - name: Simpan log probe
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-log-apk-gate
+          path: probe.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   build-apk:
+    needs: live-probe
+    # Job yang di-skip (mis. skip_gate=true) membuat dependennya ikut skip bila
+    # tanpa kondisi ini — padahal justru itu tujuan skip_gate.
+    if: ${{ always() && (needs.live-probe.result == 'success' || needs.live-probe.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
