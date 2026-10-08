@@ -39,7 +39,7 @@ Metode: audit statis SQL/kode (web `src/` + Flutter) + **probe live read-only** 
 ### 1c. Penyelesaian & komisi
 - RPC `set_job_status` ([migrate-technician-jobs.sql](../supabase/technician-jobs.sql) + skill-filter): guard `technician_id = auth.uid()` + status valid; completed → potong komisi dari saldo, **idempoten** via unique index `bt_booking_earning_unique`. ✅
 - Klaim job atomik (`claim_job`, update bersyarat `technician_id is null`) — aman balapan antar teknisi. ✅
-- Realtime butuh `replica identity full` + publication ([migrate-realtime-bookings.sql](../supabase/migrate-realtime-bookings.sql)) — jalankan bila belum.
+- Realtime butuh `replica identity full` + publication ([migrate-realtime-bookings.sql](../supabase/migrate-realtime-bookings.sql)) — jalankan bila belum. ✅ **TERTUTUP (8 Okt 2026)**: migrasi sudah dijalankan. Verifikasi empiris via [scripts/verify-realtime-bookings.mjs](../scripts/verify-realtime-bookings.mjs) — event `INSERT`, `UPDATE`, dan `DELETE` semuanya diterima, dan `old_record` pada UPDATE memuat seluruh kolom (berarti `replica identity full`, bukan default). Baris uji dihapus otomatis (0 sisa baris `RT-VERIFY-%`).
 
 ---
 
