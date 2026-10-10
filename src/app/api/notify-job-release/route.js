@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendPushToUser } from "@/lib/notify";
+import { offerReleasedJobToNearestTechnicians } from "@/lib/job-offer";
 import { sendAdminJobReleaseEmail } from "@/lib/email";
 
 export const dynamic = "force-dynamic";
@@ -57,15 +58,23 @@ export async function POST(request) {
       .maybeSingle();
     if (!release) return NextResponse.json({ ok: false, skipped: "release-tidak-ditemukan" });
 
-    // Konteks pesanan — teknisi pemilik boleh membaca pesanannya sendiri.
-    const [{ data: booking }, { data: tech }] = await Promise.all([
-      sb
+    // Konteks pesanan. Teknisi pemilik TIDAK lagi bisa membaca barisnya via
+    // RLS begitu tugas dilepas (technician_id sudah null, policy "technician
+    // can view assigned bookings" tak berlaku) — jadi sesudah gerbang
+    // kepemilikan di atas lolos, konteks dibaca dengan service role. Tanpa ini
+    // notifikasi admin berisi "#-" tanpa alamat/jadwal.
+    let booking = null;
+    try {
+      const { data } = await createAdminClient()
         .from("bookings")
-        .select("code, address, booking_date, booking_time, services(name)")
+        .select("id, code, address, lat, lng, service_id, booking_date, booking_time, services(name)")
         .eq("id", bookingId)
-        .maybeSingle(),
-      sb.from("profiles").select("name").eq("id", user.id).maybeSingle(),
-    ]);
+        .maybeSingle();
+      booking = data;
+    } catch (e) {
+      console.warn("[notify-job-release] baca konteks pesanan gagal:", e?.message);
+    }
+    const { data: tech } = await sb.from("profiles").select("name").eq("id", user.id).maybeSingle();
 
     const code = booking?.code || "-";
     const serviceName = booking?.services?.name || "Layanan";
@@ -113,7 +122,22 @@ export async function POST(request) {
       console.warn("[notify-job-release] email admin gagal:", e?.message);
     }
 
-    return NextResponse.json({ ok: true, push: pushCount, emailed });
+    // 3) Tawarkan tugas yang baru dilepas ke teknisi TERDEKAT yang keahlian &
+    //    areanya cocok (push web + FCM). Fire-and-forget: kalau tidak ada yang
+    //    cocok / env belum lengkap, pesanan tetap kembali ke daftar Tersedia.
+    let offered = 0;
+    try {
+      const r = await offerReleasedJobToNearestTechnicians(booking, {
+        serviceName,
+        serviceId: booking?.service_id || null,
+        excludeUserId: user.id, // yang melepas tidak ditawari tugasnya sendiri
+      });
+      offered = r.offered || 0;
+    } catch (e) {
+      console.warn("[notify-job-release] tawaran teknisi terdekat gagal:", e?.message);
+    }
+
+    return NextResponse.json({ ok: true, push: pushCount, emailed, offered });
   } catch (err) {
     console.error("[notify-job-release] error:", err?.message);
     // Tetap 200 — gagal notifikasi tidak boleh dianggap gagal melepas tugas.

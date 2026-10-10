@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -16,10 +18,12 @@ import 'ui/booking_wizard.dart';
 import 'ui/order_detail_screen.dart';
 import 'ui/onboarding_screen.dart';
 import 'ui/splash_screen.dart';
+import 'ui/welcome_screen.dart';
 import 'ui/common.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'push_service.dart';
+import 'signup_handoff.dart';
 
 import 'web_error_probe.dart';
 
@@ -70,9 +74,109 @@ Future<void> main() async {
   runApp(FixifyApp(startOnboarding: !seenOnboarding));
 }
 
-class FixifyApp extends StatelessWidget {
+class FixifyApp extends StatefulWidget {
   final bool startOnboarding;
   const FixifyApp({super.key, required this.startOnboarding});
+
+  @override
+  State<FixifyApp> createState() => _FixifyAppState();
+}
+
+class _FixifyAppState extends State<FixifyApp> {
+  StreamSubscription<AuthState>? _authSub;
+  bool _pendingRecovery = false;
+  int _recoveryAttempts = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // Deep link reset kata sandi (fixify://reset-password): app_links
+    // menyerahkan URL ke supabase_flutter, yang menukar kode PKCE menjadi
+    // sesi pemulihan lalu memancarkan `passwordRecovery`. Ditangkap di akar
+    // app agar form "Kata Sandi Baru" terbuka dari mana pun pengguna berada.
+    // Subscribe di sini juga menangani cold start: BehaviorSubject Supabase
+    // memutar ulang event terakhir saat listener dipasang.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      switch (data.event) {
+        case AuthChangeEvent.passwordRecovery:
+          // fixify://reset-password → buka form "Kata Sandi Baru".
+          _pendingRecovery = true;
+          _openSetPassword();
+        case AuthChangeEvent.signedIn:
+          // fixify://confirm (verifikasi email pendaftaran) → sesi aktif tanpa
+          // lewat layar login; arahkan pengguna ke beranda — atau ke layar
+          // Selamat Datang bila ini verifikasi email pendaftaran.
+          _routeAfterSignIn();
+        case _:
+          break;
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// Pindah ke form kata sandi baru — tunggu sampai navigator terpasang
+  /// (cold start: event bisa datang sebelum MaterialApp dibangun), lalu
+  /// bersihkan tumpukan rute. pushNamedAndRemoveUntil penting agar splash
+  /// TIDAK menimpanya dengan pushReplacement 1,9 detik kemudian.
+  void _openSetPassword() {
+    if (!_pendingRecovery) return;
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      // navigator belum siap — coba lagi sebentar (dibatasi agar tidak
+      // berputar tanpa henti bila app sedang tidak menampilkan UI).
+      if (_recoveryAttempts++ < 100) {
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (mounted) _openSetPassword();
+        });
+      }
+      return;
+    }
+    _pendingRecovery = false;
+    _recoveryAttempts = 0;
+    nav.pushNamedAndRemoveUntil('/set-password', (r) => false);
+  }
+
+  /// Verifikasi email pendaftaran lewat deep link `fixify://confirm`
+  /// menghasilkan sesi TANPA melewati layar login. Kasus yang ditangani:
+  /// app masih di splash (cold start — splash sudah terlanjur memilih
+  /// '/login') atau pengguna sedang di layar daftar/masuk saat tautan diklik.
+  ///
+  /// Penjaga [shouldGoHomeAfterSignIn] memakai rute teratas yang dilacak
+  /// observer: alur login biasa tetap dinavigasi oleh layarnya sendiri dan
+  /// tidak jadi ganda karena penjaga melihat rute sudah '/'.
+  void _routeAfterSignIn() {
+    if (!shouldGoHomeAfterSignIn(currentRouteName.value)) return;
+    unawaited(_routeAfterSignInAsync());
+  }
+
+  /// Tentukan tujuan setelah sesi baru: layar **Selamat Datang** bila penanda
+  /// pendaftaran (SignupHandoff) cocok dengan email yang baru terverifikasi —
+  /// supaya pengguna baru tidak mendarat di beranda tanpa arah — selain itu
+  /// beranda seperti biasa (login manual, Google, sesi dipulihkan).
+  Future<void> _routeAfterSignInAsync() async {
+    final role = await SignupHandoff.consumeFor(
+        Supabase.instance.client.auth.currentUser?.email);
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!shouldGoHomeAfterSignIn(currentRouteName.value)) return;
+      final nav = navigatorKey.currentState;
+      if (nav == null) return;
+      if (role == null) {
+        nav.pushNamedAndRemoveUntil('/', (r) => false);
+      } else {
+        nav.pushNamedAndRemoveUntil('/welcome', (r) => false, arguments: role);
+      }
+      // Paritas alur login: ikat token FCM perangkat ini ke user yang baru
+      // aktif (no-op di web/iOS atau bila token belum siap).
+      unawaited(PushService.onLoggedIn());
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -83,10 +187,14 @@ class FixifyApp extends StatelessWidget {
       title: 'Fixify',
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
+      // Melacak rute teratas (common.dart) — dipakai handler deep link agar
+      // tidak navigasi ganda saat pengguna sudah di beranda.
+      navigatorObservers: [AuthRouteObserver()],
       theme: AppTheme.light,
       initialRoute: '/splash',
       routes: {
-        '/splash': (_) => SplashScreen(startOnboarding: startOnboarding, isLoggedIn: isLoggedIn),
+        '/splash': (_) => SplashScreen(
+            startOnboarding: widget.startOnboarding, isLoggedIn: isLoggedIn),
         // '/' = shell 5 tab (Beranda/Pesanan/Laporan/Voucher/Profil)
         // dengan transisi fade+slide antar tab.
         '/': (_) => const MainShell(),
@@ -97,6 +205,9 @@ class FixifyApp extends StatelessWidget {
         // tautan dari login/daftar mudah dibagikan & di-deep-link.
         '/register-technician': (_) => const TechnicianRegisterScreen(),
         '/reset-password': (_) => const ResetPasswordScreen(),
+        // Langkah 2 reset (mobile): dibuka otomatis dari deep link
+        // fixify://reset-password — lihat _FixifyAppState._openSetPassword.
+        '/set-password': (_) => const SetNewPasswordScreen(),
       },
       onGenerateRoute: (settings) {
         if (settings.name == '/booking') {
@@ -106,6 +217,14 @@ class FixifyApp extends StatelessWidget {
         if (settings.name == '/order-detail') {
           final booking = settings.arguments as Booking;
           return MaterialPageRoute(builder: (_) => OrderDetailScreen(booking: booking));
+        }
+        // Layar Selamat Datang pasca-verifikasi email; arguments = peran
+        // ('technician' | 'customer') dari SignupHandoff.
+        if (settings.name == '/welcome') {
+          return MaterialPageRoute(
+            builder: (_) => WelcomeScreen(role: settings.arguments as String?),
+            settings: settings,
+          );
         }
         // Deep link: /booking?service=<id> — buka wizard langsung dari URL
         // (dipakai uji & nanti push notification "pesanan layanan X").

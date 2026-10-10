@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../format.dart';
@@ -10,7 +9,9 @@ import '../models.dart';
 import '../theme.dart';
 import 'balance_screen.dart';
 import 'common.dart';
+import 'mini_pin_map.dart';
 import 'order_detail_screen.dart';
+import 'pin_preview_sheet.dart';
 
 /// Tab "Pekerjaan" untuk teknisi:
 /// - **Tersedia** — pesanan sudah dibayar & belum diambil siapa pun,
@@ -40,6 +41,9 @@ class _JobsScreenState extends State<JobsScreen> {
   /// false = hanya pekerjaan sesuai keahlian utama teknisi (default),
   /// true = tampilkan semua kategori (opsi "Semua keahlian").
   bool _showAllSkills = false;
+
+  /// Batas tunggu lokasi saat memuat daftar (lihat `_load`).
+  static const _locationWait = Duration(seconds: 12);
 
   // GPS on-duty: posisi terakhir untuk jarak ke job terbuka & upsert lokasi.
   // Posisi basi diperbolehkan — daftar tetap terurut tanggal bila GPS gagal.
@@ -78,7 +82,12 @@ class _JobsScreenState extends State<JobsScreen> {
       _error = null;
     });
     if (withLocation) {
-      await _acquireLocation(); // gagal = tanpa jarak, bukan error
+      // Batas keras: `LocationSettings.timeLimit` TIDAK selalu dihormati
+      // platform — saat izin lokasi diberikan tapi GPS belum dapat fix,
+      // permintaan bisa menggantung tanpa akhir dan daftar pekerjaan ikut
+      // menggantung (layar hanya menampilkan spinner). Tenggat di sini
+      // memastikan daftar tetap tampil, tanpa jarak.
+      await _acquireLocation().timeout(_locationWait, onTimeout: () {});
     }
     try {
       final results = await Future.wait([
@@ -141,67 +150,50 @@ class _JobsScreenState extends State<JobsScreen> {
     }
   }
 
-  /// Tombol Rute di kartu Tersedia: pin pelanggan TIDAK dikirim RPC
-  /// available_jobs sebelum klaim (privasi pin) — jadi tombol ini
-  /// menawarkan klaim dulu; setelah sukses, pin diambil dari tugas yang
-  /// baru diklaim (terbaca via RLS) lalu Google Maps dibuka.
-  Future<void> _routeToPinnedJob(AvailableJob job) async {
-    final sure = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Buka rute ke lokasi?'),
-        content: Text(
-          'Titik lokasi #${job.code} baru bisa dibuka setelah kamu mengambil '
-          'pekerjaan ini. Klaim sekarang dan langsung buka rute?',
-          style: const TextStyle(fontSize: 13, height: 1.45),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ya, Klaim & Rute')),
-        ],
-      ),
-    );
-    if (sure != true || !mounted) return;
+  /// Tombol Rute di kartu Tersedia: alamat sudah tampil lengkap di kartu, jadi
+  /// rutenya dibuka langsung ke Google Maps memakai alamat tersebut — tanpa
+  /// dialog klaim-dulu. Titik exact (pin) baru terbaca setelah klaim, dan saat
+  /// itu rute otomatis naik ke titik pin (lihat [_routeAfterClaim]).
+  Future<void> _routeToAvailableJob(AvailableJob job) =>
+      openRouteToDestination(context, address: job.address);
 
-    setState(() => _claimingId = job.id);
+  /// Rute ke lokasi pelanggan SETELAH klaim berhasil.
+  ///
+  /// Pin pelanggan baru terbaca setelah jadi penanggung jawab (RLS bookings):
+  ///   * ada pin → tampilkan pratinjau peta + tombol rute (peta memang bisa
+  ///     dibuka teknisi; titik exact-nya sudah aman untuknya),
+  ///   * tanpa pin (pelanggan hanya menulis alamat) → langsung buka Google
+  ///     Maps ke alamat itu, jadi teknisi tak perlu menyalin alamat manual.
+  /// Gagal membaca tugas → pakai alamat dari kartu Tersedia (sudah terbaca).
+  Future<void> _routeAfterClaim(AvailableJob job) async {
+    double? lat;
+    double? lng;
+    var address = job.address;
     try {
-      final r = await Api.claimJob(job.id);
-      if (!mounted) return;
-      if (!r.ok) {
-        showSnack(context, r.error ?? 'Gagal mengambil pekerjaan.', error: true);
-        await _load(); // daftar mungkin berubah (diambil orang lain)
-        return;
+      final mine = await Api.fetchAssignedJobs();
+      final b = mine.where((x) => x.id == job.id).firstOrNull;
+      if (b != null) {
+        lat = b.lat;
+        lng = b.lng;
+        address = b.address;
       }
-      suppressBookingNotify(job.code);
-      showSnack(context, 'Berhasil! #${job.code} kini tugasmu.');
-
-      // Pin terbaca setelah jadi penanggung jawab (RLS bookings).
-      double? lat;
-      double? lng;
-      try {
-        final mine = await Api.fetchAssignedJobs();
-        final b = mine.where((x) => x.id == job.id).firstOrNull;
-        lat = b?.lat;
-        lng = b?.lng;
-      } catch (_) {
-        // gagal ambil tugas → jatuh ke pesan fallback di bawah
-      }
-      if (!mounted) return;
-      setState(() => _tab = 1); // lihat tugas baru
-      await _load();
-      if (lat != null && lng != null) {
-        await launchUrl(
-          Uri.parse(Api.directionsUrl(lat, lng)),
-          mode: LaunchMode.externalApplication,
-        );
-      } else if (mounted) {
-        showSnack(context, 'Pin lokasi belum terbaca — buka detail tugas untuk alamat.', error: true);
-      }
-    } catch (e) {
-      if (mounted) showSnackError(context, e, 'Gagal membuka rute.');
-    } finally {
-      if (mounted) setState(() => _claimingId = null);
+    } catch (_) {
+      // gagal ambil tugas → alamat kartu Tersedia sudah cukup
     }
+    if (!mounted) return;
+
+    final la = lat;
+    final ln = lng;
+    if (la != null && ln != null) {
+      await showPinPreviewSheet(
+        context,
+        lat: la,
+        lng: ln,
+        onRoute: () => openRouteToDestination(context, lat: la, lng: ln, address: address),
+      );
+      return;
+    }
+    await openRouteToDestination(context, lat: la, lng: ln, address: address);
   }
 
   Future<void> _claim(AvailableJob job) async {
@@ -234,6 +226,8 @@ class _JobsScreenState extends State<JobsScreen> {
         showSnack(context, 'Berhasil! #${job.code} kini tugasmu.');
         setState(() => _tab = 1); // langsung lihat tugas baru
         await _load();
+        // Rute otomatis setelah klaim (pin bila ada, alamat bila tidak).
+        if (mounted) await _routeAfterClaim(job);
       } else {
         showSnack(context, r.error ?? 'Gagal mengambil pekerjaan.', error: true);
         await _load(); // daftar mungkin berubah (diambil orang lain)
@@ -377,10 +371,11 @@ class _JobsScreenState extends State<JobsScreen> {
         return false;
       }
       if (hasSkill && !_showAllSkills) {
-        // RPC lama tanpa kolom kategori (migrasi skill-filter belum
-        // dijalankan): jangan menutup daftar — tampilkan apa adanya.
-        if (j.serviceCategory == null) return true;
-        return j.serviceCategory == skill;
+        // Cocokkan lewat id ATAU nama kategori — toleran terhadap nilai
+        // skill warisan berupa label ('Service AC'), paritas dengan RPC
+        // technician_matches_service() dan filter push web. RPC lama tanpa
+        // kolom kategori otomatis fail-open (lihat skillMatchesCategory).
+        return skillMatchesCategory(skill, j.serviceCategory, j.serviceCategoryName);
       }
       return true;
     }).toList(growable: false);
@@ -440,11 +435,12 @@ class _JobsScreenState extends State<JobsScreen> {
     );
   }
 
-  Widget _card(AvailableJob job) => _AvailableCard(
+  Widget _card(AvailableJob job) => AvailableCard(
         job: job,
         claiming: _claimingId == job.id,
         onClaim: () => _claim(job),
-        onRoute: job.hasPin == true ? () => _routeToPinnedJob(job) : null,
+        // Rute selalu tersedia selama alamat terbaca — tidak lagi menunggu pin.
+        onRoute: job.address.trim().isEmpty ? null : () => _routeToAvailableJob(job),
       );
 
   Widget _assignedList(List<Booking> bookings) {
@@ -462,7 +458,20 @@ class _JobsScreenState extends State<JobsScreen> {
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, i) {
         final b = bookings[i];
-        return _AssignedCard(booking: b, onTap: () => _openDetail(b), onRelease: () => _release(b));
+        return AssignedJobCard(
+          booking: b,
+          onTap: () => _openDetail(b),
+          onRelease: () => _release(b),
+          // Rute ke pelanggan: titik exact bila pin ada, jika tidak alamat
+          // lengkapnya — teknisi selalu punya tombol rute setelah tugasnya
+          // terbaca (tidak lagi bergantung pada pin pelanggan).
+          onRoute: () => openRouteToDestination(
+            context,
+            lat: b.lat,
+            lng: b.lng,
+            address: b.address,
+          ),
+        );
       },
     );
   }
@@ -597,16 +606,19 @@ class _PinBadge extends StatelessWidget {
   }
 }
 
-/// Kartu pekerjaan tersedia + tombol Ambil.
-class _AvailableCard extends StatelessWidget {
+/// Kartu pekerjaan tersedia + tombol Ambil & Rute.
+/// Publik agar bisa diuji langsung (pola sama dengan [AssignedJobCard]) —
+/// termasuk regresi tata letak tombol di dalam Row (lebar tak terbatas).
+class AvailableCard extends StatelessWidget {
   final AvailableJob job;
   final bool claiming;
   final VoidCallback onClaim;
 
-  /// Null = job tanpa pin (atau RPC lama) → tombol Rute disembunyikan.
+  /// Null = tidak ada tujuan rute (alamat kosong) → tombol Rute disembunyikan.
   final VoidCallback? onRoute;
 
-  const _AvailableCard({
+  const AvailableCard({
+    super.key,
     required this.job,
     required this.claiming,
     required this.onClaim,
@@ -699,14 +711,19 @@ class _AvailableCard extends StatelessWidget {
                 label: Text(claiming ? 'Mengambil…' : 'Ambil Pekerjaan'),
               ),
             ),
-            // Rute ke pin pelanggan — muncul hanya untuk job ber-pin.
-            // Sebelum klaim: dialog konfirmasi (klaim dulu → pin terbuka).
+            // Rute ke pelanggan — alamat sudah tampil di kartu, jadi tombolnya
+            // TIDAK menunggu pin (pin baru terbaca setelah klaim).
             if (onRoute != null) ...[
               const SizedBox(width: 8),
               OutlinedButton.icon(
                 onPressed: claiming ? null : onRoute,
                 icon: const Icon(Icons.navigation_rounded, size: 17),
-                label: const Text('Rute'),
+                label: const Text('Rute'),                // WAJIB minimumSize terbatas: tema global memakai lebar tak
+                // hingga (tombol selebar wadah), dan anak non-Expanded sebuah
+                // Row menerima lebar TAK TERBATAS → layout mati dengan error
+                // "BoxConstraints forces an infinite width" (seluruh kartu
+                // rusak, tombol rute tak bisa dipakai).
+                style: AppTheme.compactOutlinedButton,
               ),
             ],
           ]),
@@ -725,19 +742,32 @@ class _AvailableCard extends StatelessWidget {
       ]);
 }
 
-/// Kartu tugas yang sudah diambil — ketuk untuk detail.
-class _AssignedCard extends StatelessWidget {
+/// Kartu tugas yang sudah diambil — ketuk untuk detail. Menampilkan pratinjau
+/// pin pelanggan + tombol rute bila koordinatnya sudah terbaca (paritas dgn
+/// detail pesanan). Publik agar bisa diuji langsung.
+class AssignedJobCard extends StatelessWidget {
   final Booking booking;
   final VoidCallback onTap;
   final VoidCallback onRelease;
 
-  const _AssignedCard({required this.booking, required this.onTap, required this.onRelease});
+  /// Null = tidak ada tujuan rute (alamat & pin kosong) → tombol disembunyikan.
+  /// Terisi → tombol "Buka Rute" selalu tampil (peta mini hanya bila ada pin).
+  final VoidCallback? onRoute;
+
+  const AssignedJobCard({
+    super.key,
+    required this.booking,
+    required this.onTap,
+    required this.onRelease,
+    this.onRoute,
+  });
 
   bool get _cancellable =>
       booking.status == BookingStatus.paid || booking.status == BookingStatus.inProgress;
 
   @override
   Widget build(BuildContext context) {
+    final hasPin = booking.lat != null && booking.lng != null;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -746,24 +776,26 @@ class _AssignedCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: AppColors.line),
         ),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          // strip aksen status
-          Container(
-            width: 5,
-            height: 96,
-            decoration: BoxDecoration(
-              color: booking.status == BookingStatus.completed
-                  ? AppColors.mint
-                  : booking.status == BookingStatus.inProgress
-                      ? AppColors.brand
-                      : AppColors.amber,
-              borderRadius: const BorderRadius.horizontal(left: Radius.circular(18)),
+        // IntrinsicHeight + stretch: strip aksen kiri ikut setinggi kartu —
+        // termasuk saat pratinjau peta ditambahkan, bukan terpaku 96px.
+        child: IntrinsicHeight(
+          child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            // strip aksen status
+            Container(
+              width: 5,
+              decoration: BoxDecoration(
+                color: booking.status == BookingStatus.completed
+                    ? AppColors.mint
+                    : booking.status == BookingStatus.inProgress
+                        ? AppColors.brand
+                        : AppColors.amber,
+                borderRadius: const BorderRadius.horizontal(left: Radius.circular(18)),
+              ),
             ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Row(children: [
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
@@ -820,10 +852,41 @@ class _AssignedCard extends StatelessWidget {
                   if (_cancellable) const SizedBox(width: 8),
                   const Icon(Icons.chevron_right_rounded, color: AppColors.inkSoft, size: 20),
                 ]),
+                // Pratinjau pin pelanggan (paritas dgn detail pesanan): ketuk
+                // peta atau tombol Rute → Google Maps. GestureDetector di dalam
+                // peta menang atas ketukan kartu, jadi ketukan di peta = rute.
+                if (hasPin) ...[
+                  const SizedBox(height: 10),
+                  MiniPinMap(
+                    lat: booking.lat!,
+                    lng: booking.lng!,
+                    height: 110,
+                    onTap: onRoute,
+                  ),
+                ],
+                // Tombol rute TIDAK bergantung pada pin: alamat lengkap sudah
+                // terbaca setelah tugas diambil, jadi teknisi selalu bisa
+                // membuka Google Maps (titik exact bila pelanggan memasang pin,
+                // jika tidak rute ke alamatnya).
+                if (onRoute != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      onPressed: onRoute,
+                      icon: const Icon(Icons.navigation_rounded, size: 16),
+                      label: const Text('Buka Rute'),
+                      // Konteks lebarnya bisa tak terbatas (Align/Row) — lihat
+                      // AppTheme.compactOutlinedButton.
+                      style: AppTheme.compactOutlinedButton,
+                    ),
+                  ),
+                ],
               ]),
             ),
           ),
         ]),
+        ),
       ),
     );
   }
@@ -840,8 +903,8 @@ class _BalanceStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final saldo = summary.balance;
-    final negative = saldo < 0;
+    final saldo = summary.displayBalance; // minimal Rp 0
+    final negative = summary.isNegative;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -888,6 +951,13 @@ class _BalanceStrip extends StatelessWidget {
             // Label sama dengan layar Saldo: potongan riil = komisi + biaya app.
             _stat(AppColors.coral, formatRupiah(summary.platformCutTotal), 'Komisi + biaya app'),
           ],
+          // Penanda halus: admin sudah meminta teknisi setor saldo (banner
+          // lengkap ada di layar Saldo).
+          if (summary.needsDepositReminder)
+            const Padding(
+              padding: EdgeInsets.only(right: 6),
+              child: Icon(Icons.notifications_active_rounded, size: 16, color: AppColors.amber),
+            ),
           const SizedBox(width: 8),
           const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.inkSoft),
         ]),

@@ -25,12 +25,26 @@ class WorkerKickHelper {
   }
 }
 
+/// Normalisasi komentar penilaian: string kosong/spasi → null.
+///
+/// Kolom `comment` di database boleh NULL, jadi pelanggan yang menilai
+/// **tanpa komentar** menyimpan NULL (bukan string kosong) — sama dengan jalur
+/// web (`(comment || "").trim() || null` di src/app/actions/reviews.js).
+String? normalizeReviewComment(String? raw) {
+  final v = (raw ?? '').trim();
+  return v.isEmpty ? null : v;
+}
+
 /// Satu pintu akses ke Supabase: auth, katalog, booking, bukti bayar,
 /// review, laporan, voucher. Semua query mengikuti aturan RLS yang sama
 /// dengan web (user hanya melihat/mengubah datanya sendiri).
 class Api {
   Api._();
   static final SupabaseClient db = Supabase.instance.client;
+
+  /// UID user yang sedang login (null bila belum login). Dipakai UI untuk
+  /// kunci penyimpanan lokal per akun (mis. menutup banner pengingat setor).
+  static String? get currentUserId => db.auth.currentUser?.id;
 
   /// Rekening transfer resmi dari tabel app_settings (diisi admin di panel
   /// web). Gagal (tabel belum ada / offline) → null, UI menampilkan teks
@@ -62,10 +76,18 @@ class Api {
   static Future<AuthResponse> signIn(String email, String password) =>
       db.auth.signInWithPassword(email: email, password: password);
 
-  static Future<AuthResponse> signUp(String email, String password, {String? name, String? phone, String? address}) {
+  /// Daftar akun pelanggan.
+  ///
+  /// [emailRedirectTo] menentukan ke mana email konfirmasi kembali setelah
+  /// diklik: Android → deep link `fixify://confirm`
+  /// (AppConfig.signupConfirmRedirect) agar app terbuka dengan sesi aktif;
+  /// null → ikut Site URL Supabase (jalur web).
+  static Future<AuthResponse> signUp(String email, String password,
+      {String? name, String? phone, String? address, String? emailRedirectTo}) {
     return db.auth.signUp(
       email: email,
       password: password,
+      emailRedirectTo: emailRedirectTo,
       data: {'name': name ?? email, 'phone': phone, 'address': address, 'role': 'customer'},
     );
   }
@@ -77,6 +99,7 @@ class Api {
   /// menyetujui lewat tab "Pendaftar Teknisi".
   /// [ktpPath] = path file di bucket PRIVAT ktp-documents (folder pendaftaran/),
   /// WAJIB diisi — pendaftar tanpa KTP ditolak di sisi UI & web.
+  /// [emailRedirectTo] = deep link balik email konfirmasi (lihat [signUp]).
   static Future<AuthResponse> signUpTechnician({
     required String email,
     required String password,
@@ -85,10 +108,12 @@ class Api {
     required String address,
     required String skill,
     required String ktpPath,
+    String? emailRedirectTo,
   }) {
     return db.auth.signUp(
       email: email,
       password: password,
+      emailRedirectTo: emailRedirectTo,
       data: {
         'name': name,
         'phone': phone,
@@ -112,7 +137,20 @@ class Api {
     return path;
   }
 
-  static Future<void> sendPasswordReset(String email) => db.auth.resetPasswordForEmail(email);
+  /// Kirim email tautan reset kata sandi.
+  ///
+  /// [redirectTo] menentukan ke mana pengguna kembali setelah mengklik tautan:
+  /// Android → deep link `fixify://reset-password` (AppConfig
+  /// .resetPasswordRedirect) agar app terbuka dengan sesi pemulihan; null →
+  /// ikut Site URL Supabase (dipakai jalur web).
+  static Future<void> sendPasswordReset(String email, {String? redirectTo}) =>
+      db.auth.resetPasswordForEmail(email, redirectTo: redirectTo);
+
+  /// Simpan kata sandi baru untuk sesi pemulihan yang sedang aktif
+  /// (hasil klik tautan email reset). Sesi ini bersifat sementara —
+  /// panggil setelah pengguna mengisi form "Kata Sandi Baru".
+  static Future<void> updatePassword(String newPassword) =>
+      db.auth.updateUser(UserAttributes(password: newPassword));
 
   static Future<void> signOut() => db.auth.signOut();
 
@@ -535,7 +573,12 @@ class Api {
         .order('created_at', ascending: false);
     final reviewRows = await _myReviewedBookingIds();
     final reviewed = reviewRows.toSet();
-    return rows.map<Booking>((m) => Booking.fromMap(m, hasReview: reviewed.contains(m['id'] as String))).toList();
+    // Retensi riwayat (supabase/migrate-history-retention.sql): pesanan yang
+    // sudah dipurge disembunyikan dari daftar — barisnya tetap ada (audit).
+    final visible = rows.where((m) => m['history_purged_at'] == null);
+    return visible
+        .map<Booking>((m) => Booking.fromMap(m, hasReview: reviewed.contains(m['id'] as String)))
+        .toList();
   }
 
   static Future<List<String>> _myReviewedBookingIds() async {
@@ -619,7 +662,7 @@ class Api {
           'user_id': uid,
           'technician_id': technicianId,
           'rating': rating,
-          'comment': (comment ?? '').trim().isEmpty ? null : comment!.trim(),
+          'comment': normalizeReviewComment(comment),
         }, onConflict: 'booking_id')
         .select('id')
         .single();
@@ -778,9 +821,9 @@ class Api {
   ///   earning, BUKAN 2× komisi — bug lama yang sudah dikoreksi).
   /// * Komisi = Σ commission_amount baris earning (persen sesuai rate
   ///   admin); fallback Σ |amount| bila kolom kosong (row lama).
-  /// * Biaya app = Σ bookings.app_fee tiap earning ber-amount negatif —
-  ///   aturan platform: biaya aplikasi pelanggan IKUT dipotong langsung
-  ///   dari saldo teknisi, bersama komisi.
+  /// * Biaya app = Σ (|amount| − commission_amount) tiap earning ber-amount
+  ///   negatif — diturunkan dari POTONGAN RIIL, bukan fee booking penuh,
+  ///   agar tetap cocok saat potongan dibatasi saldo (kebijakan saldo ≥ 0).
   /// * expectedBalance = setoran − komisi − biaya app − penarikan + refund;
   ///   kalau ≠ profiles.balance ada anomali — termasuk state SEBELUM
   ///   migrate-earning-fee.sql dijalankan (fee belum dipotong DB →
@@ -801,11 +844,18 @@ class Api {
           final total = t.bookingTotalPrice;
           if (total != null && total > 0) earned += total;
           if (t.amount < 0) {
-            // Komisi murni dari kolom; fallback |amount| untuk row lama
-            // yang kolomnya kosong.
-            commission += (t.commissionAmount ?? (-t.amount)).round();
-            // Biaya app ikut dipotong dari saldo (aturan platform).
-            final fee = t.bookingAppFee ?? 0;
+            // Potongan riil baris ini (amount DB negatif = saldo berkurang),
+            // sudah dibatasi saldo tersedia di server (saldo tak boleh negatif).
+            final cut = (-t.amount).round();
+            // Komisi murni dari kolom; fallback |amount| untuk row lama yang
+            // kolomnya kosong.
+            final comm = (t.commissionAmount ?? cut).round();
+            commission += comm;
+            // Biaya app = SISA potongan setelah komisi — diturunkan dari
+            // amount, bukan bookings.app_fee, supaya cocok dengan yang benar
+            // benar dipotong (potongan bisa < komisi+fee penuh saat saldo
+            // kurang; sisa itu tidak lagi menjadi utang teknisi).
+            final fee = cut - comm;
             if (fee > 0) appFee += fee;
           }
         case 'topup':
@@ -829,6 +879,7 @@ class Api {
       withdrawalTotal: withdrawal,
       refundTotal: refund,
       expectedBalance: expected,
+      balanceReminderAt: p?.balanceReminderAt,
     );
   }
 
@@ -841,6 +892,38 @@ class Api {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Teknisi mengajukan SETOR saldo (model top-up) dari aplikasi:
+  /// unggah foto bukti transfer ke bucket privat `balance-proofs` (folder
+  /// `deposit/`) lalu catat baris `balance_deposits` berstatus 'pending'
+  /// (RLS `bd_insert_own`: technician_id = auth.uid(), status pending).
+  ///
+  /// Saldo TIDAK diubah di sini — admin menambah saldo setelah memverifikasi
+  /// bukti (sama seperti alur web `submitBalanceDeposit`). Kembalikan path bukti.
+  static Future<String> submitBalanceDeposit({
+    required int amount,
+    required Uint8List bytes,
+  }) async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) throw Exception('Belum login.');
+    if (amount <= 0) throw Exception('Isi jumlah setor yang valid.');
+
+    final path = await uploadToBucket(
+      bucket: 'balance-proofs',
+      folder: 'deposit',
+      bytes: bytes,
+      extension: 'jpg',
+    );
+
+    await db.from('balance_deposits').insert({
+      'technician_id': uid,
+      'amount': amount,
+      'claimed_amount': amount,
+      'proof_url': path, // simpan PATH (bucket privat); admin lihat via signed URL
+      'status': 'pending',
+    });
+    return path;
   }
 
   /// Riwayat mutasi saldo (100 terbaru, terbaru dulu).
@@ -925,6 +1008,23 @@ class Api {
   /// aplikasi Maps di Android / peta di browser, dengan rute belokan.
   static String directionsUrl(double lat, double lng) {
     return 'https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving';
+  }
+
+  /// URL rute Google Maps ke sebuah tujuan.
+  ///
+  /// Titik exact (lat/lng) dipakai bila tersedia — paling akurat. Bila
+  /// pelanggan TIDAK memasang pin, tujuan diisi alamat lengkap sebagai teks
+  /// (Google Maps mencari alamatnya sendiri): teknisi yang sudah menerima
+  /// alamat tetap bisa langsung navigasi, tidak lagi bergantung pada pin.
+  ///
+  /// Mengembalikan null hanya bila tidak ada tujuan sama sekali (tanpa
+  /// koordinat DAN tanpa alamat).
+  static String? routeUrl({double? lat, double? lng, String? address}) {
+    if (lat != null && lng != null) return directionsUrl(lat, lng);
+    final q = (address ?? '').trim();
+    if (q.isEmpty) return null;
+    return 'https://www.google.com/maps/dir/?api=1'
+        '&destination=${Uri.encodeComponent(q)}&travelmode=driving';
   }
 
   /// Upload ke bucket dan kembalikan PATH-nya (bukan publicUrl).

@@ -31,6 +31,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _name.dispose();
+    _phone.dispose();
+    _address.dispose();
+    _serviceArea.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     final p = await Api.myProfile().catchError((_) => null);
     if (!mounted) return;
@@ -122,18 +131,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
           : ListView(
               padding: EdgeInsets.zero,
               children: [
-                // ===== Header gradien dengan avatar besar =====
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [AppColors.brandDeep, AppColors.brand],
-                    ),
-                    borderRadius: BorderRadius.vertical(bottom: Radius.circular(30)),
-                  ),
+                // ===== Header gradien (3 warna + lingkaran hiasan) + avatar =====
+                // Latar & hiasan sama dengan tab lain (ScreenHeader) supaya
+                // header Profil satu keluarga dengan Pesanan/Pekerjaan/Laporan.
+                HeaderGradientBackground(
+                  // 20 (desain) + inset bilah status. Sejak Android 15/16
+                  // memaksa edge-to-edge, inset atas > 0 dan tanpa tambahan ini
+                  // avatar/tombol header tertimpa jam & baterai. Di perangkat
+                  // non-edge-to-edge inset = 0 → tampilan tak berubah.
+                  padding: EdgeInsets.fromLTRB(
+                      20, 20 + MediaQuery.paddingOf(context).top, 20, 0),
                   child: Column(children: [
                     // Avatar: bisa diketuk untuk ganti foto (galeri/kamera).
                     GestureDetector(
@@ -387,12 +394,17 @@ class _MenuTile extends StatelessWidget {
     this.onTap,
   });
 
+  // Material (bukan Container berwarna) supaya ListTile bisa melukis latar &
+  // ink splash-nya sendiri — Container/DecoratedBox berwarna akan menutupinya
+  // dan memicu assertion "ListTile background color or ink splashes may be
+  // invisible." di mode debug.
   @override
-  Widget build(BuildContext context) => Container(
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.line),
+  Widget build(BuildContext context) => Material(
+        color: Colors.white,
+        clipBehavior: Clip.antiAlias,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+          side: BorderSide(color: AppColors.line),
         ),
         child: ListTile(
           onTap: onTap,

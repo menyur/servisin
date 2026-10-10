@@ -20,12 +20,13 @@ Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platfor
 - **Backend**: Next.js Server Actions (tanpa server terpisah)
 - **Database & Auth**: Supabase (PostgreSQL + Supabase Auth, RLS di semua tabel)
 - **Email**: Resend · **Push**: Web Push (VAPID) · **Payment**: Midtrans Snap (mode simulasi otomatis tanpa API key)
+- **Lint**: ESLint 9 lewat flat config `eslint.config.mjs` (preset `eslint-config-next`) — `npm run lint`, dijalankan otomatis oleh workflow **Web Lint**
 
 ## 1. Siapkan project Supabase
 
 1. Buat project di [supabase.com](https://supabase.com) (gratis).
 2. **SQL Editor** → jalankan `supabase/schema.sql`, lalu `supabase/seed.sql`.
-3. Jalankan juga file `supabase/migrate-*.sql` dan `supabase/fix-*.sql` (semuanya idempoten) — atau setidaknya yang terbaru: `fix-security-audit.sql`, `migrate-push-subscriptions.sql`, `migrate-notification-prefs.sql`, `migrate-technician-balance.sql`, `migrate-service-options.sql`, `migrate-reviews.sql`, `migrate-reports.sql`, `migrate-vouchers.sql`, `migrate-receipt-archives.sql`, `migrate-monthly-report-archives.sql`, `migrate-approval-status.sql`, `migrate-commission-rate.sql`, `migrate-technician-ktp.sql`.
+3. Jalankan juga file `supabase/migrate-*.sql` dan `supabase/fix-*.sql` (semuanya idempoten) — atau setidaknya yang terbaru: `fix-security-audit.sql`, `migrate-push-subscriptions.sql`, `migrate-notification-prefs.sql`, `migrate-technician-balance.sql`, `migrate-service-options.sql`, `migrate-reviews.sql`, `migrate-reports.sql`, `migrate-vouchers.sql`, `migrate-receipt-archives.sql`, `migrate-monthly-report-archives.sql`, `migrate-approval-status.sql`, `migrate-commission-rate.sql`, `migrate-technician-ktp.sql`, `fix-technician-skill-matching.sql`.
 4. Buat bucket Storage: jalankan `node scripts/setup-storage.mjs` (butuh service role key di `.env.local`) — lalu jalankan bagian policy di `supabase/setup-storage-buckets.sql`.
 5. Salin **Project URL** dan **anon public key** dari Settings → API.
 
@@ -38,7 +39,7 @@ cp .env.example .env.local
 npm run dev
 ```
 
-Buka `http://localhost:3000`. Script lain: `npm run build` (produksi), `npm run cleanup` (bersihkan cache dev).
+Buka `http://localhost:3000`. Script lain: `npm run build` (produksi), `npm run lint` (ESLint 9 — perintah sama yang dijalankan CI), `npm run cleanup` (bersihkan cache dev).
 
 ## 3. Akun admin pertama
 
@@ -47,18 +48,26 @@ Buka `http://localhost:3000`. Script lain: `npm run build` (produksi), `npm run 
 
 ## 4. Env produksi (Vercel)
 
-Semua variabel di `.env.example` yang berakhiran rahasia (tanpa `NEXT_PUBLIC_`) wajib diisi di Vercel → Settings → Environment Variables: `RESEND_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. Yang `NEXT_PUBLIC_*` (termasuk `NEXT_PUBLIC_VAPID_PUBLIC_KEY`) baru berlaku setelah **redeploy**. Rinciannya di [docs/security.md](docs/security.md#4-env--apa-yang-publik-apa-yang-rahasia).
+Semua variabel di `.env.example` yang berakhiran rahasia (tanpa `NEXT_PUBLIC_`) wajib diisi di Vercel → Settings → Environment Variables: `RESEND_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, dan `FCM_SERVICE_ACCOUNT_BASE64` (push Android — tanpa ini push APK dilewati tanpa error, lihat [src/lib/fcm.js](src/lib/fcm.js)). Yang `NEXT_PUBLIC_*` (termasuk `NEXT_PUBLIC_VAPID_PUBLIC_KEY`) baru berlaku setelah **redeploy**. Rinciannya di [docs/security.md](docs/security.md#4-env--apa-yang-publik-apa-yang-rahasia).
 
 ## 5. Aplikasi Android (APK)
 
-Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`: file `public/apk/fixify.apk` ada → tombol aktif dengan ukuran file.
+Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`, yang membaca dua varian hasil CI di `public/apk/` — `fixify-arm64.apk` (HP 64-bit) dan `fixify-armv7a.apk` (HP lama 32-bit) — beserta `manifest.json` (versi, tanggal build, SHA-256 untuk verifikasi unduhan).
 
-Untuk memperbarui APK: generate via [PWABuilder](https://www.pwabuilder.com) (package ID `com.menyur.fixify`), salin hasilnya ke `public/apk/fixify.apk`, push. **Simpan signing key** (`signing.keystore`) — tanpa itu aplikasi tidak bisa diupdate di perangkat yang sudah terpasang.
+APK **tidak dibangun manual**: [build-apk.yml](.github/workflows/build-apk.yml) membangunnya dari `flutter_app/` lewat `flutter build apk --release --split-per-abi`, lalu bot meng-commit APK + manifest ke `public/apk/`. Alurnya:
+
+1. Push ke `main` yang mengubah `flutter_app/**` (atau jalankan workflow manual) → build jalan.
+2. Job gate `live-probe` harus lulus lebih dulu. Tanpa secret `SUPABASE_SERVICE_ROLE_KEY` build **tertahan** (keadaan darurat: jalankan manual dengan input `skip_gate=true`).
+3. Signing release dibaca dari secret `ANDROID_KEYSTORE_BASE64` + `ANDROID_KEYSTORE_PASSWORD`; bila belum di-set, APK di-sign dengan debug key dan **tidak bisa** install-over-install antar build.
+4. **Simpan signing key** (mis. lewat `flutter_app/android/backup-keystore.sh`) — tanpa itu aplikasi tidak bisa diupdate di perangkat yang sudah terpasang.
+
+Package ID aplikasi: **`com.fixify.app`** — harus sama di `applicationId` ([flutter_app/android/app/build.gradle.kts](flutter_app/android/app/build.gradle.kts)), OAuth Android client di Google Cloud Console, dan [flutter_app/android/app/google-services.json](flutter_app/android/app/google-services.json).
 
 ## Struktur folder (ringkas)
 
 ```
 fixify/
+  eslint.config.mjs    -> aturan lint web (ESLint 9 flat config — pengganti `next lint`)
   supabase/            -> schema, seed, dan migrasi idempoten (jalankan di SQL Editor)
   docs/security.md     -> praktik keamanan (RLS, storage, env) — WAJIB dibaca sebelum menambah fitur
   scripts/             -> setup-storage.mjs, weekly-cleanup.mjs, dsb.

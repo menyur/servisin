@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { updateJobStatus } from "@/app/actions/technician";
 import { submitTechnicianReport } from "@/app/actions/reports";
@@ -12,7 +12,7 @@ import DepositModal from "@/components/DepositModal";
 import PushManager from "@/components/PushManager";
 import NotificationSettings from "@/components/NotificationSettings";
 import WithdrawModal from "@/components/WithdrawModal";
-import { formatRupiah } from "@/lib/pricing";
+import { formatRupiah, nonNegative, balanceShortfall } from "@/lib/pricing";
 import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2, Banknote, Bell } from "lucide-react";
 
 export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null, balance = 0, transactions = [], deposits = [], withdrawals = [] }) {
@@ -22,6 +22,24 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
   const [reportBookingId, setReportBookingId] = useState("");
   const [showDeposit, setShowDeposit] = useState(false);
   const [showWithdraw, setShowWithdraw] = useState(false);
+
+  // Deep-link dari aplikasi Flutter (banner pengingat → "Saya sudah setor"):
+  // ?setor=1 membuka modal Setor Saldo otomatis.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("setor") !== "1") return;
+    setShowDeposit(true);
+    // Bersihkan parameter deep-link tanpa memuat ulang, agar refresh tidak
+    // membuka ulang modal Setor Saldo.
+    params.delete("setor");
+    const qs = params.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      window.location.pathname + (qs ? `?${qs}` : "") + window.location.hash
+    );
+  }, []);
 
   async function markStatus(id, status) {
     setBusyId(id);
@@ -42,6 +60,11 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
   const pendingDeposits = deposits.filter((d) => d.status === "pending").length;
   const pendingWithdrawals = withdrawals.filter((w) => w.status === "pending");
   const onHoldAmount = pendingWithdrawals.reduce((s, w) => s + Number(w.amount), 0);
+
+  // Kebijakan saldo: tampilkan minimum Rp 0; nilai minus dijelaskan sebagai
+  // kekurangan (komisi melebihi setoran), bukan angka negatif.
+  const saldoTampil = nonNegative(balance);
+  const saldoKurang = balanceShortfall(balance);
 
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
@@ -72,10 +95,15 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
             <p className="text-xs font-semibold uppercase tracking-wide text-white/70 flex items-center gap-1.5">
               <Wallet size={14} /> Saldo Aktif
             </p>
-            <p className="font-display text-3xl font-bold mt-1.5">{formatRupiah(balance)}</p>
+            <p className="font-display text-3xl font-bold mt-1.5">{formatRupiah(saldoTampil)}</p>
             <p className="text-xs text-white/60 mt-1">
               Komisi {commissionRate}% + biaya aplikasi otomatis dipotong dari saldo saat pesanan selesai.
             </p>
+            {saldoKurang > 0 && (
+              <p className="text-xs text-white/90 mt-1 font-semibold">
+                Saldo terpakai habis — komisi melebihi setoran {formatRupiah(saldoKurang)}. Setor untuk menutup.
+              </p>
+            )}
           </div>
           <div className="text-right space-y-1.5">
             <p className="text-xs text-white/70 flex items-center gap-1 justify-end">
@@ -269,6 +297,8 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
 
 function BalanceHistory({ transactions, deposits, withdrawals, balance }) {
   const rejectedDeposits = deposits.filter((d) => d.status === "rejected");
+  const saldoTampil = nonNegative(balance);
+  const saldoKurang = balanceShortfall(balance);
   return (
     <div>
       <h2 className="font-display font-semibold text-navy mb-1">Riwayat Saldo</h2>
@@ -351,8 +381,15 @@ function BalanceHistory({ transactions, deposits, withdrawals, balance }) {
       )}
 
       <div className="card !p-4 mt-4 flex items-center justify-between">
-        <p className="text-sm text-navy font-semibold">Saldo aktif sekarang</p>
-        <p className="font-display font-bold text-navy text-lg">{formatRupiah(balance)}</p>
+        <div>
+          <p className="text-sm text-navy font-semibold">Saldo aktif sekarang</p>
+          {saldoKurang > 0 && (
+            <p className="text-xs text-amber">
+              Saldo terpakai habis — kekurangan {formatRupiah(saldoKurang)} dari komisi. Setor untuk menutup.
+            </p>
+          )}
+        </div>
+        <p className="font-display font-bold text-navy text-lg">{formatRupiah(saldoTampil)}</p>
       </div>
     </div>
   );

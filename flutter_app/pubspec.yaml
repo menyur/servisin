@@ -28,6 +28,9 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  # Pelacakan kebocoran di test (dipakai test/flutter_test_config.dart).
+  # Versi diselaraskan dengan yang dipakai flutter_test agar tidak konflik.
+  leak_tracker_flutter_testing: ^3.0.10
 
 flutter:
   uses-material-design: true

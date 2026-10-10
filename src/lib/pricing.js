@@ -55,3 +55,47 @@ export function genBookingCode() {
 export const REVIEW_INCENTIVE_DAYS = 3;
 export const REVIEW_INCENTIVE_AMOUNT = 10000;
 export const VOUCHER_VALIDITY_DAYS = 90;
+
+/**
+ * Minimum Rp 0 untuk TAMPILAN saldo.
+ *
+ * Saldo teknisi di database boleh negatif (komisi lampau > setoran = utang
+ * teknisi ke platform), tetapi ringkasan admin/teknisi tak boleh tampak
+ * "rusak" dengan angka minus. Nilai negatif dipetakan ke 0; UI yang relevan
+ * menambahkan catatan bahwa teknisi bersangkutan berutang.
+ */
+/**
+ * Rencanakan potongan saldo dengan KEBIJAKAN "saldo teknisi tidak boleh
+ * negatif". Potong hanya sebesar saldo tersedia; KOMISI didahulukan lalu
+ * biaya aplikasi. Sisa yang tak tertagih TIDAK menjadi utang teknisi.
+ *
+ * Dipakai jalur server-side (src/lib/balance.js) dan ditiru di RPC DB
+ * `set_job_status` (supabase/enforce-nonnegative-balance.sql) — rumusnya
+ * harus sama agar saldo dan ledger tetap cocok di kedua jalur.
+ *
+ * @returns {{available:number, want:number, cut:number, commissionCut:number,
+ *            feeCut:number, partial:boolean}}
+ */
+export function planBalanceCut({ balance = 0, commission = 0, fee = 0 } = {}) {
+  const available = Math.max(0, Number(balance) || 0);
+  const wantCommission = Math.max(0, Number(commission) || 0);
+  const wantFee = Math.max(0, Number(fee) || 0);
+  const want = wantCommission + wantFee;
+  const cut = Math.min(want, available);
+  const commissionCut = Math.min(wantCommission, cut);
+  const feeCut = cut - commissionCut;
+  return { available, want, cut, commissionCut, feeCut, partial: cut < want };
+}
+
+/**
+ * Besar kekurangan saldo (positif) ketika saldo negatif; 0 bila tidak.
+ * Dipakai UI teknisi untuk memasangkan saldo minimum Rp 0 dengan penjelasan
+ * "komisi melebihi setoran".
+ */
+export function balanceShortfall(balance) {
+  return Math.max(0, -(Number(balance) || 0));
+}
+
+export function nonNegative(n) {
+  return Math.max(0, Number(n) || 0);
+}

@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidateTag } from "next/cache";
-import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail } from "@/lib/email";
+import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail, sendTechnicianBalanceReminderEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
 import { computeSplit, commissionBase } from "@/lib/pricing";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
@@ -679,6 +679,20 @@ export async function updateReportAdmin(reportId, status, adminNote) {
     }).catch(() => {});
   }
 
+  // Push ke pelapor saat STATUS laporan berubah (open → reviewed → resolved).
+  // Terpisah dari notifikasi balasan di atas: status bisa berubah tanpa
+  // catatan admin, dan catatan bisa diisi tanpa mengubah status. Push ini
+  // sampai ke aplikasi Flutter (FCM) maupun web (web-push). Fire-and-forget.
+  if (before?.author_id && status !== before.status) {
+    sendPushToUser(before.author_id, {
+      title: "Status laporan diperbarui 📄",
+      event: "report_status",
+      body: reportStatusPushBody(status, before),
+      url: "/dashboard",
+      tag: `report-status-${reportId}`,
+    }).catch(() => {});
+  }
+
   // email konfirmasi ke pelapor saat laporan diselesaikan (bukan saat dibuka kembali)
   if (status === "resolved" && before?.status !== "resolved") {
     notifyReporterResolved(supabase, {
@@ -713,6 +727,23 @@ async function notifyReporterResolved(supabase, { authorId, title, bookingCode, 
   } catch (err) {
     console.error("Gagal email konfirmasi laporan ke pelapor:", err.message);
   }
+}
+
+/** Label status laporan yang ramah (selaras dengan label di aplikasi Flutter). */
+const REPORT_STATUS_LABEL = {
+  open: "Baru Masuk",
+  reviewed: "Sedang Ditinjau",
+  resolved: "Selesai",
+};
+
+/** Ringkasan singkat perubahan status laporan untuk notifikasi push. */
+function reportStatusPushBody(status, before) {
+  const label = REPORT_STATUS_LABEL[status] || status;
+  const code = before?.bookings?.code;
+  const judul = before?.title ? ` "${before.title}"` : "";
+  return code
+    ? `Laporanmu${judul} untuk pesanan ${code} kini berstatus: ${label}.`
+    : `Laporanmu${judul} kini berstatus: ${label}.`;
 }
 
 export async function getTechnicianApplicantsAdmin() {
@@ -1540,6 +1571,52 @@ export async function getFinanceSummaryAdmin() {
  * (total setor, total komisi terpotong, penarikan disetujui/pending).
  * Dipakai tab "Saldo Aktif" di panel admin.
  */
+/**
+ * Admin mengirim pengingat setor ke teknisi bersaldo 0/minus (komisi
+ * melebihi setoran). Push (web + FCM) + email; fire-and-forget, tak melempar.
+ */
+export async function remindTechnicianBalanceAdmin(technicianId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: tech } = await supabase
+    .from("profiles")
+    .select("id, name, email, balance, role")
+    .eq("id", technicianId)
+    .maybeSingle();
+  if (!tech || tech.role !== "technician") return { error: "Teknisi tidak ditemukan." };
+
+  const saldo = Number(tech.balance || 0);
+
+  // Penanda agar APLIKASI teknisi menampilkan banner "Admin mengingatkan setor"
+  // (kolom dari supabase/migrate-balance-reminder.sql). Best-effort: bila kolom
+  // belum ada, push & email tetap dikirim.
+  const { error: stampErr } = await supabase
+    .from("profiles")
+    .update({ balance_reminder_at: new Date().toISOString() })
+    .eq("id", technicianId);
+  if (stampErr && !/column .* does not exist|schema cache/i.test(stampErr.message || "")) {
+    console.error("Gagal menyimpan penanda pengingat saldo:", stampErr.message);
+  }
+
+  await sendPushToUser(tech.id, {
+    title: "Saldo kamu perlu ditindak",
+    body:
+      saldo < 0
+        ? "Saldo teknisimu minus. Ajukan setor untuk menutup komisi."
+        : "Saldo aktifmu kosong. Ajukan setor untuk melanjutkan pekerjaan.",
+    url: "/technician",
+    event: "balance_reminder",
+  });
+  if (tech.email) {
+    await sendTechnicianBalanceReminderEmail(tech.email, { name: tech.name, balance: saldo });
+  }
+
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
 export async function getTechnicianBalancesAdmin() {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);

@@ -34,6 +34,13 @@ class _ReportScreenState extends State<ReportScreen> {
     }).catchError((_) {});
   }
 
+  @override
+  void dispose() {
+    _title.dispose();
+    _content.dispose();
+    super.dispose();
+  }
+
   Future<void> _pickAttachment() async {
     // sumber gambar: galeri atau kamera (dokumentasi keluhan bisa difoto langsung)
     final source = await chooseImageSource(context, title: 'Lampiran Foto');

@@ -41,6 +41,18 @@ Konsistensi warna: semua nilai diambil dari `tailwind.config.js`
 - Pastikan **Redirect URLs** di Authentication → URL Configuration memuat
   `http://localhost:57063/reset-password` (dev) dan domain produksi kamu `/reset-password`,
   supaya `{{ .ConfirmationURL }}` tidak ditolak.
+- Untuk **APK Fixify**, tambahkan juga `fixify://reset-password` dan
+  `fixify://confirm`. Tautan yang
+  diminta dari app Android memakai `redirectTo` deep link itu, sehingga klik
+  tombol di email membuka app kembali (bukan browser) dan form "Kata Sandi
+  Baru" langsung tampil — detail di `docs/google-oauth-setup.md` Langkah 4b.
+  Template ini tidak perlu diubah: `{{ .ConfirmationURL }}` sudah membawa
+  `redirect_to` yang dikirim app/web.
+- **Confirm signup** (email verifikasi pendaftaran) memakai pola yang sama:
+  layar Daftar mengirim `emailRedirectTo` `fixify://confirm`, jadi tombol
+  verifikasi membuka app kembali dan pengguna langsung masuk beranda. Pastikan
+  `{{ .ConfirmationURL }}` tetap dipakai di template Confirm signup supaya
+  `redirect_to` ikut terbawa.
 - Ikon wrench memakai CDN lucide-static; kalau ingin tanpa dependensi eksternal, ganti `src` img
   dengan data-URI SVG dari logo aplikasi.
 - Kalau mengaktifkan **SMTP kustom** (mis. Resend), template ini tetap terpakai — SMTP hanya

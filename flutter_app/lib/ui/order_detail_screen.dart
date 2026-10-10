@@ -1,9 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../format.dart';
@@ -11,8 +8,10 @@ import '../models.dart';
 import '../theme.dart';
 import 'chat_screen.dart';
 import 'common.dart';
+import 'mini_pin_map.dart';
 import 'receipt_screen.dart';
 import 'report_screen.dart';
+import 'review_sheet.dart';
 
 class OrderDetailScreen extends StatefulWidget {
   final Booking booking;
@@ -249,59 +248,23 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     if (!mounted) return;
     final account = await Api.transferAccount();
     if (!mounted) return;
-    final amountCtrl = TextEditingController(text: '${_b.totalPrice}');
-    final ok = await showModalBottomSheet<bool>(
+    // Sheet mengembalikan teks jumlah apa adanya; controller dimiliki State
+    // sheet ([_PaymentAmountSheet]) supaya tidak dipakai setelah di-dispose
+    // saat sheet masih beranimasi keluar.
+    final rawAmount = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const Text('Konfirmasi Pembayaran', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-            const SizedBox(height: 4),
-            const Text('Foto terpilih ✓ — masukkan jumlah yang ditransfer',
-                style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
-            if (account != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(color: AppColors.brandTint, borderRadius: BorderRadius.circular(10)),
-                child: Text.rich(
-                  TextSpan(style: const TextStyle(fontSize: 12.5, color: AppColors.navy), children: [
-                    const WidgetSpan(child: Icon(Icons.account_balance_rounded, size: 15, color: AppColors.brandDeep)),
-                    const TextSpan(text: ' '),
-                    TextSpan(text: 'Transfer ke ${account['bank']} '),
-                    TextSpan(text: account['number'], style: const TextStyle(fontWeight: FontWeight.w800)),
-                    TextSpan(text: ' a.n. ${account['name']}'),
-                  ]),
-                ),
-              ),
-            ],
-            const SizedBox(height: 12),
-            TextField(
-              controller: amountCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Jumlah pembayaran (Rp)', prefixText: 'Rp '),
-            ),
-            const SizedBox(height: 16),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Kirim bukti'),
-            ),
-          ]),
-        ),
-      ),
+      builder: (_) => _PaymentAmountSheet(totalPrice: _b.totalPrice, account: account),
     );
-    if (ok != true) return;
+    if (rawAmount == null) return; // pengguna menutup sheet
+    final amountText = rawAmount.replaceAll(RegExp(r'[^0-9]'), '');
     try {
       final path = await Api.uploadToBucket(bucket: 'payment-proofs', folder: 'proofs', bytes: bytes);
       await Api.submitPaymentProof(
         bookingId: _b.id,
         path: path,
-        amount: int.tryParse(amountCtrl.text.replaceAll(RegExp(r'[^0-9]'), '')) ?? _b.totalPrice,
+        amount: int.tryParse(amountText) ?? _b.totalPrice,
       );
       if (!mounted) return;
       showSnack(context, 'Bukti terkirim. Menunggu konfirmasi admin.');
@@ -333,50 +296,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       showSnack(context, 'Teknisi tidak bisa menilai pekerjaannya sendiri.', error: true);
       return;
     }
-    int rating = 5;
-    final commentCtrl = TextEditingController();
-    final ok = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) => Padding(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              const Text('Nilai Teknisi', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
-              const SizedBox(height: 4),
-              Text(_b.technicianName ?? '', style: const TextStyle(color: AppColors.inkSoft)),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(5, (i) => IconButton(
-                  iconSize: 36,
-                  onPressed: () => setSheet(() => rating = i + 1),
-                  icon: Icon(i < rating ? Icons.star_rounded : Icons.star_outline_rounded,
-                      color: const Color(0xFFC97F16)),
-                )),
-              ),
-              TextField(
-                controller: commentCtrl,
-                maxLines: 3,
-                decoration: const InputDecoration(labelText: 'Ulasan (opsional)'),
-              ),
-              const SizedBox(height: 14),
-              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Kirim penilaian')),
-            ]),
-          ),
-        ),
-      ),
-    );
-    if (ok != true) return;
+    // Sheet terpisah (bisa diuji langsung): bintang + ulasan OPSIONAL.
+    final input = await showReviewSheet(context, technicianName: _b.technicianName);
+    if (input == null || !mounted) return; // pelanggan membatalkan
     try {
       final r = await Api.submitReview(
         bookingId: _b.id,
         technicianId: _b.technicianId!,
-        rating: rating,
-        comment: commentCtrl.text.trim(),
+        rating: input.rating,
+        comment: input.comment,
       );
       if (!mounted) return;
       if (!r.ok) {
@@ -544,21 +472,38 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Peta mini pratinjau + rute ke titik lokasi: teknisi ditugaskan
-          // ATAU pemilik pesanan (pin dikirim bersama pesanan — lihat RLS).
+          // Peta mini pratinjau titik lokasi: teknisi ditugaskan ATAU pemilik
+          // pesanan (pin dikirim bersama pesanan — lihat RLS).
           // flutter_map sudah ada di pubspec (picker lokasi) → pratinjau
           // statis OSM tanpa API key; ketuk kartu = buka Google Maps.
           if (b.lat != null && b.lng != null) ...[
-            _MiniPinMap(
+            MiniPinMap(
               lat: b.lat!,
               lng: b.lng!,
-              onTap: () => launchUrl(_routeTarget(), mode: LaunchMode.externalApplication),
+              onTap: () => openRouteToDestination(
+                context,
+                lat: b.lat,
+                lng: b.lng,
+                address: b.address,
+              ),
             ),
             const SizedBox(height: 10),
+          ],
+          // Tombol rute SELALU ada selama alamat pesanan terbaca: titik exact
+          // (pin) bila pelanggan memasangnya, jika tidak Google Maps mencari
+          // alamat lengkapnya — satu ketukan langsung membuka navigasi.
+          if (b.hasPin || b.address.trim().isNotEmpty) ...[
             OutlinedButton.icon(
-              onPressed: () => launchUrl(_routeTarget(), mode: LaunchMode.externalApplication),
+              onPressed: () => openRouteToDestination(
+                context,
+                lat: b.lat,
+                lng: b.lng,
+                address: b.address,
+              ),
               icon: const Icon(Icons.navigation_rounded, size: 18),
-              label: const Text('Buka Rute ke Titik Lokasi'),
+              label: Text(b.hasPin
+                  ? 'Buka Rute ke Titik Lokasi'
+                  : 'Buka Rute ke Alamat'),
             ),
             const SizedBox(height: 10),
           ],
@@ -698,93 +643,81 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         border: Border.all(color: AppColors.line),
       );
 
-  /// Rute ke titik lokasi (pin pelanggan); tanpa pin → jatuh ke pencarian
-  /// alamat di Google Maps (lebih baik daripada tombol mati).
-  Uri _routeTarget() => (_b.lat != null && _b.lng != null)
-      ? Uri.parse(Api.directionsUrl(_b.lat!, _b.lng!))
-      : Uri.parse(
-          'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(_b.address)}');
 }
 
-/// Peta mini pratinjau titik lokasi pesanan — peta OSM statis (non-interaktif)
-/// dengan marker pin di tengah; seluruh kartu tappable (default: buka rute).
-/// Interaksi pan/zoom dinonaktifkan supaya tetap pratinjau di dalam ListView
-/// (scroll layar tidak tersedot peta) — ketuk untuk rute penuh di Google Maps.
-class _MiniPinMap extends StatelessWidget {
-  final double lat;
-  final double lng;
-  final VoidCallback? onTap;
+/// Sheet konfirmasi pembayaran: jumlah transfer + info rekening tujuan.
+///
+/// StatefulWidget supaya `TextEditingController` hidup selama route sheet
+/// (termasuk animasi keluar) dan dibuang di `dispose()` miliknya sendiri —
+/// mem-dispose controller milik pemanggil lebih awal membuat `TextField` yang
+/// masih ter-mount memakainya setelah mati (layar merah).
+/// Mengembalikan teks jumlah apa adanya (format dibersihkan pemanggil), atau
+/// null bila sheet ditutup.
+class _PaymentAmountSheet extends StatefulWidget {
+  final int totalPrice;
+  final Map<String, String>? account;
 
-  const _MiniPinMap({required this.lat, required this.lng, this.onTap});
+  const _PaymentAmountSheet({required this.totalPrice, required this.account});
+
+  @override
+  State<_PaymentAmountSheet> createState() => _PaymentAmountSheetState();
+}
+
+class _PaymentAmountSheetState extends State<_PaymentAmountSheet> {
+  late final TextEditingController _amountCtrl =
+      TextEditingController(text: '${widget.totalPrice}');
+
+  @override
+  void dispose() {
+    _amountCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final center = LatLng(lat, lng);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 150,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.line),
-        ),
-        child: Stack(children: [
-          FlutterMap(
-            options: MapOptions(
-              initialCenter: LatLng(lat, lng),
-              initialZoom: 16,
-              interactionOptions: const InteractionOptions(flags: InteractiveFlag.none),
+    final account = widget.account;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const Text('Konfirmasi Pembayaran', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 4),
+          const Text('Foto terpilih ✓ — masukkan jumlah yang ditransfer',
+              style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+          if (account != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: AppColors.brandTint, borderRadius: BorderRadius.circular(10)),
+              child: Text.rich(
+                TextSpan(style: const TextStyle(fontSize: 12.5, color: AppColors.navy), children: [
+                  const WidgetSpan(child: Icon(Icons.account_balance_rounded, size: 15, color: AppColors.brandDeep)),
+                  const TextSpan(text: ' '),
+                  TextSpan(text: 'Transfer ke ${account['bank']} '),
+                  TextSpan(text: account['number'], style: const TextStyle(fontWeight: FontWeight.w800)),
+                  TextSpan(text: ' a.n. ${account['name']}'),
+                ]),
+              ),
             ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.fixify.app',
-              ),
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: center,
-                    width: 40,
-                    height: 40,
-                    child: const Icon(Icons.location_on_rounded,
-                        size: 36, color: AppColors.coral),
-                  ),
-                ],
-              ),
-            ],
+          ],
+          const SizedBox(height: 12),
+          TextField(
+            controller: _amountCtrl,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Jumlah pembayaran (Rp)', prefixText: 'Rp '),
           ),
-          // Pojok kanan bawah: petunjuk ketuk → rute.
-          Positioned(
-            right: 8,
-            bottom: 8,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: .92),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: AppColors.line),
-              ),
-              child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.navigation_rounded, size: 13, color: AppColors.brandDeep),
-                SizedBox(width: 4),
-                Text('Ketuk untuk rute',
-                    style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.navy)),
-              ]),
-            ),
-          ),
-          const RichAttributionWidget(
-            attributions: [TextSourceAttribution('© OpenStreetMap contributors')],
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _amountCtrl.text),
+            child: const Text('Kirim bukti'),
           ),
         ]),
       ),
     );
   }
 }
-
 
 /// Timeline vertikal status pesanan dengan stempel waktu:
 /// Pesanan dibuat → Dibayar → Dikerjakan → Selesai (+ Dibatalkan).

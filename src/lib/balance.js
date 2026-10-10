@@ -11,7 +11,7 @@
  * Semua fungsi aman-dipanggil (tidak melempar) dan idempoten.
  * Kolom/tabel yang belum dimigrasi di-skip tanpa menggagalkan alur.
  */
-import { computeSplit, commissionBase } from "@/lib/pricing";
+import { computeSplit, commissionBase, planBalanceCut } from "@/lib/pricing";
 
 /**
  * Potong komisi pesanan selesai dari saldo teknisi.
@@ -48,17 +48,25 @@ export async function debitTechnicianCommission(supabase, bookingId) {
     const split = computeSplit(gross, Number(tech.commission_rate ?? 10));
     // Aturan platform: potongan saldo = komisi + biaya aplikasi pelanggan.
     const fee = Math.max(0, Number(b.app_fee ?? 0));
-    const totalCut = split.commission + fee;
+    // KEBIJAKAN: saldo teknisi TIDAK boleh negatif — potong hanya sebesar
+    // saldo tersedia (komisi dulu, sisanya biaya app). Sisa yang tak tertagih
+    // tidak menjadi utang; ledger mencatat potongan RIIL agar saldo tetap =
+    // jumlah mutasi (tidak memunculkan selisih di aplikasi/panel).
+    const plan = planBalanceCut({ balance: tech.balance, commission: split.commission, fee });
+    const totalCut = plan.cut;
 
     // Catat transaksi (amount negatif = saldo berkurang).
-    // commission_amount = komisi murni (persen); fee tersimpan di booking.
+    // commission_amount = komisi riil yang dipotong (bisa < komisi penuh
+    // bila saldo kurang); sisanya biaya app.
     const { error: txErr } = await supabase.from("balance_transactions").insert({
       technician_id: b.technician_id,
       booking_id: bookingId,
       type: "earning",
-      amount: -totalCut, // saldo dipotong komisi + biaya app
-      commission_amount: split.commission,
-      note: `Komisi ${Number(tech.commission_rate ?? 10)}% + biaya app pesanan ${b.code || ""} selesai`.trim(),
+      amount: -totalCut, // potongan riil (<= saldo) = komisi + biaya app
+      commission_amount: plan.commissionCut,
+      note:
+        `Komisi ${Number(tech.commission_rate ?? 10)}% + biaya app pesanan ${b.code || ""} selesai` +
+        (plan.partial ? " (terpotong sebagian — saldo tidak cukup)" : ""),
     });
     if (txErr) {
       if (/relation|does not exist|permission|duplicate key/i.test(txErr.message || "")) {
@@ -68,8 +76,9 @@ export async function debitTechnicianCommission(supabase, bookingId) {
       return { ok: false, error: txErr.message };
     }
 
-    // Kurangi saldo profil (boleh negatif sementara — teknisi setor untuk menutup)
-    const newBalance = Number(tech.balance || 0) - totalCut;
+    // Kurangi saldo profil. Potongan sudah dibatasi saldo tersedia, jadi
+    // saldo tidak akan pernah negatif (kebijakan: tanpa utang teknisi).
+    const newBalance = Math.max(0, Number(tech.balance || 0) - totalCut);
     const { error: updErr } = await supabase
       .from("profiles")
       .update({ balance: newBalance })
@@ -78,7 +87,7 @@ export async function debitTechnicianCommission(supabase, bookingId) {
       return { ok: false, error: updErr.message };
     }
 
-    return { ok: true, commission: totalCut, balance: newBalance };
+    return { ok: true, commission: totalCut, balance: newBalance, partial: plan.partial };
   } catch (e) {
     return { ok: false, error: e?.message };
   }

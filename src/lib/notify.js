@@ -10,8 +10,8 @@
  * Nama & signature fungsi disamakan dengan push.js agar perubahan import
  * saja cukup. Fire-and-forget, tak pernah melempar error.
  */
-import { sendPushToUser as sendWebPush, sendNewJobPushToTechnicians as webNewJobBroadcast } from "./push";
-import { sendFcmToUser, sendFcmToTechniciansNewJob } from "./fcm";
+import { sendPushToUser as sendWebPush, sendNewJobPushToTechnicians as webNewJobBroadcast } from "./push.js";
+import { sendFcmToUser, sendFcmToTechniciansNewJob } from "./fcm.js";
 
 /** Kirim web-push + FCM sekaligus ke satu user. */
 export async function sendPushToUser(userId, { url = "/dashboard", ...rest }) {

@@ -19,10 +19,16 @@ import { createClient } from "@/lib/supabase/client";
 export function useAdminRealtime({ onNewBooking, onNewReport }) {
   const [live, setLive] = useState(false);
   const router = useRouter();
+  // Callback terbaru disimpan lewat ref, tapi ditulis di dalam effect — bukan
+  // saat render (menulis ref saat render dilarang React dan ditandai
+  // react-hooks/refs). Handler WS selalu membaca `.current`, jadi tidak ada
+  // closure basi meski langganannya hanya dibuat sekali.
   const cbBooking = useRef(onNewBooking);
   const cbReport = useRef(onNewReport);
-  cbBooking.current = onNewBooking;
-  cbReport.current = onNewReport;
+  useEffect(() => {
+    cbBooking.current = onNewBooking;
+    cbReport.current = onNewReport;
+  });
 
   useEffect(() => {
     const supabase = createClient();

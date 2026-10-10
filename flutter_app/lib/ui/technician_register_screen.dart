@@ -1,9 +1,12 @@
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
+import '../config.dart';
+import '../signup_handoff.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
@@ -104,12 +107,21 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
         address: _address.text.trim(),
         skill: _skill!,
         ktpPath: _ktpPath!,
+        // Android: tautan verifikasi balik ke app lewat deep link
+        // fixify://confirm (sesi langsung aktif setelah diklik).
+        emailRedirectTo: kIsWeb ? null : AppConfig.signupConfirmRedirect,
       );
       if (!mounted) return;
       if (res.session == null) {
-        // Proyek menonaktifkan "Confirm email", tapi kalau aktif:
+        // "Confirm email" aktif: verifikasi dulu. Catat email + peran teknisi
+        // agar setelah tautan di email diklik, app menampilkan layar Selamat
+        // Datang versi teknisi (ajakan melengkapi profil).
+        if (!kIsWeb) {
+          await SignupHandoff.remember(_email.text.trim(), role: 'technician');
+        }
+        if (!mounted) return;
         showSnack(context,
-            'Pendaftaran terkirim! Verifikasi email dulu, lalu masuk untuk melengkapi profil.');
+            'Pendaftaran terkirim! Buka tautan verifikasi di email — kamu akan kembali ke aplikasi untuk melengkapi profil.');
         Navigator.pushReplacementNamed(context, '/login');
       } else {
         // Langsung login: tampilkan status pending, karena tab Pekerjaan

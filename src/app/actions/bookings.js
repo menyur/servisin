@@ -374,7 +374,10 @@ export async function getMyBookings() {
     supabase.from("reviews").select("booking_id, rating").eq("user_id", user.id),
   ]);
 
-  const bookings = bookingsRes.data || [];
+  // Retensi riwayat (supabase/migrate-history-retention.sql): pesanan yang
+  // sudah lewat masa simpan disembunyikan dari daftar pengguna — barisnya
+  // tetap ada sebagai catatan keuangan/audit.
+  const bookings = (bookingsRes.data || []).filter((b) => !b.history_purged_at);
 
   // Bucket bukti pembayaran kini PRIVAT (hasil audit) — kolom menyimpan path.
   // Tukar ke signed URL (1 jam) agar pemilik bisa melihat buktinya di dashboard.

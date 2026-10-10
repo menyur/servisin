@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
 import '../format.dart';
 import '../models.dart';
 import '../theme.dart';
 import 'common.dart';
+import 'deposit_screen.dart';
 
 /// Layar Saldo Teknisi (dibuka dari strip saldo di tab Pekerjaan):
 /// kartu saldo aktif + statistik pendapatan/komisi/setor, lalu riwayat
@@ -14,7 +16,11 @@ import 'common.dart';
 /// profiles.balance. Kolom belum dijalankan migrasinya → tampil papan
 /// ajakan menjalankan migrate-technician-balance.sql.
 class BalanceScreen extends StatefulWidget {
-  const BalanceScreen({super.key});
+  const BalanceScreen({super.key, this.loadPage});
+
+  /// Seam uji: sumber data saldo. Default `Api.fetchMyBalancePage`.
+  final Future<({TechnicianBalanceSummary summary, List<BalanceTransaction> transactions})>
+      Function()? loadPage;
 
   @override
   State<BalanceScreen> createState() => _BalanceScreenState();
@@ -27,10 +33,63 @@ class _BalanceScreenState extends State<BalanceScreen> {
   bool _migrated = true;
   bool _loading = true;
 
+  /// Pengingat terakhir yang sudah ditutup teknisi (device, per akun).
+  DateTime? _dismissedReminderAt;
+
+  /// Kunci penyimpanan tutup-banner per akun (pindah akun di perangkat sama
+  /// tidak saling menutupi).
+  String get _dismissKey => 'balance_reminder_dismissed_at_${Api.currentUserId ?? 'anon'}';
+
   @override
   void initState() {
     super.initState();
+    _loadDismissed();
     _load();
+  }
+
+  Future<void> _loadDismissed() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_dismissKey);
+      final d = raw == null ? null : DateTime.tryParse(raw);
+      if (!mounted) return;
+      setState(() => _dismissedReminderAt = d);
+    } catch (_) {
+      // Tanpa akses prefs, banner tetap tampil (tidak boleh gagal total).
+    }
+  }
+
+  /// Banner tampil bila admin sudah mengingatkan, saldo masih 0/minus, DAN
+  /// pengingat ini belum ditutup. Pengingat BARU (timestamp lebih baru dari
+  /// yang ditutup) memunculkannya lagi.
+  bool get _reminderVisible {
+    final s = _summary;
+    if (s == null || !s.needsDepositReminder) return false;
+    final at = s.balanceReminderAt;
+    final d = _dismissedReminderAt;
+    return at != null && (d == null || at.isAfter(d));
+  }
+
+  Future<void> _dismissReminder() async {
+    final at = _summary?.balanceReminderAt;
+    if (at == null) return;
+    setState(() => _dismissedReminderAt = at);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_dismissKey, at.toIso8601String());
+    } catch (_) {
+      // gagal simpan → banner tetap tersembunyi untuk sesi ini
+    }
+  }
+
+  /// Buka layar Setor Saldo NATIVE; setelah kembali (terkirim) muat ulang
+  /// saldo/riwayat supaya status pending langsung terlihat.
+  Future<void> _openDepositFlow() async {
+    final sent = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const DepositScreen()),
+    );
+    if (sent == true && mounted) _load();
   }
 
   Future<void> _load() async {
@@ -40,7 +99,7 @@ class _BalanceScreenState extends State<BalanceScreen> {
       _migrated = true;
     });
     try {
-      final page = await Api.fetchMyBalancePage();
+      final page = await (widget.loadPage ?? Api.fetchMyBalancePage)();
       if (!mounted) return;
       setState(() {
         _summary = page.summary;
@@ -91,6 +150,14 @@ class _BalanceScreenState extends State<BalanceScreen> {
                           child: ListView(
                             padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                             children: [
+                              if (_reminderVisible) ...[
+                                _DepositReminderBanner(
+                                  reminderAt: _summary!.balanceReminderAt!,
+                                  onDeposit: _openDepositFlow,
+                                  onDismiss: _dismissReminder,
+                                ),
+                                const SizedBox(height: 14),
+                              ],
                               _SummaryCard(summary: _summary),
                               const SizedBox(height: 14),
                               const _MoneyFlowCard(),
@@ -106,7 +173,7 @@ class _BalanceScreenState extends State<BalanceScreen> {
                                   loading: false,
                                   empty: true,
                                   emptyMessage:
-                                      'Belum ada mutasi.\nAjukan setor saldo lewat halaman web untuk mengisi saldo pertamamu.',
+                                      'Belum ada mutasi.\nTekan tombol Setor di atas untuk mengisi saldo pertamamu.',
                                 )
                               else
                                 ...tx.map(_TxTile.new),
@@ -125,6 +192,14 @@ class _BalanceScreenState extends State<BalanceScreen> {
       foregroundColor: Colors.white,
       centerTitle: true,
       title: const Text('Saldo Saya'),
+      actions: [
+        TextButton.icon(
+          onPressed: _openDepositFlow,
+          icon: const Icon(Icons.add_rounded, size: 16, color: Colors.white),
+          label: const Text('Setor',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+        ),
+      ],
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(bottom: Radius.circular(22)),
       ),
@@ -144,8 +219,8 @@ class _SummaryCard extends StatelessWidget {
     if (s == null) {
       return const Center(child: CircularProgressIndicator());
     }
-    final saldo = s.balance;
-    final negative = saldo < 0;
+    final saldo = s.displayBalance; // minimal Rp 0 — nilai minus dijelaskan
+    final negative = s.isNegative;
 
     // Nominal pakai varian TERANG agar terbaca di atas gradien biru
     // (mint/coral gelap kontrasnya rendah, brand malah menyatu).
@@ -195,7 +270,7 @@ class _SummaryCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-                'Saldo negatif — komisi melebihi setoran. Ajukan setor untuk menutup.',
+                'Saldo terpakai habis — komisi melebihi setoran ${formatRupiah(s.shortfall)}. Ajukan setor untuk menutup.',
                 style: TextStyle(fontSize: 11.5, color: Colors.white.withValues(alpha: 0.85))),
           ),
         const SizedBox(height: 15),
@@ -251,6 +326,75 @@ class _SummaryCard extends StatelessWidget {
                       'Ada selisih ${formatRupiah(s.mismatch.abs())} antara saldo dan riwayat mutasi — minta admin koreksi lewat penyesuaian saldo.',
                       style: const TextStyle(fontSize: 10.5, color: Colors.white)),
             ),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Banner pengingat setor: admin memilih "Ingatkan setor" di panel (kolom
+/// profiles.balance_reminder_at) dan saldo teknisi masih 0/minus. Hilang
+/// otomatis begitu saldo diisi; teksnya memberi tahu bahwa pengingat ini
+/// datang dari admin.
+class _DepositReminderBanner extends StatelessWidget {
+  final DateTime reminderAt;
+  final VoidCallback onDeposit;
+  final VoidCallback onDismiss;
+
+  const _DepositReminderBanner({
+    required this.reminderAt,
+    required this.onDeposit,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: AppColors.amberTint,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.amber),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.notifications_active_rounded, size: 18, color: AppColors.amber),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Admin mengingatkan setor saldo',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.navy)),
+            const SizedBox(height: 2),
+            const Text(
+              'Saldo aktifmu belum cukup. Ketuk "Saya sudah setor" untuk mengunggah bukti transfer — saldo bertambah setelah admin verifikasi.',
+              style: TextStyle(fontSize: 11.5, color: AppColors.inkSoft, height: 1.35),
+            ),
+            const SizedBox(height: 3),
+            Text('Diingatkan ${formatDateTimeId(reminderAt)}',
+                style: const TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
+            const SizedBox(height: 9),
+            Wrap(spacing: 8, runSpacing: 4, children: [
+              FilledButton.icon(
+                onPressed: onDeposit,
+                icon: const Icon(Icons.upload_rounded, size: 15),
+                label: const Text('Saya sudah setor'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.amber,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                ),
+              ),
+              TextButton(
+                onPressed: onDismiss,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.inkSoft,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                child: const Text('Tutup'),
+              ),
+            ]),
           ]),
         ),
       ]),
@@ -329,6 +473,13 @@ class _TxTile extends StatelessWidget {
   /// (saldo dipotong), penyesuaian/refund grafis sesuai tanda amount.
   String get _amountText => formatRupiah(tx.amount.abs());
 
+  /// Biaya app yang BENAR-BENAR dipotong = sisa potongan setelah komisi.
+  /// Diturunkan dari amount (bukan bookings.app_fee) agar akurat saat
+  /// potongan dibatasi saldo (kebijakan saldo tidak boleh negatif).
+  int get _appFeeCut => tx.amount < 0
+      ? ((-tx.amount).round() - (tx.commissionAmount ?? 0).round())
+      : 0;
+
   Color get _color => tx.income ? AppColors.mint : AppColors.coral;
 
   @override
@@ -375,8 +526,8 @@ class _TxTile extends StatelessWidget {
                   '#${tx.bookingCode}',
                 if (tx.commissionAmount != null && tx.commissionAmount! > 0)
                   'komisi ${formatRupiah(tx.commissionAmount!)}',
-                if (tx.type == 'earning' && (tx.bookingAppFee ?? 0) > 0)
-                  'biaya app ${formatRupiah(tx.bookingAppFee!)}',
+                if (tx.type == 'earning' && _appFeeCut > 0)
+                  'biaya app ${formatRupiah(_appFeeCut)}',
                 if (tx.note?.isNotEmpty == true && tx.bookingCode?.isNotEmpty != true)
                   tx.note!,
               ].whereType<String>().join(' · '),

@@ -14,6 +14,7 @@
  * menggagalkan aksi utama (konfirmasi bayar, penugasan, dsb).
  */
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { technicianReceivesJob } from "./skill-match.js";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -135,6 +136,7 @@ export async function sendFcmToTechniciansNewJob(
   const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
   let techs = [];
   let serviceCategory = null;
+  let serviceCategoryName = null;
   try {
     const { data, error } = await admin
       .from("profiles")
@@ -148,12 +150,14 @@ export async function sendFcmToTechniciansNewJob(
       try {
         const { data: svc } = await admin
           .from("services")
-          .select("category_id")
+          .select("category_id, categories(name)")
           .eq("id", serviceId)
           .maybeSingle();
         serviceCategory = svc?.category_id || null;
+        serviceCategoryName = svc?.categories?.name || null;
       } catch (_) {
         serviceCategory = null;
+        serviceCategoryName = null;
       }
     }
   } catch (err) {
@@ -161,14 +165,15 @@ export async function sendFcmToTechniciansNewJob(
     return;
   }
 
-  const address = (booking.address || "").toLowerCase();
-  const targets = techs.filter((t) => {
-    const area = (t.service_area || "").trim().toLowerCase();
-    if (area && !address.includes(area)) return false;
-    const skill = (t.skill || "").trim();
-    if (skill && serviceCategory && skill !== serviceCategory) return false;
-    return true;
-  });
+  // Area + keahlian lewat satu helper bersama (src/lib/skill-match.js) supaya
+  // web-push, FCM, klien Flutter, dan probe E2E tak pernah berbeda aturan.
+  const targets = techs.filter((t) =>
+    technicianReceivesJob(t, {
+      categoryId: serviceCategory,
+      categoryName: serviceCategoryName,
+      address: booking.address,
+    })
+  );
 
   const label = serviceName || "Layanan";
   const loc = (booking.address || "").trim();

@@ -155,7 +155,6 @@ export default function BalanceAdminTab({ initialDeposits, initialError, technic
               </div>
 
               <div className="flex items-start gap-3 flex-wrap mb-3">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <a href={d.proof_url} target="_blank" rel="noreferrer" title="Klik untuk perbesar">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={d.proof_url} alt={`Bukti setor ${d.technician?.name || ""}`} className="w-24 h-24 object-cover rounded-xl border-2 border-white shadow" />

@@ -23,6 +23,13 @@
 -- lewat cabang lama, jadi jalur src/lib/balance.js dan panel admin tidak berubah.
 --
 -- Jalankan di Supabase SQL Editor. Idempoten (aman diulang).
+--
+-- ⚠️ USANG (aturan potongan): set_job_status di file ini memotong KOMISI SAJA
+-- dan MENIMPA aturan komisi + biaya app dari migrate-earning-fee.sql.
+-- Penanda guard F8-nya SUDAH disatukan ke
+-- supabase/enforce-nonnegative-balance.sql (komisi + biaya app + clamp
+-- saldo ≥ 0) → jalankan file ITU TERAKHIR, jangan file ini. Lihat
+-- docs/balance-rule.md.
 -- Sesudah dijalankan: node scripts/verify-e2e-lifecycle.mjs  → harus E2E_F7_LULUS
 -- =========================================================
 

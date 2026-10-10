@@ -1,0 +1,137 @@
+# Gate aplikasi Flutter: `flutter analyze` + `flutter test`.
+#
+# Latar: sebelum workflow ini, tidak ada satu pun pemeriksaan Dart di CI —
+# build-apk.yml hanya MEMBANGUN APK (dan hanya setelah push ke main), sehingga
+# error analyzer atau tes yang gagal baru ketahuan saat APK dirilis. Gate ini
+# menjalankannya lebih awal dan pada setiap PR yang menyentuh flutter_app/**.
+#
+# Pemicu:
+#   pull_request                      : semua PR (cocok jadi required check).
+#   push ke main                      : hanya bila berkas Flutter berubah
+#                                       (build-apk.yml sudah menangani sisanya).
+#   workflow_dispatch                 : manual dari halaman Actions.
+#
+# Lokal:
+#   cd flutter_app && flutter analyze --fatal-infos && flutter test
+#
+# Versi SDK TIDAK di-hardcode di sini: sumber tunggalnya berkas .fvmrc di akar
+# repo (dibaca lewat flutter-version-file). build-apk.yml memakai berkas yang
+# sama, jadi kedua workflow tak mungkin lagi berbeda versi — dulu keduanya
+# memaku 3.47.5 sendiri-sendiri sementara dev sudah 3.47.6.
+# Langkah "Buat lib/env_override.dart" WAJIB ada: berkas itu di-gitignore
+# (kredensial publik dibaca dari .env.local di mesin dev), jadi tanpa langkah
+# ini `flutter analyze` gagal dengan "Undefined name 'EnvOverride'" dan
+# `flutter test` ikut gagal — sudah dibuktikan di mesin dev.
+
+name: Flutter CI (analyze + test)
+
+on:
+  pull_request:
+    paths:
+      - "flutter_app/**"
+      - ".github/workflows/flutter-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "flutter_app/**"
+      - ".github/workflows/flutter-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flutter-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          # Sumber tunggal versi: .fvmrc di akar repo ({"flutter": "3.47.6"}).
+          # Bukan flutter-version hardcode — ubah satu berkas itu dan SEMUA
+          # workflow ikut. Action membacanya via jq (butuh versi persis, dan
+          # itu memang isinya); yq tak perlu karena bukan pubspec.
+          flutter-version-file: .fvmrc
+          # cache: SDK Flutter · pub-cache: paket dart (~/.pub-cache).
+          # Keduanya ditangani action (actions/cache@v5 internal) — JANGAN
+          # tambah actions/cache manual: itu jadi dua cache di path sama.
+          cache: true
+          pub-cache: true
+
+      # Cek DRIFT versi: Flutter yang benar-benar terpasang di runner harus
+      # sama dengan pin .fvmrc — menangkap cache basi / input salah SEBELUM
+      # analyze & test berjalan. Skrip yang sama juga dipakai dev di lokal:
+      #   npm run verify:flutter-version
+      - name: Verifikasi versi Flutter = .fvmrc
+        run: node scripts/check-flutter-version.mjs
+
+      # Sama seperti build-apk.yml: kredensial PUBLIK client Supabase
+      # (publishable key) — aman, keamanan dijaga RLS di database.
+      - name: Buat lib/env_override.dart
+        working-directory: flutter_app
+        run: |
+          cat > lib/env_override.dart <<'EOT'
+          // Dihasilkan oleh CI (.github/workflows/flutter-ci.yml).
+          // Kredensial publik client Supabase — aman dibundel di aplikasi.
+          class EnvOverride {
+            static const String? supabaseUrl = "https://sgxlnhzezknmdhefsvvu.supabase.co";
+            static const String? supabaseAnonKey = "sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef";
+          }
+          EOT
+
+      - name: flutter pub get
+        working-directory: flutter_app
+        run: flutter pub get
+
+      # pipefail wajib: tanpa itu `tee` menutupi status keluar analyzer/tes.
+      # Log ditulis di dalam flutter_app/ supaya tertutup aturan *.log di
+      # .gitignore (artifact tetap diambil dari path itu).
+      # --fatal-infos: info (mis. dead code, anotasi kedaluwarsa) ikut
+      # menggagalkan gate, bukan sekadar lolos sebagai peringatan.
+      - name: flutter analyze --fatal-infos
+        working-directory: flutter_app
+        run: |
+          set -o pipefail
+          flutter analyze --fatal-infos 2>&1 | tee analyze.log
+
+      - name: flutter test
+        working-directory: flutter_app
+        run: |
+          set -o pipefail
+          flutter test --reporter expanded 2>&1 | tee test.log
+
+      # Pola di bawah disesuaikan dengan format keluaran NON-TTY (tanpa warna &
+      # bullet) dan sudah diuji terhadap keluaran gagal yang nyata sebelum
+      # dipasang. Percobaan pertama memakai "error •" (format TTY) sehingga error
+      # analyzer tak tertangkap sama sekali, sementara pola baris-bernomor waktu
+      # membuat log tes yang LULUS ikut jadi annotation — jangan diulang.
+      - name: Ringkas kegagalan sebagai annotation
+        if: failure()
+        run: |
+          if [ -f flutter_app/analyze.log ]; then
+            grep -E "(^|[[:space:]])(error|warning|info)[[:space:]]+[-•]|issues? found" flutter_app/analyze.log \
+              | tail -25 | while IFS= read -r l; do echo "::error::${l:0:190}"; done
+          fi
+          if [ -f flutter_app/test.log ]; then
+            grep -E "\[E\]|Expected:|Actual:|Which:|Exception|Some tests failed|-[0-9]+:" flutter_app/test.log \
+              | tail -25 | while IFS= read -r l; do echo "::error::${l:0:190}"; done
+          fi
+
+      - name: Simpan log analyzer & tes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-log
+          path: |
+            flutter_app/analyze.log
+            flutter_app/test.log
+          if-no-files-found: ignore
+          retention-days: 7

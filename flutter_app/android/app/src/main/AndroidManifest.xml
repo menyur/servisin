@@ -52,6 +52,48 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- Deep link balik dari OAuth Google: fixify://login-callback.
+                 Tanpa intent-filter ini app TIDAK PERNAH menerima URL callback
+                 dari browser, sehingga kode OAuth tidak bisa ditukar menjadi
+                 sesi — login Google via browser (fallback) gagal dan app tetap
+                 di layar login walau pengguna sudah memilih akun.
+                 URL-nya ditangkap app_links (dipakai supabase_flutter,
+                 detectSessionInUri=true) lalu ditukar otomatis menjadi sesi.
+                 Skema kustom (bukan https) → autoVerify tidak berlaku. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fixify" android:host="login-callback" />
+            </intent-filter>
+            <!-- Deep link tautan reset kata sandi: fixify://reset-password.
+                 Sama seperti login-callback: tanpa intent-filter ini tombol
+                 "Simpan" di email reset membuka browser (atau gagal total),
+                 app tidak pernah menerima kode PKCE sehingga sesi pemulihan
+                 tidak terbentuk dan form "Kata Sandi Baru" tidak terbuka.
+                 host-nya sengaja dipisah dari login-callback agar app bisa
+                 membedakan callback login vs pemulihan. Nilainya wajib sama
+                 dengan AppConfig.resetPasswordRedirect (lib/config.dart) dan
+                 Redirect URLs di Supabase. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fixify" android:host="reset-password" />
+            </intent-filter>
+            <!-- Deep link verifikasi email pendaftaran: fixify://confirm.
+                 Dikirim sebagai `emailRedirectTo` saat signUp. Tanpa
+                 intent-filter ini tombol "Konfirmasi email" hanya membuka
+                 browser, sesi tidak terbentuk di app, dan pengguna harus
+                 masuk manual walau emailnya sudah terverifikasi.
+                 host dipisah agar app tahu callback ini = pendaftaran
+                 (mendarat di beranda), bukan pemulihan sandi. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="fixify" android:host="confirm" />
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

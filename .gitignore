@@ -17,3 +17,13 @@ freebuff-cleanup-tmp/
 
 # Kunci penandatanganan APK — JANGAN pernah di-commit
 .keystore-backup/
+
+# Laporan JSON ESLint yang dibuat CI saat lint gagal
+lint-report.json
+
+# Artefak lokal/agen yang tidak boleh ikut commit (bobot tanpa nilai):
+emu.png
+runs.json
+run.json
+flutter_app/android/app/google-services1.json
+emulator-preview.html

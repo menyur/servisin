@@ -1,10 +1,20 @@
 # Gate regresi LIVE sebelum rilis — realtime + audit keamanan F3–F6.
 #
-# Kenapa MANUAL, bukan tiap push? Probe ini TIDAK read-only: ia membuat baris
-# uji sementara di tabel produksi (bookings/reports/chat_messages) plus akun
-# auth sementara, memverifikasi perilaku nyata, lalu menghapusnya lagi. Data
-# produksi tidak boleh disentuh pada setiap push, dan kredensial service-role
-# sebaiknya hanya dipakai saat kamu benar-benar menjalankannya.
+# Probe ini TIDAK read-only: ia membuat baris uji sementara di tabel produksi
+# (bookings/reports/chat_messages) plus akun auth sementara, memverifikasi
+# perilaku nyata, lalu menghapusnya lagi. Karena itu kredensial service-role
+# hanya dipakai di sini, dan pemicunya dibatasi ke tiga jalur:
+#
+#   workflow_dispatch : manual dari Actions ("Run workflow").
+#   schedule          : tiap Senin 02:00 UTC — baseline mingguan.
+#   push ke main      : hanya bila file yang memengaruhi gate berubah
+#                       (scripts/**, supabase/**, package*.json, workflow ini).
+#                       Perubahan flutter_app/** TIDAK memicu di sini: gate-nya
+#                       sudah dijalankan build-apk.yml sebelum build APK,
+#                       sehingga tak ada data uji produksi yang ditulis dua kali.
+#
+# Catatan: pemicu otomatis (schedule/push) tetap menulis lalu menghapus data uji
+# di produksi. Bila itu tidak diinginkan, hapus blok `schedule:`/`push:` di `on:`.
 #
 # Cara pakai:
 #   GitHub → Actions → "Live Probe (regression gate)" → Run workflow.
@@ -15,11 +25,6 @@
 #                                atau Supabase → Settings → API.
 # URL proyek & kunci publishable TIDAK perlu secret — keduanya publik dan
 # sudah ikut dibundel di APK oleh .github/workflows/build-apk.yml.
-#
-# Ingin dijadwalkan otomatis (mis. tiap Senin 02:00 UTC)? Tambahkan di bawah
-# `on:` — sadari bahwa ini akan menulis data uji ke produksi tanpa diminta:
-#   schedule:
-#     - cron: "0 2 * * 1"
 
 name: Live Probe (regression gate)
 
@@ -30,6 +35,22 @@ on:
         description: "Batasi langkah (id dipisah koma). Kosong = semua. Lihat: node scripts/ci-probe-gate.mjs --list"
         required: false
         default: ""
+  # Baseline mingguan: Senin 02:00 UTC.
+  schedule:
+    - cron: "0 2 * * 1"
+  # Otomatis saat perubahan yang memengaruhi gate masuk ke main.
+  # flutter_app/** sengaja tidak disertakan (gate-nya sudah ada di build-apk.yml).
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - "supabase/**"
+      - "package.json"
+      - "package-lock.json"
+      # Konfigurasi OAuth Google ikut memengaruhi pemeriksaan client Web/Android
+      # (job `google-provider`) — perubahan di sini harus menjalankannya.
+      - "flutter_app/android/app/google-services.json"
+      - ".github/workflows/live-probe.yml"
 
 permissions:
   contents: read
@@ -39,6 +60,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Pemeriksaan konfigurasi provider Google Supabase (client Web vs Android).
+  # Read-only dan TANPA repository secret, jadi sengaja dipisah dari job di
+  # bawah: tetap gagal-terlihat walau SUPABASE_SERVICE_ROLE_KEY belum di-set.
+  # Pemeriksaan yang sama juga ikut di langkah pertama `npm run verify:live`
+  # (scripts/ci-probe-gate.mjs) — di sini ia berjalan sendiri agar statusnya
+  # terbaca jelas dan bisa dipakai sebagai required check tersendiri.
+  google-provider:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      # Publik (identik dengan yang dibundel di APK) — bukan rahasia.
+      NEXT_PUBLIC_SUPABASE_URL: https://sgxlnhzezknmdhefsvvu.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Tidak perlu `npm ci`: pemeriksa ini hanya memakai modul bawaan Node
+      # (fetch + node:fs) dan tidak menyentuh Supabase dengan kredensial.
+      - name: Selftest logika pemeriksa (tanpa jaringan)
+        run: node scripts/verify-google-provider.mjs --selftest
+
+      - name: Pastikan provider Google memakai client Web, bukan Android
+        run: node scripts/verify-google-provider.mjs
+
+      # Smoke test login Google memerlukan device/emulator (adb), jadi yang
+      # dijalankan di sini hanya selftest parser-nya — supaya logika
+      # pembacaan intent-filter & isi sesi app tidak ikut membusuk diam-diam.
+      # Jalankan penuh di mesin yang punya device: node scripts/smoke-google-login.mjs
+      - name: Selftest parser smoke test login Google (tanpa device)
+        run: node scripts/smoke-google-login.mjs --selftest
+
   live-probe:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -64,7 +122,7 @@ jobs:
       - name: Pastikan secret service-role tersedia
         run: |
           if [ -z "$SUPABASE_SERVICE_ROLE_KEY" ]; then
-            echo "::error::Secret SUPABASE_SERVICE_ROLE_KEY belum di-set. Tambahkan di Settings → Secrets and variables → Actions → New repository secret. Workflow ini hanya berjalan manual, jadi akses service-role hanya dipakai saat kamu menjalankannya."
+            echo "::error::Secret SUPABASE_SERVICE_ROLE_KEY belum di-set. Tambahkan di Settings → Secrets and variables → Actions → New repository secret. Gate ini dipakai untuk semua pemicunya (manual, schedule Senin, dan push ke main), jadi tanpa secret setiap run otomatis akan berhenti di sini."
             exit 1
           fi
 

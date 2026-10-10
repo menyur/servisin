@@ -10,8 +10,11 @@
 //   4. Teknisi melihat pekerjaan di `available_jobs()` lalu `claim_job`.
 //   5. Teknisi `set_job_status('in_progress')` → `('completed')`.
 //   6. Komisi terpotong: baris `balance_transactions` type 'earning' +
-//      saldo teknisi berkurang — dihitung dengan rumus dari src/lib/pricing.js
-//      (satu sumber dengan web), jadi drift rumus DB vs app akan tertangkap.
+//      saldo teknisi berkurang sebesar KOMISI + BIAYA APP (aturan platform:
+//      supabase/migrate-earning-fee.sql + src/lib/balance.js) — dihitung dari
+//      rumus src/lib/pricing.js (satu sumber dengan web), jadi drift rumus DB
+//      vs app akan tertangkap. Kebijakan saldo: potongan DIBATASI saldo
+//      tersedia (saldo tak boleh minus), jadi teknisi uji diberi saldo awal.
 //   7. Idempotensi: 'completed' dipanggil dua kali → komisi TIDAK dobel.
 //   8. Pelanggan menilai pesanan selesai (review tertulis).
 //   9. Voucher insentif penilaian dibuat & dipakai di pesanan berikutnya →
@@ -137,6 +140,21 @@ async function main() {
       .eq("id", technician.id);
     if (prepErr) throw new Error(`gagal menyiapkan teknisi uji: ${prepErr.message}`);
 
+    // Kebijakan saldo tidak boleh negatif: teknisi wajib punya saldo untuk
+    // menutup komisi + biaya app (kalau tidak, potongan dibatasi ke Rp 0).
+    // Beri saldo awal lewat baris 'topup' + update profil — meniru
+    // creditTechnicianBalance (src/lib/balance.js).
+    const seedBalance = 100000;
+    const { error: topupErr } = await admin.from("balance_transactions").insert({
+      technician_id: technician.id,
+      type: "topup",
+      amount: seedBalance,
+      note: "UJI E2E F7 — saldo awal uji, aman dihapus",
+    });
+    if (topupErr) throw new Error(`gagal menyiapkan baris topup teknisi uji: ${topupErr.message}`);
+    const { error: seedErr } = await admin.from("profiles").update({ balance: seedBalance }).eq("id", technician.id);
+    if (seedErr) throw new Error(`gagal set saldo awal teknisi uji: ${seedErr.message}`);
+
     const { data: techBefore } = await admin.from("profiles").select("balance").eq("id", technician.id).single();
     const balanceBefore = Number(techBefore?.balance ?? 0);
     console.log(`   teknisi uji siap (skill=${service.category_id}, rate=${DEFAULT_COMMISSION_RATE}%), saldo awal=${balanceBefore}`);
@@ -232,6 +250,9 @@ async function main() {
     // ---------------- 7. Komisi ----------------
     step("7. Komisi terpotong (rumus dari src/lib/pricing.js)");
     const expect = computeSplit(Number(afterDone.total_price) - APP_FEE, DEFAULT_COMMISSION_RATE);
+    // Aturan platform (supabase/migrate-earning-fee.sql + src/lib/balance.js):
+    // potongan saldo = KOMISI + biaya aplikasi pelanggan (bookings.app_fee).
+    const expectCut = expect.commission + APP_FEE;
     const { data: earnings } = await admin
       .from("balance_transactions")
       .select("amount,commission_amount,type,booking_id")
@@ -240,9 +261,10 @@ async function main() {
     const earning = (earnings ?? [])[0];
     check("baris balance_transactions 'earning' ada", (earnings ?? []).length === 1, `${(earnings ?? []).length} baris`);
     check("nilai komisi sesuai rumus app", Number(earning?.commission_amount) === expect.commission, `DB=${earning?.commission_amount} vs ${expect.commission} (${expect.gross} × ${DEFAULT_COMMISSION_RATE}%)`);
-    check("amount tercatat negatif", Number(earning?.amount) === -expect.commission, `amount=${earning?.amount}`);
+    check("amount = -(komisi + biaya app)", Number(earning?.amount) === -expectCut, `amount=${earning?.amount} vs ${-expectCut}`);
     const { data: techAfter } = await admin.from("profiles").select("balance").eq("id", technician.id).single();
-    check("saldo teknisi berkurang sebesar komisi", Number(techAfter?.balance) === balanceBefore - expect.commission, `saldo=${techAfter?.balance} vs ${balanceBefore - expect.commission}`);
+    check("saldo teknisi berkurang sebesar komisi + biaya app", Number(techAfter?.balance) === balanceBefore - expectCut, `saldo=${techAfter?.balance} vs ${balanceBefore - expectCut}`);
+    check("saldo teknisi tidak negatif (kebijakan saldo ≥ 0)", Number(techAfter?.balance ?? -1) >= 0, `saldo=${techAfter?.balance}`);
 
     // ---------------- 8. Idempotensi ----------------
     step("8. Idempotensi komisi (completed dipanggil dua kali)");
@@ -250,7 +272,8 @@ async function main() {
     const { data: earnings2 } = await admin.from("balance_transactions").select("booking_id").eq("booking_id", booking1.id).eq("type", "earning");
     const { data: techAfter2 } = await admin.from("profiles").select("balance").eq("id", technician.id).single();
     check("komisi tidak dobel", (earnings2 ?? []).length === 1, `${(earnings2 ?? []).length} baris`);
-    check("saldo tidak terpotong dua kali", Number(techAfter2?.balance) === balanceBefore - expect.commission, `saldo=${techAfter2?.balance}`);
+    check("saldo tidak terpotong dua kali", Number(techAfter2?.balance) === balanceBefore - expectCut, `saldo=${techAfter2?.balance}`);
+    check("saldo tetap tidak negatif setelah panggilan ulang", Number(techAfter2?.balance ?? -1) >= 0, `saldo=${techAfter2?.balance}`);
 
     // ---------------- 9. Penilaian ----------------
     step("9. Pelanggan menilai pesanan selesai");
@@ -311,6 +334,7 @@ async function main() {
       await admin.from("bookings").delete().in("id", bookingIds);
     }
     if (customer) await admin.from("vouchers").delete().eq("user_id", customer.id);
+    if (technician) await admin.from("balance_transactions").delete().eq("technician_id", technician.id);
     const del = await deleteTempUsers(admin, tempUsers);
     for (const d of del) console.log(`   akun uji ${d.label}: ${d.ok ? "OK" : `GAGAL (${d.error})`}`);
 

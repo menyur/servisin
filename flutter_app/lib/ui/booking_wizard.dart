@@ -55,6 +55,9 @@ class _BookingWizardState extends State<BookingWizard> {
         builder: (_) => LocationPickerScreen(
           initialLat: _pin?.lat,
           initialLng: _pin?.lng,
+          // Penanda "lokasi terakhir" di-scope per akun, agar pengguna lain di
+          // perangkat sama tak menimpa titik awal peta.
+          userId: Api.session?.user.id,
         ),
       ),
     );
@@ -70,6 +73,14 @@ class _BookingWizardState extends State<BookingWizard> {
       if (mounted) setState(() => _transferAccount = a);
     });
   }
+
+  @override
+  void dispose() {
+    _address.dispose();
+    _notes.dispose();
+    super.dispose();
+  }
+
   Voucher? _voucher;
   List<Voucher>? _vouchers;
   Uint8ListWrap? _attachment;

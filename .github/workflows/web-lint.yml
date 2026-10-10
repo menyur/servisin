@@ -1,0 +1,86 @@
+# Lint aplikasi web (Next.js) — pengganti `next lint` yang DIHAPUS di Next 16.
+#
+# Job ini menjalankan `npm run lint`, yaitu ESLint 9 langsung (bukan lewat
+# perintah Next lagi) dengan konfigurasi eslint.config.mjs. Cakupannya:
+# src/**, scripts/**, public/sw.js, dan berkas konfigurasi di akar repo.
+# Aplikasi Flutter punya pemeriksaan sendiri (flutter analyze) dan sengaja
+# tidak disentuh di sini.
+#
+# Pemicu:
+#   pull_request      : semua PR — cocok dijadikan required check.
+#   push ke main      : kecuali perubahan yang tidak menyentuh kode web
+#                       (flutter_app/**, public/apk/**, docs, *.md).
+#   workflow_dispatch : manual dari halaman Actions.
+#
+# Lokal: npm run lint   (exit ≠ 0 = ada error; warning tidak menggagalkan)
+#
+# Catatan: gate ini memeriksa ERROR saja. Saat ini repo punya 21 warning yang
+# sudah diketahui (10x no-img-element, 5x react-hooks/purity,
+# 5x react-hooks/set-state-in-effect, 1x jsx-a11y/alt-text) — lihat komentar
+# di eslint.config.mjs. Warning tetap tercetak di log + artifact, tapi tidak
+# memblokir PR sampai refactor-nya dikerjakan.
+
+name: Web Lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "flutter_app/**"
+      - "public/apk/**"
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Pasang dependensi
+        run: npm ci
+
+      # pipefail wajib: tanpa itu `tee` menutupi status keluar eslint.
+      - name: Jalankan ESLint
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee lint.log
+
+      # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
+      # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
+      # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,
+      # supaya tidak perlu mengunduh artifact untuk tahu apa yang rusak.
+      # Formatter bawaan "compact" sudah dihapus di ESLint 9, jadi jangan
+      # dipakai lagi.
+      - name: Ringkas kegagalan sebagai annotation
+        if: failure()
+        run: |
+          npx eslint . --format=json > lint-report.json 2>/dev/null || true
+          node scripts/lint-annotate.mjs lint-report.json
+
+      - name: Simpan log lint
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-log
+          path: |
+            lint.log
+            lint-report.json
+          if-no-files-found: ignore
+          retention-days: 7

@@ -10,14 +10,26 @@
 //   node scripts/ci-probe-gate.mjs --only=realtime-rls,audit-f3-f6
 //   node scripts/ci-probe-gate.mjs --list   # daftar langkah tanpa menjalankan
 //
-// Empat langkah: publikasi realtime, realtime ber-RLS, audit F3–F6, dan E2E
-// transaksional F7 (komisi/voucher). Total ±1 menit di jaringan normal.
+// Sebelas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
+// kredensial), E2E pengingat setor admin sampai ke aplikasi (penanda terbaca
+// sesi teknisi), RLS bucket bukti setor (pemilik saja, tidak bocor ke teknisi
+// lain / anon), retensi riwayat 30 hari (chat & laporan dihapus, pesanan
+// ditandai, catatan keuangan utuh), konfigurasi provider Google
+// (client Web vs Android — read-only),
+// publikasi realtime, realtime ber-RLS, audit F3–F6, E2E transaksional F7
+// (komisi/voucher), E2E klaim teknisi (keahlian+area), dan E2E pengiriman push
+// "pekerjaan baru" ke perangkat teknisi yang cocok.
+// Total ±2 menit di jaringan normal.
 //
-// PERINGATAN: probe ini TIDAK read-only. Mereka membuat baris/akun uji
-// sementara di Supabase produksi (termasuk saldo & voucher pada langkah E2E),
-// memverifikasi perilaku nyata, lalu menghapusnya lagi — dan setiap langkah
-// melaporkan sisa data uji (harus 0). Kredensial dibaca dari variabel
-// lingkungan (jalur CI) atau `.env.local`.
+// PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`).
+// Mereka membuat baris/akun uji sementara di Supabase produksi (termasuk saldo
+// & voucher pada langkah E2E), memverifikasi perilaku nyata, lalu menghapusnya
+// lagi — dan setiap langkah melaporkan sisa data uji (harus 0). Kredensial
+// dibaca dari variabel lingkungan (jalur CI) atau `.env.local`.
+//
+// Langkah `google-provider` sengaja murni BACA dan tanpa kredensial rahasia
+// (hanya endpoint publik Supabase + google-services.json di repo), sehingga
+// bisa dijalankan sendiri: npm run verify:google
 //
 // Kode keluar: 0 = lulus, 1 = ada regresi, 3 = kredensial tidak tersedia.
 // ============================================================================
@@ -27,6 +39,36 @@ import { loadEnv } from "./lib/probe-env.mjs";
 const STEP_TIMEOUT_MS = 240_000;
 
 const STEPS = [
+  {
+    id: "balance-nonnegative",
+    label: "Kebijakan saldo: potongan komisi tidak boleh membuat saldo teknisi negatif (offline)",
+    args: ["scripts/verify-balance-nonnegative.mjs"],
+    guards: "saldo teknisi tidak pernah minus (clamp di server web & SQL set_job_status) + ledger tetap = saldo",
+  },
+  {
+    id: "balance-reminder",
+    label: "E2E pengingat setor admin sampai ke aplikasi (banner Flutter)",
+    args: ["scripts/verify-balance-reminder.mjs"],
+    guards: "penanda profiles.balance_reminder_at terisi saat admin mengingatkan & TERBACA sesi teknisi (RLS self-read); syarat banner saldo ≤ 0 benar; pengingat baru menggeser timestamp; saldo terisi menggugurkan",
+  },
+  {
+    id: "balance-proofs-rls",
+    label: "RLS bucket bukti setor: pemilik membaca buktinya, orang lain & anon tidak",
+    args: ["scripts/verify-balance-proofs-rls.mjs"],
+    guards: "teknisi bisa membaca bukti transfer yang dia unggah (folder deposit/) TANPA membocorkan ke teknisi lain / anon (jalankan supabase/fix-balance-proofs-owner-read.sql bila gagal)",
+  },
+  {
+    id: "history-retention",
+    label: "Retensi riwayat 30 hari: chat & laporan lama dihapus, pesanan ditandai, catatan keuangan utuh",
+    args: ["scripts/verify-history-retention.mjs"],
+    guards: "riwayat lama memang dibersihkan sesuai kebijakan retensi TANPA menghapus catatan keuangan (jalankan supabase/migrate-history-retention.sql bila gagal)",
+  },
+  {
+    id: "google-provider",
+    label: "Konfigurasi Google: Supabase memakai client OAuth WEB, bukan ANDROID",
+    args: ["scripts/verify-google-provider.mjs"],
+    guards: "login Google tidak diam-diam rusak (redirect_uri_mismatch / audience native tidak cocok)",
+  },
   {
     id: "realtime-publication",
     label: "Realtime: publication + replica identity (bookings, reports, chat_messages)",
@@ -50,6 +92,18 @@ const STEPS = [
     label: "E2E transaksional F7 (pesanan → bayar → approve → klaim → selesai → komisi → review → voucher)",
     args: ["scripts/verify-e2e-lifecycle.mjs"],
     guards: "alur bisnis utuh: komisi terpotong TEPAT SEKALI, saldo konsisten, voucher insentif bisa dipakai",
+  },
+  {
+    id: "e2e-technician-claim",
+    label: "E2E klaim teknisi dari nol (daftar lowongan + klaim sesuai keahlian & area)",
+    args: ["scripts/verify-e2e-technician-claim.mjs"],
+    guards: "teknisi menemukan & mengklaim pekerjaan tanpa admin; skill LABEL tetap cocok (F10); keahlian beda ditolak; satu pekerjaan satu teknisi",
+  },
+  {
+    id: "e2e-push-notify",
+    label: "E2E pengiriman push 'pekerjaan baru' ke perangkat teknisi yang cocok (web-push nyata)",
+    args: ["scripts/verify-e2e-push-notify.mjs"],
+    guards: "notifikasi 'pekerjaan baru' benar-benar terkirim (VAPID + aes128gcm) hanya ke antrean teknisi yang cocok keahlian+area; skill LABEL tetap terkirim (F10); tidak ada notifikasi ke pengguna nyata",
   },
 ];
 
@@ -146,7 +200,7 @@ async function main() {
     console.log("Perbaiki penyebabnya (jangan melemahkan probe) sebelum rilis.");
     process.exit(1);
   }
-  console.log(`GATE LULUS — ${results.length}/${results.length} probe hijau. Rilis aman dari sisi F3–F6 + realtime.`);
+  console.log(`GATE LULUS — ${results.length}/${results.length} probe hijau. Rilis aman dari sisi kebijakan saldo, pengingat setor, bukti setor, retensi riwayat, F3–F6, realtime, alur teknisi, dan pengiriman notifikasi.`);
   process.exit(0);
 }
 

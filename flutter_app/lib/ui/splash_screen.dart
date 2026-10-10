@@ -8,7 +8,8 @@ import '../theme.dart';
 class SplashScreen extends StatefulWidget {
   final bool startOnboarding;
   final bool isLoggedIn;
-  const SplashScreen({super.key, required this.startOnboarding, required this.isLoggedIn});
+  const SplashScreen(
+      {super.key, required this.startOnboarding, required this.isLoggedIn});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -25,8 +26,15 @@ class SplashScreen extends StatefulWidget {
   }
 }
 
-class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderStateMixin {
+class _SplashScreenState extends State<SplashScreen>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
+  // CurvedAnimation punya sumber dayanya sendiri (listener ke controller) dan
+  // WAJIB di-dispose — dulu tidak, sehingga terdeteksi bocor oleh leak tracking.
+  late final CurvedAnimation _logoScaleCurve;
+  late final CurvedAnimation _logoOpacityCurve;
+  late final CurvedAnimation _textOpacityCurve;
+  late final CurvedAnimation _textSlideCurve;
   late final Animation<double> _logoScale;
   late final Animation<double> _logoOpacity;
   late final Animation<double> _textOpacity;
@@ -35,23 +43,28 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400));
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1400));
 
     // Logo: membesar dari 0.5 dengan sedikit overshoot (pegas), fade cepat.
-    _logoScale = Tween<double>(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: const Interval(0.0, 0.55, curve: Curves.easeOutBack)),
-    );
-    _logoOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: const Interval(0.0, 0.30, curve: Curves.easeOut)),
-    );
+    _logoScaleCurve = CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0.0, 0.55, curve: Curves.easeOutBack));
+    _logoScale = Tween<double>(begin: 0.5, end: 1.0).animate(_logoScaleCurve);
+    _logoOpacityCurve = CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0.0, 0.30, curve: Curves.easeOut));
+    _logoOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(_logoOpacityCurve);
 
     // Nama + tagline: muncul menyusul dari bawah.
-    _textOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: const Interval(0.45, 0.75, curve: Curves.easeOut)),
-    );
-    _textSlide = Tween<double>(begin: 14.0, end: 0.0).animate(
-      CurvedAnimation(parent: _ctrl, curve: const Interval(0.45, 0.75, curve: Curves.easeOutCubic)),
-    );
+    _textOpacityCurve = CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0.45, 0.75, curve: Curves.easeOut));
+    _textOpacity = Tween<double>(begin: 0.0, end: 1.0).animate(_textOpacityCurve);
+    _textSlideCurve = CurvedAnimation(
+        parent: _ctrl,
+        curve: const Interval(0.45, 0.75, curve: Curves.easeOutCubic));
+    _textSlide = Tween<double>(begin: 14.0, end: 0.0).animate(_textSlideCurve);
 
     _ctrl.forward();
 
@@ -61,12 +74,18 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     // Setelah animasi + jeda singkat (total ±1.9s), pindah ke rute tujuan.
     Future.delayed(const Duration(milliseconds: 1900), () {
-      if (mounted && !hold) Navigator.pushReplacementNamed(context, widget.nextRoute);
+      if (mounted && !hold) {
+        Navigator.pushReplacementNamed(context, widget.nextRoute);
+      }
     });
   }
 
   @override
   void dispose() {
+    _logoScaleCurve.dispose();
+    _logoOpacityCurve.dispose();
+    _textOpacityCurve.dispose();
+    _textSlideCurve.dispose();
     _ctrl.dispose();
     super.dispose();
   }
@@ -82,76 +101,87 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             colors: [AppColors.brand, AppColors.brandDeep, AppColors.navy],
           ),
         ),
+        // Column hanya dibatasi oleh tinggi layar; pada viewport pendek
+        // (mis. ponsel kecil / mode lanskap) isinya meluber dan memicu
+        // "A RenderFlex overflowed by N pixels on the bottom". Bungkus dengan
+        // SingleChildScrollView + MainAxisSize.min agar tetap terpusat saat
+        // ruang cukup, dan bisa di-scroll (tanpa error) saat tidak.
         child: Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            // Kartu logo putih yang "terbang" masuk.
-            FadeTransition(
-              opacity: _logoOpacity,
-              child: ScaleTransition(
-                scale: _logoScale,
-                child: Container(
-                  padding: const EdgeInsets.all(18),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(28),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.25),
-                        blurRadius: 30,
-                        offset: const Offset(0, 12),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(vertical: 24),
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Kartu logo putih yang "terbang" masuk.
+              FadeTransition(
+                opacity: _logoOpacity,
+                child: ScaleTransition(
+                  scale: _logoScale,
+                  child: Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(28),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 30,
+                          offset: const Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(18),
+                      child: Image.asset(
+                        'assets/logo.png',
+                        width: 110,
+                        height: 110,
+                        fit: BoxFit.contain,
                       ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: Image.asset(
-                      'assets/logo.png',
-                      width: 110,
-                      height: 110,
-                      fit: BoxFit.contain,
                     ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(height: 26),
-            AnimatedBuilder(
-              animation: _textOpacity,
-              builder: (context, child) => Opacity(
-                opacity: _textOpacity.value,
-                child: Transform.translate(
-                  offset: Offset(0, _textSlide.value),
-                  child: child,
-                ),
-              ),
-              child: const Column(children: [
-                Text(
-                  'Fixify',
-                  style: TextStyle(
-                    fontSize: 34,
-                    fontWeight: FontWeight.w900,
-                    color: Colors.white,
-                    letterSpacing: 1.2,
+              const SizedBox(height: 26),
+              AnimatedBuilder(
+                animation: _textOpacity,
+                builder: (context, child) => Opacity(
+                  opacity: _textOpacity.value,
+                  child: Transform.translate(
+                    offset: Offset(0, _textSlide.value),
+                    child: child,
                   ),
                 ),
-                SizedBox(height: 6),
-                Text(
-                  'Teknisi terpercaya, satu ketukan.',
-                  style: TextStyle(fontSize: 13.5, color: Colors.white70, fontWeight: FontWeight.w500),
-                ),
-              ]),
-            ),
-            const SizedBox(height: 46),
-            // Indikator kecil menandakan app sedang menyiapkan sesi.
-            SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.4,
-                color: Colors.white.withValues(alpha: 0.85),
+                child: const Column(children: [
+                  Text(
+                    'Fixify',
+                    style: TextStyle(
+                      fontSize: 34,
+                      fontWeight: FontWeight.w900,
+                      color: Colors.white,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  SizedBox(height: 6),
+                  Text(
+                    'Teknisi terpercaya, satu ketukan.',
+                    style: TextStyle(
+                        fontSize: 13.5,
+                        color: Colors.white70,
+                        fontWeight: FontWeight.w500),
+                  ),
+                ]),
               ),
-            ),
-          ]),
+              const SizedBox(height: 46),
+              // Indikator kecil menandakan app sedang menyiapkan sesi.
+              SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: Colors.white.withValues(alpha: 0.85),
+                ),
+              ),
+            ]),
+          ),
         ),
       ),
     );

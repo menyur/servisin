@@ -118,7 +118,11 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   const [newCount, setNewCount] = useState(0);
   const lastSeenCount = useRef(0);
   const tabRef = useRef(tab);
-  tabRef.current = tab;
+  // ditulis di effect, bukan saat render (react-hooks/refs); effect di bawah
+  // membacanya pada commit yang sama sehingga nilainya tetap paling baru.
+  useEffect(() => {
+    tabRef.current = tab;
+  });
   useEffect(() => {
     const total = bookings.length + reports.length;
     const delta = total - lastSeenCount.current;
@@ -574,7 +578,6 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   )}
                   {b.payment_proof_url ? (
                     <div className="flex items-start gap-3 flex-wrap">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <a href={b.payment_proof_url} target="_blank" rel="noreferrer" className="shrink-0" title="Klik untuk perbesar">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
@@ -704,7 +707,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   </span>
                 )}
                 {technicians.length === 0 && (
-                  <span className="text-xs text-ink-soft">Belum ada akun teknisi — angkat lewat tab "Pengguna & Teknisi".</span>
+                  <span className="text-xs text-ink-soft">Belum ada akun teknisi — angkat lewat tab &quot;Pengguna &amp; Teknisi&quot;.</span>
                 )}
                 {unassigned && technicians.length > 0 && (
                   <span className="text-xs text-amber font-semibold">Pilih teknisi sebelum jadwal kedatangan.</span>
@@ -1643,7 +1646,7 @@ function MonthlyReportsView() {
         <p className="text-ink-soft text-sm">Belum ada arsip laporan bulanan.</p>
         <p className="text-xs text-ink-soft mt-1">
           Arsip dibuat otomatis saat laporan bulanan dikirim (tanggal 1 tiap bulan) —
-          atau kirim manual: <code className="bg-paper px-1.5 py-0.5 rounded">curl "/api/cron/monthly-report"</code>
+          atau kirim manual: <code className="bg-paper px-1.5 py-0.5 rounded">curl &quot;/api/cron/monthly-report&quot;</code>
         </p>
       </div>
     );
@@ -1906,7 +1909,7 @@ function CreateVoucher({ users, onCreated }) {
       {error && <p className="text-coral text-xs">{error}</p>}
       {created && (
         <p className="text-mint text-xs">
-          ✓ Voucher <strong>{created.code}</strong> dibuat untuk {created.recipient} — kodenya sudah bisa dilihat pelanggan di tab "Voucher Saya".
+          ✓ Voucher <strong>{created.code}</strong> dibuat untuk {created.recipient} — kodenya sudah bisa dilihat pelanggan di tab &quot;Voucher Saya&quot;.
         </p>
       )}
       <div className="flex gap-2">

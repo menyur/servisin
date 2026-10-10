@@ -130,6 +130,20 @@ void main() {
       expect(s.expectedBalance, -9000);
     });
 
+    test('potongan sebagian (saldo kurang): biaya app = amount − komisi, sisa tak tertagih', () {
+      final tx = [
+        _tx(type: 'topup', amount: 5000),
+        // Komisi penuh 12.000 + fee 5.000 = 17.000, tapi saldo hanya 5.000 →
+        // server memotong 5.000 (komisi dulu); sisa tidak menjadi utang.
+        _tx(type: 'earning', amount: -5000, commission: 5000, bookingTotal: 125000, appFee: 5000),
+      ];
+      final s = Api.summarizeBalance(_profile(balance: 0), tx);
+      expect(s.commissionTotal, 5000);
+      expect(s.appFeeTotal, 0); // biaya app belum tertagih
+      expect(s.expectedBalance, 0);
+      expect(s.mismatch, 0); // saldo = ledger, tanpa selisih
+    });
+
     test('mismatch = saldo aktual − expectedBalance', () {
       final s = Api.summarizeBalance(_profile(balance: 43749), [_tx(type: 'topup', amount: 50000)]);
       expect(s.expectedBalance, 50000);
@@ -139,6 +153,66 @@ void main() {
     test('saldo diambil dari profiles.balance (bisa negatif)', () {
       final s = Api.summarizeBalance(_profile(balance: -7500), const []);
       expect(s.balance, -7500);
+    });
+  });
+
+  group('Pengingat setor (admin → aplikasi)', () {
+    test('Profile membaca balance_reminder_at; kosong → null', () {
+      final p = Profile.fromMap({
+        'id': 'u1',
+        'name': 'A',
+        'email': 'a@b.c',
+        'balance_reminder_at': '2026-10-09T07:15:00Z',
+      });
+      expect(p.balanceReminderAt, DateTime.utc(2026, 10, 9, 7, 15));
+      final p2 = Profile.fromMap({'id': 'u1', 'name': 'A', 'email': 'a@b.c'});
+      expect(p2.balanceReminderAt, isNull);
+    });
+
+    test('summarizeBalance membawa pengingat; banner aktif hanya saat saldo ≤ 0', () {
+      final reminder = DateTime.utc(2026, 10, 9, 7, 15);
+      final low = Api.summarizeBalance(
+        Profile(id: 'u1', name: 'A', email: 'a@b.c', role: 'technician', balance: -500, balanceReminderAt: reminder),
+        const [],
+      );
+      expect(low.balanceReminderAt, reminder);
+      expect(low.needsDepositReminder, isTrue);
+
+      // Saldo sudah diisi → banner hilang.
+      final filled = Api.summarizeBalance(
+        Profile(id: 'u1', name: 'A', email: 'a@b.c', role: 'technician', balance: 20000, balanceReminderAt: reminder),
+        const [],
+      );
+      expect(filled.needsDepositReminder, isFalse);
+
+      // Belum pernah diingatkan → tidak ada banner walau saldo 0.
+      final none = Api.summarizeBalance(
+        Profile(id: 'u1', name: 'A', email: 'a@b.c', role: 'technician', balance: 0),
+        const [],
+      );
+      expect(none.needsDepositReminder, isFalse);
+    });
+  });
+
+  group('Tampilan saldo (minimum Rp 0)', () {
+    test('saldo negatif → displayBalance 0, isNegative true, shortfall = kekurangan', () {
+      final s = Api.summarizeBalance(_profile(balance: -8751), const []);
+      expect(s.balance, -8751); // nilai mentah tetap
+      expect(s.isNegative, isTrue);
+      expect(s.displayBalance, 0); // yang ditampilkan tidak minus
+      expect(s.shortfall, 8751);
+    });
+
+    test('saldo positif / nol → apa adanya, tanpa penjelasan', () {
+      final pos = Api.summarizeBalance(_profile(balance: 42000), const []);
+      expect(pos.isNegative, isFalse);
+      expect(pos.displayBalance, 42000);
+      expect(pos.shortfall, 0);
+
+      final zero = Api.summarizeBalance(_profile(balance: 0), const []);
+      expect(zero.isNegative, isFalse);
+      expect(zero.displayBalance, 0);
+      expect(zero.shortfall, 0);
     });
   });
 

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../models.dart';
@@ -41,43 +42,140 @@ class ScreenHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.fromLTRB(8, 12, 8, bottom != null ? 18 : 24),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.brandDeep, AppColors.brand],
+    return HeaderGradientBackground(
+      // Gradien tetap mengisi edge-to-edge DI BELAKANG bilah status, tetapi
+      // KONTEN turun melewati inset atas. Wajib sejak Android 15/16 memaksa
+      // edge-to-edge: tanpa ini judul menabrak jam/baterai. `bottom: false`
+      // karena bagian bawah header bukan tepi layar (di bawahnya masih ada
+      // daftar). Di perangkat non-edge-to-edge inset atas = 0 → tak berubah.
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(8, 12, 8, bottom != null ? 18 : 24),
+          child: Column(children: [
+            Row(children: [
+              if (leading != null) leading!,
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.only(left: leading != null ? 8 : 16),
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title,
+                            style: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white)),
+                        if (subtitle.isNotEmpty)
+                          Text(subtitle,
+                              style: TextStyle(
+                                  fontSize: 12.5,
+                                  color: Colors.white.withValues(alpha: 0.85))),
+                      ]),
+                ),
+              ),
+              if (actions != null) ...actions!,
+            ]),
+            if (bottom != null) bottom!,
+          ]),
         ),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(30)),
       ),
-      child: Column(children: [
-        Row(children: [
-          if (leading != null) leading!,
-          Expanded(
-            child: Padding(
-              padding: EdgeInsets.only(left: leading != null ? 8 : 16),
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white)),
-                    if (subtitle.isNotEmpty)
-                      Text(subtitle,
-                          style: TextStyle(
-                              fontSize: 12.5,
-                              color: Colors.white.withValues(alpha: 0.85))),
-                  ]),
-            ),
+    );
+  }
+}
+
+/// Latar header tab: gradien 3 warna brand (brandDeep → brand → brandLight)
+/// dengan lingkaran dekoratif halus di sudutnya.
+///
+/// Dipakai [ScreenHeader] (Beranda, Pesanan, Pekerjaan, Laporan, Voucher) dan
+/// header layar Profil (avatar besar) supaya seluruh tab terlihat satu
+/// keluarga. Lingkaran hiasan dibungkus [IgnorePointer] supaya tidak pernah
+/// menelan ketukan pill/tombol yang ada di atasnya.
+class HeaderGradientBackground extends StatelessWidget {
+  final Widget child;
+
+  /// Padding opsional untuk konten header (header Profil memakainya untuk
+  /// menambahkan inset bilah status pada avatar).
+  final EdgeInsetsGeometry? padding;
+
+  const HeaderGradientBackground({super.key, required this.child, this.padding});
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      // Sudut bawah membulat → hiasan tidak boleh tumpah keluar header.
+      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(30)),
+      child: Container(
+        width: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              AppColors.brandDeep,
+              AppColors.brand,
+              AppColors.brandLight,
+            ],
+            // Warna terang (brandLight) hanya di ujung kanan-bawah supaya teks
+            // putih tetap kontras di area judul.
+            stops: [0.0, 0.58, 1.0],
           ),
-          if (actions != null) ...actions!,
+        ),
+        child: Stack(children: [
+          const Positioned(
+              top: -48, right: -36, child: _DecoCircle(size: 172)),
+          const Positioned(
+              bottom: -58, left: -30, child: _DecoCircle(size: 130, opacity: 0.08)),
+          const Positioned(top: 30, right: 86, child: _DecoRing(size: 48)),
+          if (padding != null)
+            Padding(padding: padding!, child: child)
+          else
+            child,
         ]),
-        if (bottom != null) bottom!,
-      ]),
+      ),
+    );
+  }
+}
+
+/// Lingkaran putih transparan (hiasan header) — tidak menangkap ketukan.
+class _DecoCircle extends StatelessWidget {
+  final double size;
+  final double opacity;
+
+  const _DecoCircle({required this.size, this.opacity = 0.10});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.white.withValues(alpha: opacity),
+        ),
+      ),
+    );
+  }
+}
+
+/// Cincin tipis (hiasan header) — garis putih transparan tanpa isi.
+class _DecoRing extends StatelessWidget {
+  final double size;
+
+  const _DecoRing({required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.22), width: 2),
+        ),
+      ),
     );
   }
 }
@@ -214,48 +312,58 @@ void showSnackError(BuildContext context, Object error, String fallback) {
   ));
 }
 
+/// Buka Google Maps untuk sebuah tujuan — titik exact bila koordinat tersedia,
+/// jika tidak alamat lengkapnya (Maps mencari sendiri alamat itu).
+///
+/// Satu ketukan langsung membuka aplikasi Google Maps (mode navigasi mobil),
+/// tanpa dialog/sheet perantara. Kegagalan membuka Maps TIDAK diam-diam:
+/// pengguna diberi tahu lewat SnackBar supaya tombol rute tidak terasa mati.
+///
+/// Return true bila Maps benar-benar dibuka.
+Future<bool> openRouteToDestination(
+  BuildContext context, {
+  double? lat,
+  double? lng,
+  String? address,
+}) async {
+  final url = Api.routeUrl(lat: lat, lng: lng, address: address);
+  if (url == null) {
+    if (context.mounted) {
+      showSnack(context, 'Tujuan belum tersedia — alamat pesanan kosong.', error: true);
+    }
+    return false;
+  }
+  try {
+    final ok = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!ok && context.mounted) {
+      showSnack(context, 'Gagal membuka Google Maps. Coba lagi.', error: true);
+    }
+    return ok;
+  } catch (e) {
+    if (context.mounted) showSnackError(context, e, 'Gagal membuka Google Maps.');
+    return false;
+  }
+}
+
 /// Alur teknisi melepas tugas: dialog alasan (min 5 karakter) →
 /// RPC release_job → pesanan kembali ke daftar Tersedia.
 /// Return true bila berhasil dilepas.
+///
+/// Controller alasan dimiliki oleh [_ReleaseJobDialog] (StatefulWidget), BUKAN
+/// variabel lokal di sini: `showDialog` selesai saat route di-pop, sedangkan
+/// widget dialog masih hidup selama animasi keluar. Men-dispose controller di
+/// sini membuat `TextField` yang masih ter-mount memakai controller mati →
+/// assertion `A TextEditingController was used after being disposed` lalu
+/// `_dependents.isEmpty` (layar merah).
 Future<bool> releaseJobFlow(BuildContext context, String bookingId) async {
-  final ctrl = TextEditingController();
-  final confirmed = await showDialog<bool>(
+  final reason = await showDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Lepas tugas ini?'),
-      content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text(
-            'Pesanan akan kembali ke daftar Tersedia dan bisa diambil teknisi lain.',
-            style: TextStyle(fontSize: 13, height: 1.45)),
-        const SizedBox(height: 12),
-        TextField(
-          controller: ctrl,
-          minLines: 2,
-          maxLines: 4,
-          maxLength: 500,
-          decoration: const InputDecoration(
-            labelText: 'Alasan melepas (wajib)',
-            hintText: 'mis. jadwal bentrok, di luar area saya…',
-          ),
-        ),
-      ]),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-        FilledButton(
-          style: FilledButton.styleFrom(backgroundColor: AppColors.coral),
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('Lepas Tugas'),
-        ),
-      ],
-    ),
+    builder: (_) => const _ReleaseJobDialog(),
   );
-  if (confirmed != true) return false;
-
-  final reason = ctrl.text.trim();
-  if (reason.length < 5) {
-    if (context.mounted) showSnack(context, 'Tulis alasan melepas tugas (minimal 5 karakter).', error: true);
-    return false;
-  }
+  if (reason == null || reason.length < 5) return false;
 
   try {
     final r = await Api.releaseJob(bookingId, reason);
@@ -270,6 +378,77 @@ Future<bool> releaseJobFlow(BuildContext context, String bookingId) async {
   } catch (e) {
     if (context.mounted) showSnackError(context, e, 'Gagal melepas tugas.');
     return false;
+  }
+}
+
+/// Dialog alasan pelepasan tugas.
+///
+/// StatefulWidget supaya `TextEditingController` hidup selama route dialog
+/// (termasuk animasi keluar) dan dibuang di `dispose()` miliknya sendiri —
+/// lihat catatan di [releaseJobFlow]. Validasinya inline: alasan terlalu
+/// pendek tidak menutup dialog, pengguna bisa langsung memperbaiki.
+/// Mengembalikan alasan yang sudah di-trim, atau null bila dibatalkan.
+class _ReleaseJobDialog extends StatefulWidget {
+  const _ReleaseJobDialog();
+
+  @override
+  State<_ReleaseJobDialog> createState() => _ReleaseJobDialogState();
+}
+
+class _ReleaseJobDialogState extends State<_ReleaseJobDialog> {
+  final _ctrl = TextEditingController();
+  String? _error;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final reason = _ctrl.text.trim();
+    if (reason.length < 5) {
+      setState(() => _error = 'Tulis alasan melepas tugas (minimal 5 karakter).');
+      return;
+    }
+    Navigator.pop(context, reason);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Lepas tugas ini?'),
+      // Scrollable: papan ketik di layar pendek tidak boleh memicu overflow.
+      content: SingleChildScrollView(
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text(
+              'Pesanan akan kembali ke daftar Tersedia dan bisa diambil teknisi lain.',
+              style: TextStyle(fontSize: 13, height: 1.45)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctrl,
+            minLines: 2,
+            maxLines: 4,
+            maxLength: 500,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submit(),
+            decoration: InputDecoration(
+              labelText: 'Alasan melepas (wajib)',
+              hintText: 'mis. jadwal bentrok, di luar area saya…',
+              errorText: _error,
+            ),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: AppColors.coral),
+          onPressed: _submit,
+          child: const Text('Lepas Tugas'),
+        ),
+      ],
+    );
   }
 }
 
@@ -395,6 +574,44 @@ final ValueNotifier<int> mainTabIndex = ValueNotifier<int>(0);
 /// notifikasi foreground dari luar widget tree biasa.
 final navigatorKey = GlobalKey<NavigatorState>();
 
+/// Nama rute bernama yang sedang tampil (verbose terakhir dari [obsRoutes]).
+/// Dipakai handler deep link di main.dart agar tidak melakukan navigasi ganda
+/// saat pengguna sudah berada di beranda.
+final ValueNotifier<String> currentRouteName = ValueNotifier<String>('/splash');
+
+/// Observer rute untuk [currentRouteName] — dipasang di MaterialApp
+/// (navigatorObservers). Rute tanpa nama (mis. hasil onGenerateRoute)
+/// dibiarkan: nama terakhir yang dikenal tetap dipertahankan.
+class AuthRouteObserver extends NavigatorObserver {
+  static void _remember(Route<dynamic>? route) {
+    final name = route?.settings.name;
+    if (name != null && name.isNotEmpty) currentRouteName.value = name;
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      _remember(route);
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      _remember(newRoute);
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
+      _remember(previousRoute);
+}
+
+/// Apakah sesi baru dari deep link (verifikasi email `fixify://confirm`)
+/// perlu memindahkan pengguna ke beranda/layar Selamat Datang?
+///
+/// Tidak bila sudah di beranda, tidak saat sedang di layar "Kata Sandi Baru"
+/// (navigasinya diatur alur pemulihan sandi), dan tidak saat sudah berada di
+/// layar Selamat Datang.
+bool shouldGoHomeAfterSignIn(String currentRoute) =>
+    currentRoute != '/' &&
+    currentRoute != '/welcome' &&
+    currentRoute != '/set-password';
+
 /// Tick realtime perubahan status pesanan. MainShell berlangganan Supabase
 /// Realtime (Api.subscribeBookingUpdates) sekali untuk seluruh aplikasi,
 /// lalu menyiarkan event ke sini. Layar yang menampilkan pesanan (Pesanan,
@@ -404,6 +621,12 @@ final StreamController<BookingUpdate> bookingUpdatesTick =
 
 /// Posisi tab "Pesanan" pada bar navigasi — sama untuk pelanggan dan teknisi.
 const int kOrdersTabIndex = 1;
+
+/// Permintaan membuka tab **Laporan** dari luar widget tree (mis. pengguna
+/// mengetuk notifikasi status laporan). Indeks tab Laporan BERBEDA per peran
+/// — 2 untuk pelanggan, 3 untuk teknisi — jadi shell yang menerjemahkannya.
+/// Nilai dinaikkan (counter) supaya tetap memicu listener meski nilainya sama.
+final ValueNotifier<int> openReportsRequest = ValueNotifier<int>(0);
 
 /// Jumlah event realtime pesanan yang belum "dilihat": naik tiap event
 /// bermakna (perubahan status / penugasan teknisi) datang saat user tidak
@@ -480,6 +703,8 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     // Sinkron saat layar lain meminta pindah tab (mainTabIndex.value = X).
     mainTabIndex.addListener(_onExternalTabRequest);
+    // Notifikasi laporan meminta tab Laporan (indeks tergantung peran).
+    openReportsRequest.addListener(_onOpenReportsRequest);
     if (widget.initialIndex == kOrdersTabIndex) unseenBookingUpdates.value = 0;
     _detectRole();
     _initBookingRealtime();
@@ -549,12 +774,19 @@ class _MainShellState extends State<MainShell> {
   void dispose() {
     _teardownRealtime();
     mainTabIndex.removeListener(_onExternalTabRequest);
+    openReportsRequest.removeListener(_onOpenReportsRequest);
     super.dispose();
   }
 
   void _onExternalTabRequest() {
     if (mainTabIndex.value == _index) return;
     _select(mainTabIndex.value);
+  }
+
+  /// Notifikasi laporan meminta tab Laporan — indeks berbeda per peran.
+  void _onOpenReportsRequest() {
+    if (!mounted) return;
+    _select(_isTechnician ? 3 : 2);
   }
 
   @override

@@ -1,4 +1,6 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -9,11 +11,19 @@ import 'common.dart';
 
 /// Tombol "Masuk dengan Google" — logo resmi 4 warna.
 ///
-/// Android native  : OAuth via Custom Tabs (supabase_flutter), kembali ke
-///                   app lewat deep link `fixify://login-callback`.
-/// Web / lainnya   : fall back ke signInWithOAuth(redirectTo: site).
-///                   Supabase juga punya fallback otomatis: bila deep link
-///                   gagal, kode auth ditampilkan untuk ditempel manual.
+/// Android native  : tukar idToken Google (SDK native, MainActivity) menjadi
+///                   sesi Supabase lewat signInWithIdToken.
+/// Android fallback: bila jalur native gagal (mis. SHA-1/package belum
+///                   terdaftar), buka OAuth browser dengan
+///                   redirectTo = `fixify://login-callback`; Supabase
+///                   mengembalikan ke app lewat deep link itu dan
+///                   supabase_flutter menukarnya menjadi sesi otomatis
+///                   (detectSessionInUri=true + intent-filter di manifest).
+/// Web             : redirect penuh ke OAuth Google.
+///
+/// Karena sesi baru jadi SETELAH browser kembali (deep link), tombol ini
+/// tidak navigasi tepat setelah membuka browser — ia menunggu event
+/// `signedIn` dari Supabase, lalu baru pindah ke beranda.
 class GoogleSignInButton extends StatefulWidget {
   const GoogleSignInButton({super.key});
 
@@ -23,8 +33,38 @@ class GoogleSignInButton extends StatefulWidget {
 
 class _GoogleSignInButtonState extends State<GoogleSignInButton> {
   bool _loading = false;
+  StreamSubscription<AuthState>? _authSub;
+  bool _leftScreen = false;
 
   static const _channel = MethodChannel('fixify/google_signin');
+
+  @override
+  void initState() {
+    super.initState();
+    // Hasil OAuth browser (Android) tiba belakangan lewat deep link
+    // fixify://login-callback. supabase_flutter menukarnya menjadi sesi lalu
+    // memancarkan `signedIn`; dengarkan di sini agar layar ini ikut pindah.
+    // Ini juga menutup kasus cold start: bila OS me-restart app karena deep
+    // link, splash sempat memilih '/login' sebelum sesi dipulihkan.
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+      if (data.event != AuthChangeEvent.signedIn) return;
+      _goHome();
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  /// Pindah ke beranda sekali saja — beberapa event `signedIn` beruntun
+  /// (mis. jalur native + listener) tidak boleh membuat navigasi ganda.
+  void _goHome() {
+    if (!mounted || _leftScreen) return;
+    _leftScreen = true;
+    Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
+  }
 
   Future<void> _signIn() async {
     setState(() => _loading = true);
@@ -36,48 +76,57 @@ class _GoogleSignInButtonState extends State<GoogleSignInButton> {
       final isAndroidNative = await _isAndroid();
       if (!kIsWeb && isAndroidNative) {
         // Android: tukar idToken Google (dari SDK native) ke sesi Supabase.
-        // Bila konfigurasi native belum lengkap (google-services.json tanpa
-        // oauth_client → default_web_client_id tidak ter-generate →
-        // SIGNIN_FAILED di sisi native), jatuh ke OAuth web yang tidak
-        // butuh kredensial native — tombol tetap berfungsi.
+        // Bila konfigurasi native belum lengkap (mis. SHA-1/package belum
+        // terdaftar → SIGNIN_FAILED), jatuh ke OAuth browser — jalur ini tidak
+        // butuh kredensial native dan kembali lewat deep link.
         try {
           final args = await _channel
               .invokeMapMethod<String, dynamic>('signInWithGoogle');
           final idToken = args?['idToken'] as String?;
           final accessToken = args?['accessToken'] as String?;
-          if (idToken == null) throw Exception('idToken kosong');
+          if (idToken == null) {
+            throw Exception('idToken kosong');
+          }
           await Supabase.instance.client.auth.signInWithIdToken(
             provider: OAuthProvider.google,
             idToken: idToken,
             accessToken: accessToken,
           );
         } on PlatformException catch (e) {
-          if (e.code == 'SIGNIN_CANCELED') rethrow; // pengguna batal = bukan error
+          if (e.code == 'SIGNIN_CANCELED') {
+            rethrow; // pengguna batal = bukan error
+          }
+          // Jejak sebab: tanpa ini, kegagalan jalur native (mis. SHA-1/package
+          // belum terdaftar di Google Console) hanya tampak sebagai "browser
+          // terbuka" dan sebabnya tidak bisa dibaca dari logcat.
+          //   adb logcat | grep -i "\[google\]"
+          // SIGNIN_FAILED + "ApiException 10"  = DEVELOPER_ERROR (SHA-1/package)
+          // SIGNIN_FAILED + "ApiException 12500" = Google Sign-In gagal umum
+          if (kDebugMode) debugPrint('[google] jalur native gagal: ${e.code} — ${e.message}');
           await Supabase.instance.client.auth.signInWithOAuth(
             OAuthProvider.google,
-            redirectTo: Uri.base.origin,
+            redirectTo: AppConfig.androidOAuthRedirect,
           );
+          // Sesi baru terbentuk setelah pengguna menyelesaikan login di
+          // browser dan app menerima deep link — jadi JANGAN navigasi di sini
+          // (dulu menuju '/' sebelum sesi ada sehingga tampak gagal login).
+          if (!mounted) return;
+          showSnack(context, 'Selesaikan login di browser, lalu kembali ke aplikasi.');
+          return;
         }
       } else {
-        // Web: OAuth popup/redirect — sesi ditangani otomatis oleh
-        // supabase_flutter lewat detectSessionInUrl.
+        // Web: redirect penuh — sesi ditangani supabase_flutter.
         await Supabase.instance.client.auth.signInWithOAuth(
           OAuthProvider.google,
           redirectTo: Uri.base.origin,
         );
       }
-      if (!mounted) return;
-      // mounted (State) sudah di-check di atas — context State aman dipakai.
-      // ignore: use_build_context_synchronously
-      Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
+      _goHome();
     } on PlatformException {
       // User menutup dialog pilih akun — bukan error.
-      if (mounted) setState(() => _loading = false);
-      return;
-    } catch (e) {
-      if (mounted) {
-        showSnack(context, 'Gagal masuk dengan Google. Coba lagi.', error: true);
-      }
+    } catch (_) {
+      // Jangan sentuh context bila widget sudah dilepas (guard = mounted).
+      if (mounted) showSnack(context, 'Gagal masuk dengan Google. Coba lagi.', error: true);
     } finally {
       if (mounted) setState(() => _loading = false);
     }

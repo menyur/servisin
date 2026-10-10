@@ -94,7 +94,14 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-          flutter-version: 3.47.5
+          # Sumber tunggal versi: .fvmrc di akar repo — berkas yang sama dipakai
+          # flutter-ci.yml, jadi kedua workflow tak bisa lagi beda versi.
+          flutter-version-file: .fvmrc
+
+      # Cek DRIFT versi: Flutter terpasang di runner harus sama dengan pin
+      # .fvmrc. Skrip yang sama dipakai dev lokal: npm run verify:flutter-version
+      - name: Verifikasi versi Flutter = .fvmrc
+        run: node scripts/check-flutter-version.mjs
 
       # lib/env_override.dart di-gitignore (digenerate lokal dari .env.local),
       # jadi runner tidak punya file itu — buat sebelum build.
@@ -132,6 +139,42 @@ jobs:
           keyAlias=fixify-release
           keyPassword=$ANDROID_KEYSTORE_PASSWORD
           EOF
+
+      # Pemeriksa pra-rilis jalur "Masuk dengan Google" di APK:
+      #   client Web (sumber default_web_client_id) · package vs applicationId ·
+      #   SHA-1 keystore yang MENANDATANGANI build ini vs yang terdaftar di
+      #   Google Console (dicatat di flutter_app/android/known-sha1.txt).
+      # Gagal di sini = gagal di perangkat (error 12500 / redirect_uri_mismatch),
+      # jadi jauh lebih murah ditangkap sekarang daripada setelah APK terbit.
+      # `--allow-debug-signing` menjaga jalur darurat yang sudah ada: bila secret
+      # keystore belum di-set (APK di-sign debug key), hasilnya "tidak
+      # konklusif" (exit 3) → hanya warning, build tetap lanjut seperti semula.
+      - if: ${{ !inputs.skip_gate }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Periksa jalur Google Sign-In APK (pra-rilis)
+        if: ${{ !inputs.skip_gate }}
+        env:
+          # Publik — sama dengan yang dipakai gate & ikut dibundel di APK.
+          NEXT_PUBLIC_SUPABASE_URL: https://sgxlnhzezknmdhefsvvu.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef
+        run: |
+          set -o pipefail
+          node scripts/verify-apk-signin.mjs --allow-debug-signing 2>&1 | tee apk-signin.log && exit 0
+          kode=${PIPESTATUS[0]}
+          [ "$kode" = "3" ] || exit "$kode"
+          echo "::warning::Pemeriksa Google Sign-In tidak konklusif (exit 3): biasanya karena secret ANDROID_KEYSTORE_BASE64 belum di-set sehingga APK di-sign debug key. Rincian di apk-signin.log / artifact."
+
+      - name: Simpan log pemeriksa Sign-In
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-signin-log
+          path: apk-signin.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Flutter pub get
         working-directory: flutter_app
@@ -186,6 +229,16 @@ jobs:
           }
           EOF
           cat public/apk/manifest.json
+
+      # Verifikasi ARTEFAK yang benar-benar diunduh pengguna: berkas di
+      # public/apk/ harus ditandatangani kunci yang SHA-1-nya tercatat, dan
+      # SHA-256-nya harus cocok dengan manifest.json yang baru dibuat.
+      # Dijalankan SETELAH manifest dibuat dan SEBELUM commit/push, jadi APK
+      # yang tidak bisa login Google tidak akan pernah terbit.
+      - name: Verifikasi tanda tangan APK yang akan diterbitkan
+        run: |
+          set -o pipefail
+          node scripts/verify-apk-signin.mjs --only-apk 2>&1 | tee apk-terbit.log
 
       - name: Commit & push APK baru (bila berubah)
         run: |

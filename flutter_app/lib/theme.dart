@@ -30,6 +30,19 @@ class AppColors {
 }
 
 class AppTheme {
+  /// Gaya tombol garis RINGKAS untuk konteks yang lebarnya TIDAK terbatas
+  /// (anak non-flex sebuah `Row`, atau di dalam `Align`).
+  ///
+  /// Tema global memakai `minimumSize: Size.fromHeight(48)` — lebarnya tak
+  /// hingga supaya tombol mengisi wadahnya. Di konteks tak terbatas, lebar tak
+  /// hingga itu membuat layout mati: "BoxConstraints forces an infinite width"
+  /// (seluruh kartu/baris jadi rusak). Tombol kecil seperti "Rute" memakai
+  /// gaya ini.
+  static ButtonStyle get compactOutlinedButton => OutlinedButton.styleFrom(
+        minimumSize: const Size(0, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+      );
+
   static ThemeData get light {
     final base = ThemeData(
       useMaterial3: true,
@@ -135,7 +148,12 @@ class _SlideUpTransitionBuilder extends PageTransitionsBuilder {
     Animation<double> secondaryAnimation,
     Widget child,
   ) {
-    final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+    // `animation.drive(CurveTween(...))` menghasilkan animation turunan TANPA
+    // mengalokasikan CurvedAnimation. CurvedAnimation harus di-dispose pemiliknya
+    // sedangkan buildTransitions tak punya siklus hidup untuk itu → tiap
+    // transisi halaman meninggalkan objek tak ter-dispose (tertangkap leak
+    // tracking test). Hasil visual sama.
+    final curved = animation.drive(CurveTween(curve: Curves.easeOutCubic));
     return SlideTransition(
       position: Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero).animate(curved),
       child: FadeTransition(

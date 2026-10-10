@@ -9,7 +9,10 @@ import '../theme.dart';
 import 'common.dart';
 
 class OrdersScreen extends StatefulWidget {
-  const OrdersScreen({super.key});
+  /// Seam uji: cara memuat daftar pesanan (default [Api.fetchMyBookings]).
+  final Future<List<Booking>> Function()? loadBookings;
+
+  const OrdersScreen({super.key, this.loadBookings});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -47,7 +50,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
       _bookings = null;
     });
     try {
-      final list = await Api.fetchMyBookings();
+      final list = await (widget.loadBookings ?? Api.fetchMyBookings)();
       if (mounted) setState(() => _bookings = list);
     } catch (_) {
       if (mounted) setState(() => _error = 'Gagal memuat pesanan.');
@@ -98,6 +101,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
                       border: Border.all(
                           color: Colors.white.withValues(alpha: active ? 1.0 : 0.45),
                           width: 1.4),
+                      // Chip aktif sedikit terangkat agar jelas terpilih.
+                      boxShadow: active
+                          ? [
+                              BoxShadow(
+                                  color: AppColors.navy.withValues(alpha: 0.18),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4)),
+                            ]
+                          : null,
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
                       Text(f.$2,
@@ -148,7 +160,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                             : ListView.separated(
                                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                                 itemCount: list.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                                separatorBuilder: (_, __) => const SizedBox(height: 12),
                                 itemBuilder: (_, i) {
                                   final b = list[i];
                                   return StaggerIn(
@@ -171,6 +183,15 @@ class _OrdersScreenState extends State<OrdersScreen> {
   }
 }
 
+/// Ikon per status pesanan — dipakai di lencana status pada kartu.
+IconData bookingStatusIcon(BookingStatus s) => switch (s) {
+      BookingStatus.pending => Icons.payments_outlined,
+      BookingStatus.paid => Icons.verified_outlined,
+      BookingStatus.inProgress => Icons.handyman_outlined,
+      BookingStatus.completed => Icons.task_alt_rounded,
+      BookingStatus.cancelled => Icons.cancel_outlined,
+    };
+
 class _BookingCard extends StatelessWidget {
   final Booking booking;
   final VoidCallback onTap;
@@ -179,6 +200,9 @@ class _BookingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final accent = statusAccent(booking.status);
+    final rejected = booking.paymentRejected;
+    final hasTech = booking.technicianName != null;
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -187,96 +211,290 @@ class _BookingCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           border: Border.all(color: AppColors.line),
           boxShadow: [
-            BoxShadow(color: AppColors.navy.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 4)),
+            BoxShadow(
+                color: AppColors.navy.withValues(alpha: 0.05),
+                blurRadius: 14,
+                offset: const Offset(0, 6)),
           ],
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(18),
-          // CATATAN: Row dalam sliver list ber-tinggi tak terbatas —
-          // crossAxisAlignment.stretch langsung di dalamnya memicu assert
-          // "infinite height". IntrinsicHeight mengukur tinggi konten dulu,
-          // sehingga strip aksen stretch ikut tinggi kartu dengan aman.
-          child: IntrinsicHeight(
-            child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            // Strip aksen status (tinggi penuh kartu)
-            Container(width: 5, color: accent),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    Hero(
-                      tag: 'order-code-${booking.id}',
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: AppColors.brandTint,
-                          borderRadius: BorderRadius.circular(8),
+          // CATATAN: strip aksen digambar lewat Stack + Positioned, BUKAN
+          // IntrinsicHeight + Row-stretch. Alasannya: LayoutBuilder di bawah
+          // tidak didukung di dalam IntrinsicHeight (IntrinsicHeight meminta
+          // dimensi intrinsik yang tak bisa dihitung LayoutBuilder → error).
+          child: Stack(children: [
+            // Strip aksen status, setinggi kartu.
+            Positioned(left: 0, top: 0, bottom: 0, child: Container(width: 5, color: accent)),
+            Padding(
+              // 19 = lebar strip (5) + jarak konten (14).
+              padding: const EdgeInsets.fromLTRB(19, 13, 14, 13),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    // Baris atas: kode pesanan + lencana status berikon.
+                    Row(children: [
+                      Hero(
+                        tag: 'order-code-${booking.id}',
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: AppColors.brandTint,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text('#${booking.code}',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.brandDeep,
+                                  fontSize: 11.5,
+                                  letterSpacing: .5)),
                         ),
-                        child: Text('#${booking.code}',
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: _StatusPill(booking.status),
+                        ),
+                      ),
+                    ]),
+                    const SizedBox(height: 12),
+                    // Lencana ikon status + nama layanan + jadwal.
+                    Row(children: [
+                      Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Icon(bookingStatusIcon(booking.status), color: accent, size: 20),
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(
+                            booking.optionLabel == null
+                                ? booking.serviceName
+                                : '${booking.serviceName} — ${booking.optionLabel}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 fontWeight: FontWeight.w800,
-                                color: AppColors.brandDeep,
-                                fontSize: 11.5,
-                                letterSpacing: .5)),
+                                fontSize: 15,
+                                color: AppColors.navy),
+                          ),
+                          const SizedBox(height: 5),
+                          Row(children: [
+                            const Icon(Icons.calendar_today_rounded,
+                                size: 13, color: AppColors.inkSoft),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                  '${formatDateShort(booking.bookingDate)} • ${booking.bookingTime}',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 12.5, color: AppColors.inkSoft)),
+                            ),
+                          ]),
+                        ]),
                       ),
-                    ),
-                    const Spacer(),
-                    StatusBadge(booking.status),
-                  ]),
-                  const SizedBox(height: 10),
-                  Text(
-                    booking.optionLabel == null
-                        ? booking.serviceName
-                        : '${booking.serviceName} — ${booking.optionLabel}',
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppColors.navy),
-                  ),
-                  const SizedBox(height: 5),
-                  Row(children: [
-                    const Icon(Icons.calendar_today_rounded, size: 13, color: AppColors.inkSoft),
-                    const SizedBox(width: 5),
-                    Text('${formatDateShort(booking.bookingDate)} • ${booking.bookingTime}',
-                        style: const TextStyle(fontSize: 12.5, color: AppColors.inkSoft)),
-                  ]),
-                  const SizedBox(height: 10),
-                  Row(children: [
-                    Text(formatRupiah(booking.totalPrice),
-                        style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.navy, fontSize: 15)),
-                    const Spacer(),
-                    if (booking.paymentRejected)
-                      const Row(children: [
-                        Icon(Icons.warning_amber_rounded, color: AppColors.coral, size: 16),
-                        SizedBox(width: 4),
-                        Text('Bukti ditolak',
-                            style: TextStyle(
-                                fontSize: 11.5, color: AppColors.coral, fontWeight: FontWeight.w700)),
-                      ])
-                    else if (booking.technicianName != null)
-                      Row(children: [
-                        // Hero: foto teknisi "terbang" dari kartu ke detail.
-                        // Tag unik per booking — hanya dipasang di pasangan
-                        // kartu ↔ detail, bukan deep link (aman dari assert layout).
-                        Hero(
-                          tag: 'tech-av-${booking.id}',
-                          child: TechAvatarChip(
-                              url: booking.technicianAvatar,
-                              name: booking.technicianName!,
-                              size: 22),
+                    ]),
+                    // Bilah kemajuan status (dilewati untuk pesanan dibatalkan).
+                    const SizedBox(height: 13),
+                    _MiniProgress(booking.status),
+                    const SizedBox(height: 13),
+                    // Baris bawah: harga (+ penghematan) di kiri, chip teknisi /
+                    // peringatan di kanan. Memakai Wrap — bukan Row — supaya
+                    // TIDAK PERNAH meluber: bila ruang tak cukup (layar sempit
+                    // atau font lebar), chip kanan turun ke baris baru alih-alih
+                    // terpotong keluar kartu.
+                    Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        // Grup kiri: harga + chip "Hemat" (ikut membungkus bila
+                        // keduanya tak muat sebaris).
+                        Wrap(
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          spacing: 8,
+                          runSpacing: 6,
+                          children: [
+                            Text(formatRupiah(booking.totalPrice),
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    color: AppColors.navy,
+                                    fontSize: 15)),
+                            if (booking.discountAmount > 0)
+                              _HematChip(amount: booking.discountAmount),
+                          ],
                         ),
-                        const SizedBox(width: 6),
-                        Text(booking.technicianName!,
-                            style: const TextStyle(
-                                fontSize: 12, color: AppColors.mint, fontWeight: FontWeight.w700)),
-                      ]),
-                  ]),
-                ]),
-              ),
-            ),
-            const SizedBox(width: 12),
+                        // Chip kanan: prioritas peringatan bukti ditolak.
+                        if (rejected)
+                          const _RejectedPill()
+                        else if (hasTech)
+                          _TechChip(booking: booking),
+                      ],
+                    ),                  ]),
+                ),
           ]),
-          ),
         ),
       ),
+    );
+  }
+}
+
+/// Lencana status berikon (menggantikan StatusBadge teks-polos di kartu):
+/// label panjang tetap bisa dipotong elipsis di layar sempit.
+class _StatusPill extends StatelessWidget {
+  final BookingStatus status;
+  const _StatusPill(this.status);
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = switch (status) {
+      BookingStatus.completed => AppColors.mint,
+      BookingStatus.cancelled => AppColors.coral,
+      BookingStatus.pending => AppColors.amber,
+      _ => AppColors.brandDeep,
+    };
+    final bg = switch (status) {
+      BookingStatus.completed => AppColors.mintTint,
+      BookingStatus.cancelled => AppColors.coralTint,
+      BookingStatus.pending => AppColors.amberTint,
+      _ => AppColors.brandTint,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(bookingStatusIcon(status), size: 12, color: fg),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(status.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: fg, fontSize: 11, fontWeight: FontWeight.w700)),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Bilah kemajuan 4 langkah (Dibuat → Dibayar → Dikerjakan → Selesai).
+/// Segmen terisi memakai warna aksen status; pesanan dibatalkan tidak
+/// menampilkan bilah (lencana status sudah menyampaikannya).
+class _MiniProgress extends StatelessWidget {
+  final BookingStatus status;
+  const _MiniProgress(this.status);
+
+  static const _pipeline = [
+    BookingStatus.pending,
+    BookingStatus.paid,
+    BookingStatus.inProgress,
+    BookingStatus.completed,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (status == BookingStatus.cancelled) return const SizedBox.shrink();
+    final idx = _pipeline.indexOf(status);
+    final accent = statusAccent(status);
+    return Row(
+      children: [
+        for (var i = 0; i < _pipeline.length; i++) ...[
+          if (i > 0) const SizedBox(width: 3),
+          Expanded(
+            child: Container(
+              height: 6,
+              decoration: BoxDecoration(
+                color: i <= idx ? accent : AppColors.line,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Chip "Hemat Rp …" bila pesanan memakai voucher diskon.
+class _HematChip extends StatelessWidget {
+  final int amount;
+  const _HematChip({required this.amount});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: AppColors.mintTint,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text('Hemat ${formatRupiah(amount)}',
+          style: const TextStyle(
+              fontSize: 10.5, fontWeight: FontWeight.w800, color: AppColors.mint)),
+    );
+  }
+}
+
+/// Peringatan bukti bayar ditolak — dibuat lebih menonjol agar mudah terlihat.
+class _RejectedPill extends StatelessWidget {
+  const _RejectedPill();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.coralTint,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(Icons.warning_amber_rounded, color: AppColors.coral, size: 14),
+        SizedBox(width: 4),
+        Text('Bukti ditolak',
+            style: TextStyle(
+                fontSize: 11, color: AppColors.coral, fontWeight: FontWeight.w800)),
+      ]),
+    );
+  }
+}
+
+/// Chip teknisi: avatar (Hero ke detail) + nama, dalam pil mint lembut.
+class _TechChip extends StatelessWidget {
+  final Booking booking;
+  const _TechChip({required this.booking});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(3, 3, 10, 3),
+      decoration: BoxDecoration(
+        color: AppColors.mintTint,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        // Hero: foto teknisi "terbang" dari kartu ke detail. Tag unik per
+        // booking — hanya dipasang di pasangan kartu ↔ detail, bukan deep link
+        // (aman dari assert layout).
+        Hero(
+          tag: 'tech-av-${booking.id}',
+          child: TechAvatarChip(
+              url: booking.technicianAvatar,
+              name: booking.technicianName ?? '',
+              size: 20),
+        ),
+        const SizedBox(width: 6),
+        Flexible(
+          child: Text(booking.technicianName ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 11.5, color: AppColors.mint, fontWeight: FontWeight.w800)),
+        ),
+      ]),
     );
   }
 }

@@ -46,4 +46,44 @@ class AppConfig {
     if (fromDefine.isNotEmpty) return fromDefine;
     return 'https://servisin-six.vercel.app';
   }
+
+  /// URL balik OAuth Google untuk Android — deep link skema kustom
+  /// `fixify://login-callback` (bukan URL http dari browser).
+  ///
+  /// Dipakai sebagai `redirectTo` saat tombol Google jatuh ke jalur OAuth
+  /// browser. Sesi baru terbentuk setelah browser kembali ke app lewat deep
+  /// link ini, jadi nilainya HARUS identik dengan:
+  ///   1. Intent-filter `fixify://login-callback` di AndroidManifest.xml.
+  ///   2. Daftar Redirect URLs di Supabase → Authentication → URL Configuration.
+  /// Bila salah satunya beda, Supabase menolak redirect / app tidak menerima
+  /// callback — lihat docs/google-oauth-setup.md.
+  static const String androidOAuthRedirect = 'fixify://login-callback';
+
+  /// URL balik tautan reset kata sandi untuk Android — deep link skema
+  /// kustom `fixify://reset-password`.
+  ///
+  /// Dikirim sebagai `redirectTo` pada resetPasswordForEmail. Setelah
+  /// pengguna mengklik tautan di email, Supabase mengembalikan (kode PKCE)
+  /// ke deep link ini, app kembali ke depan dengan sesi pemulihan, lalu
+  /// form "Kata Sandi Baru" terbuka otomatis.
+  ///
+  /// Nilainya HARUS identik dengan:
+  ///   1. Intent-filter `fixify://reset-password` di AndroidManifest.xml.
+  ///   2. Daftar Redirect URLs di Supabase → Authentication → URL Configuration.
+  /// Bila tidak, Supabase menolak `redirectTo` dan tautan email tidak pernah
+  /// kembali ke app — lihat docs/google-oauth-setup.md (Langkah 4b).
+  static const String resetPasswordRedirect = 'fixify://reset-password';
+
+  /// URL balik email konfirmasi pendaftaran untuk Android — deep link skema
+  /// kustom `fixify://confirm`.
+  ///
+  /// Dikirim sebagai `emailRedirectTo` pada signUp. Setelah pengguna
+  /// mengklik tombol verifikasi di email, Supabase mengembalikan kode PKCE
+  /// ke deep link ini, app kembali ke depan, sesi langsung aktif, dan
+  /// pengguna mendarat di beranda (tidak perlu mengetik sandi lagi).
+  ///
+  /// Nilainya HARUS identik dengan:
+  ///   1. Intent-filter `fixify://confirm` di AndroidManifest.xml.
+  ///   2. Daftar Redirect URLs di Supabase → Authentication → URL Configuration.
+  static const String signupConfirmRedirect = 'fixify://confirm';
 }

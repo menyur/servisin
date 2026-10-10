@@ -44,8 +44,12 @@ export default function LocationPickerMap({ value, onChange }) {
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(null);
   // Simpan callback terbaru agar handler map tidak basi (stale closure).
+  // Ditulis di effect (bukan saat render) — effect ini dideklarasikan sebelum
+  // effect pemasangan peta di bawah, jadi nilainya sudah siap saat dipakai.
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  });
 
   useEffect(() => {
     let cancelled = false;

@@ -1,5 +1,10 @@
 -- =========================================================
 -- MIGRASI: POTONGAN SALDO = KOMISI + BIAYA APLIKASI
+--
+-- ⚠️ Aturan di file ini BENAR (komisi + biaya app) dan DIKUNCI, tetapi definisi
+-- RPC set_job_status-nya sudah DIGANTIKAN oleh
+-- supabase/enforce-nonnegative-balance.sql (menambah clamp saldo ≥ 0 + penanda
+-- guard F8). Jalankan file itu TERAKHIR. Rincian: docs/balance-rule.md.
 -- Jalankan di Supabase SQL Editor. Idempoten (aman diulang).
 --
 -- Aturan platform (permintaan pemilik):

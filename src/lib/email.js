@@ -350,3 +350,35 @@ export async function sendAdminJobReleaseEmail(adminEmails, release) {
 
   return sendMail({ to: adminEmails, subject: `Tugas ${release.code} dilepas teknisi — Fixify`, html });
 }
+
+/**
+ * Ke teknisi: pengingat setor saldo karena saldo 0/minus (komisi melebihi
+ * setoran). Dipicu admin dari daftar "Saldo Aktif".
+ */
+export async function sendTechnicianBalanceReminderEmail(technicianEmail, info = {}) {
+  const saldo = Number(info.balance ?? 0);
+  const kurang = Math.max(0, -saldo);
+  const kekurangan =
+    kurang > 0
+      ? ` — kurang <strong>Rp ${kurang.toLocaleString("id-ID")}</strong> dari komisi/biaya app pesanan selesai.`
+      : ".";
+  const html = wrapper(
+    "Saldo kamu perlu ditindak",
+    `
+      <p>Halo ${escHtml(info.name || "Teknisi")},</p>
+      <p>
+        Saldo aktifmu saat ini <strong>Rp ${Math.max(0, saldo).toLocaleString("id-ID")}</strong>${kekurangan}
+      </p>
+      <p>
+        Agar kamu tetap bisa menyelesaikan pekerjaan dan menarik saldo, ajukan <strong>Setor Saldo</strong>
+        lewat halaman Tugas Saya (unggah bukti transfer). Setelah admin verifikasi, saldo bertambah otomatis.
+      </p>
+    `
+  );
+
+  return sendMail({
+    to: technicianEmail,
+    subject: saldo < 0 ? "Saldo kamu minus — segera setor saldo" : "Saldo kamu kosong — setor agar bisa lanjut",
+    html,
+  });
+}

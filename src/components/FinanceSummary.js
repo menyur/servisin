@@ -1,6 +1,6 @@
 "use client";
 
-import { formatRupiah } from "@/lib/pricing";
+import { formatRupiah, nonNegative } from "@/lib/pricing";
 import { Wallet, TrendingUp, TrendingDown, Landmark, Clock, Users } from "lucide-react";
 
 /**
@@ -54,7 +54,10 @@ export default function FinanceSummary({ summary }) {
         </h2>
         <p className="text-xs text-ink-soft flex items-center gap-1.5">
           <Users size={13} /> {summary.techCount} teknisi · Saldo aktif gabungan:{" "}
-          <strong className="text-navy">{formatRupiah(summary.totalBalance)}</strong>
+          <strong className="text-navy">{formatRupiah(nonNegative(summary.totalBalance))}</strong>
+          {Number(summary.totalBalance) < 0 && (
+            <span className="text-amber">· {formatRupiah(Math.abs(Number(summary.totalBalance)))} utang teknisi</span>
+          )}
         </p>
       </div>
 

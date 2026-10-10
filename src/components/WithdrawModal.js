@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { requestWithdrawal } from "@/app/actions/technician";
-import { formatRupiah } from "@/lib/pricing";
+import { formatRupiah, nonNegative, balanceShortfall } from "@/lib/pricing";
 import { X, Banknote, Loader2, CheckCircle2 } from "lucide-react";
 
 /**
@@ -19,6 +19,10 @@ export default function WithdrawModal({ balance, onClose, onSubmitted }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+
+  // Kebijakan saldo: minimum Rp 0; nilai minus dijelaskan sebagai kekurangan.
+  const saldoTampil = nonNegative(balance);
+  const saldoKurang = balanceShortfall(balance);
 
   useEffect(() => {
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -71,9 +75,14 @@ export default function WithdrawModal({ balance, onClose, onSubmitted }) {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="rounded-xl bg-brand-tint/60 px-4 py-3 text-sm">
               <p className="text-navy">
-                Saldo aktif: <strong>{formatRupiah(balance)}</strong> — jumlah yang ditarik akan ditahan sampai admin
+                Saldo aktif: <strong>{formatRupiah(saldoTampil)}</strong> — jumlah yang ditarik akan ditahan sampai admin
                 memproses. Ditolak? Saldo kembali penuh.
               </p>
+              {saldoKurang > 0 && (
+                <p className="text-xs text-amber mt-1">
+                  Saldo terpakai habis — kekurangan {formatRupiah(saldoKurang)} dari komisi. Setor dulu sebelum menarik.
+                </p>
+              )}
             </div>
 
             <div>
@@ -84,7 +93,7 @@ export default function WithdrawModal({ balance, onClose, onSubmitted }) {
                   type="number"
                   min="10000"
                   step="1000"
-                  max={Math.floor(balance)}
+                  max={Math.floor(saldoTampil)}
                   placeholder="mis. 50000"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
@@ -93,7 +102,7 @@ export default function WithdrawModal({ balance, onClose, onSubmitted }) {
                 <button
                   type="button"
                   className="btn-outline !py-2 text-xs whitespace-nowrap"
-                  onClick={() => setAmount(String(Math.floor(balance)))}
+                  onClick={() => setAmount(String(Math.floor(saldoTampil)))}
                 >
                   Semua
                 </button>

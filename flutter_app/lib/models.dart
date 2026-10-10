@@ -119,7 +119,12 @@ class Profile {
   /// selesai, ditahan saat pengajuan penarikan. Untuk pelanggan selalu 0.
   final double balance;
 
-  Profile({required this.id, required this.name, required this.email, this.phone, this.address, this.avatarUrl, required this.role, this.serviceArea, this.skill, this.balance = 0});
+  /// Waktu admin terakhir memilih "Ingatkan setor" (migrate-balance-reminder.sql).
+  /// Null = belum pernah diingatkan / kolom belum ada. Dipakai menampilkan
+  /// banner pengingat setor di aplikasi selama saldo masih 0/minus.
+  final DateTime? balanceReminderAt;
+
+  Profile({required this.id, required this.name, required this.email, this.phone, this.address, this.avatarUrl, required this.role, this.serviceArea, this.skill, this.balance = 0, this.balanceReminderAt});
 
   factory Profile.fromMap(Map<String, dynamic> m) => Profile(
         id: m['id'] as String,
@@ -132,6 +137,7 @@ class Profile {
         serviceArea: m['service_area'] as String?,
         skill: m['skill'] as String?,
         balance: _parseNum(m['balance']),
+        balanceReminderAt: _parseDate(m['balance_reminder_at']),
       );
 
   /// Kolom numeric PostgREST bisa datang sebagai angka ATAU string
@@ -140,6 +146,9 @@ class Profile {
     if (v is num) return v.toDouble();
     return num.tryParse('${v ?? ""}')?.toDouble() ?? 0;
   }
+
+  /// Kolom timestamptz PostgREST → DateTime; kosong/tak valid → null.
+  static DateTime? _parseDate(dynamic v) => DateTime.tryParse('${v ?? ""}');
 }
 
 /// Satu pesan chat pelanggan ↔ teknisi untuk sebuah pesanan.
@@ -428,6 +437,9 @@ class TechnicianBalanceSummary {
   /// (koreksi manual) atau bug data historis — ditampilkan sebagai catatan.
   final int expectedBalance;
 
+  /// Waktu admin terakhir memilih "Ingatkan setor" (null = belum pernah).
+  final DateTime? balanceReminderAt;
+
   const TechnicianBalanceSummary({
     required this.balance,
     this.earnedTotal = 0,
@@ -437,6 +449,7 @@ class TechnicianBalanceSummary {
     this.withdrawalTotal = 0,
     this.refundTotal = 0,
     this.expectedBalance = 0,
+    this.balanceReminderAt,
   });
 
   /// Total potongan platform dari saldo = komisi + biaya aplikasi.
@@ -444,6 +457,21 @@ class TechnicianBalanceSummary {
 
   /// Selisih saldo aktual vs ledger (≠ 0 = ada anomali data).
   int get mismatch => balance.round() - expectedBalance;
+
+  /// Saldo untuk DITAMPILKAN — minimal Rp 0. Saldo mentah di database boleh
+  /// negatif (komisi/denda melebihi setoran); UI menampilkan Rp 0 plus
+  /// penjelasan [shortfall] supaya kartu saldo tidak tampak rusak.
+  double get displayBalance => balance < 0 ? 0 : balance;
+
+  /// Saldo mentah negatif → perlu penjelasan "komisi melebihi setoran".
+  bool get isNegative => balance < 0;
+
+  /// Besar kekurangan (positif) saat saldo negatif; 0 bila tidak negatif.
+  double get shortfall => balance < 0 ? -balance : 0;
+
+  /// Banner pengingat setor aktif: admin sudah mengingatkan DAN saldo masih
+  /// 0/minus (hilang otomatis begitu saldo diisi).
+  bool get needsDepositReminder => balanceReminderAt != null && balance <= 0;
 }
 
 /// Satu lowongan pekerjaan untuk teknisi: pesanan sudah dibayar,
@@ -598,6 +626,37 @@ String skillLabel(String? code) => switch (code) {
       'kebersihan' => 'Kebersihan & laundry',
       _ => code ?? '',
     };
+
+/// Apakah keahlian teknisi ([skill]) cocok dengan kategori sebuah layanan?
+///
+/// Toleran terhadap DUA bentuk nilai yang ada di produksi:
+///   * ID kategori — 'ac' (bentuk kanonik yang ditulis alur pendaftaran),
+///   * LABEL lama  — 'Service AC' (hasil kurasi/manual atau data warisan).
+/// Tanpa toleransi ini, teknisi ber-skill label tidak pernah melihat maupun
+/// menerima pekerjaan yang sebenarnya sesuai keahliannya.
+///
+/// Aturan sengaja identik dengan `technician_matches_service()` di
+/// [supabase/fix-technician-skill-matching.sql] dan filter push web
+/// (`src/lib/skill-match.js`) supaya daftar, klaim, dan notifikasi tidak
+/// pernah berbeda pendapat.
+///
+/// Fail-open (kompatibilitas RPC lama sebelum migrasi skill-filter):
+///   * [skill] kosong/null → tanpa filter keahlian (cocok semua),
+///   * [categoryId] null   → RPC lama tanpa kolom kategori → tampilkan
+///     apa adanya (jangan menutup daftar karena metadata tak terbaca),
+///   * [categoryName] null  → cocokkan lewat id saja.
+bool skillMatchesCategory(String? skill, String? categoryId, String? categoryName) {
+  final s = _normCategoryToken(skill);
+  if (s.isEmpty) return true; // teknisi tanpa filter keahlian
+  if (categoryId == null) return true; // RPC lama tanpa kolom kategori
+  return s == _normCategoryToken(categoryId) ||
+      s == _normCategoryToken(categoryName);
+}
+
+/// Normalisasi token keahlian/kategori untuk dibandingkan:
+/// trim, huruf kecil, dan spasi ganda disatukan jadi satu spasi.
+String _normCategoryToken(String? v) =>
+    (v ?? '').trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
 
 /// Label ramah kode metode bayar ('transfer' → 'Transfer Bank'; kode lama
 /// qris/virtual_account/e_wallet ditangani fallback di bawah). Null bila tak dikenal.

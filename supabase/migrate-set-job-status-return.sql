@@ -9,6 +9,11 @@
 -- commission & balance = null (client menampilkan pesan lama).
 --
 -- Jalankan di Supabase SQL Editor. Idempoten (aman diulang).
+--
+-- ⚠️ USANG: definisi set_job_status di file ini memotong KOMISI SAJA.
+-- Aturan yang berlaku (DIKUNCI) = KOMISI + BIAYA APP + saldo tidak boleh
+-- negatif → jalankan supabase/enforce-nonnegative-balance.sql TERAKHIR.
+-- Rincian: docs/balance-rule.md.
 -- =========================================================
 
 create or replace function set_job_status(p_booking uuid, p_status text)

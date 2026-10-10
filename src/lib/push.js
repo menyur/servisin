@@ -9,6 +9,7 @@
  */
 import webpush from "web-push";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
+import { technicianReceivesJob } from "./skill-match.js";
 
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -41,6 +42,7 @@ export const PUSH_EVENTS = {
   new_job_available: "Pekerjaan baru tersedia (teknisi)",
   job_released: "Tugas dilepas teknisi (admin)",
   report_replied: "Balasan laporan dari admin",
+  report_status: "Perubahan status laporan",
   chat_message: "Pesan chat baru",
 };
 
@@ -166,30 +168,31 @@ export async function sendNewJobPushToTechnicians(
     // bila serviceId/tabel tidak tersedia → filter keahlian dilewati
     // (fail-open, jangan sampai pekerjaan tidak dikirim ke siapa pun).
     let serviceCategory = null;
+    let serviceCategoryName = null;
     if (serviceId) {
       try {
         const { data: svc } = await admin
           .from("services")
-          .select("category_id")
+          .select("category_id, categories(name)")
           .eq("id", serviceId)
           .maybeSingle();
         serviceCategory = svc?.category_id || null;
+        serviceCategoryName = svc?.categories?.name || null;
       } catch (_) {
         serviceCategory = null;
+        serviceCategoryName = null;
       }
     }
 
-    const address = (booking.address || "").toLowerCase();
-    const targets = techs.filter((t) => {
-      // Aturan area: kosong = semua; terisi = cocok di alamat pesanan.
-      const area = (t.service_area || "").trim().toLowerCase();
-      if (area && !address.includes(area)) return false;
-      // Aturan keahlian: kosong = semua kategori; terisi = harus cocok
-      // dengan kategori layanan pesanan (id skill = categories.id).
-      const skill = (t.skill || "").trim();
-      if (skill && serviceCategory && skill !== serviceCategory) return false;
-      return true;
-    });
+    // Area + keahlian lewat satu helper bersama (src/lib/skill-match.js) supaya
+    // web-push, FCM, klien Flutter, dan probe E2E tak pernah berbeda aturan.
+    const targets = techs.filter((t) =>
+      technicianReceivesJob(t, {
+        categoryId: serviceCategory,
+        categoryName: serviceCategoryName,
+        address: booking.address,
+      })
+    );
 
     const label = serviceName || "Layanan";
     const loc = (booking.address || "").trim();

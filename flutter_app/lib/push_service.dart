@@ -7,7 +7,8 @@ import 'package:flutter/foundation.dart' show kDebugMode, kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'api.dart';
-import 'ui/common.dart' show kOrdersTabIndex, mainTabIndex, navigatorKey;
+import 'ui/common.dart'
+    show kOrdersTabIndex, mainTabIndex, navigatorKey, openReportsRequest;
 
 /// Push notification Android via Firebase Cloud Messaging.
 ///
@@ -110,16 +111,19 @@ class PushService {
     _initialized = false;
   }
 
-  /// Peta data.route dari server → tab shell:
-  ///   '/orders' → tab Pesanan (default pelanggan)
-  ///   '/jobs'   → tab Pekerjaan teknisi (push tugas baru)
+  /// Peta notifikasi → tab shell (lihat [notificationTabTarget]):
+  ///   event laporan ('report_status'/'report_replied') → tab Laporan
+  ///   '/orders'     → tab Pesanan (default pelanggan)
+  ///   '/jobs'       → tab Pekerjaan teknisi (push tugas baru)
+  ///   '/technician' → tab Pekerjaan teknisi (mis. pengingat setor saldo;
+  ///                   strip saldo + banner ada di sini)
   static void _openRouteFrom(RemoteMessage msg) {
-    final route = (msg.data['route'] ?? '') as String;
-    switch (route) {
-      case '/jobs':
+    switch (notificationTabTarget(msg.data)) {
+      case 'reports':
+        // Indeks tab Laporan berbeda per peran — serahkan ke MainShell.
+        openReportsRequest.value++;
+      case 'jobs':
         mainTabIndex.value = 2; // tab Pekerjaan (teknisi)
-      case '/orders':
-        mainTabIndex.value = kOrdersTabIndex;
       default:
         mainTabIndex.value = kOrdersTabIndex;
     }
@@ -132,6 +136,30 @@ class PushService {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text('$title: $body'), duration: const Duration(seconds: 4)));
+  }
+}
+
+/// Tab yang perlu dibuka untuk sebuah notifikasi, dibaca dari `data.event`
+/// (diprioritaskan) lalu `data.route`. Dipisah dari `_openRouteFrom` agar bisa
+/// diuji tanpa Firebase (plugin FCM tak hidup di lingkungan test).
+///
+/// Mengembalikan:
+///   'reports' — buka tab Laporan (notifikasi laporan: status / balasan admin)
+///   'jobs'    — buka tab Pekerjaan (teknisi)
+///   'orders'  — buka tab Pesanan (default)
+String notificationTabTarget(Map<String, dynamic> data) {
+  final event = (data['event'] ?? '').toString();
+  if (event == 'report_status' || event == 'report_replied') return 'reports';
+
+  final route = (data['route'] ?? '').toString();
+  switch (route) {
+    case '/jobs':
+    case '/technician':
+      return 'jobs';
+    case '/reports':
+      return 'reports';
+    default:
+      return 'orders';
   }
 }
 

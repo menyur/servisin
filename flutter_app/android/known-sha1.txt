@@ -1,0 +1,22 @@
+# SHA-1 sertifikat keystore RILIS (flutter_app/android/fixify-release.keystore).
+#
+# Dibaca scripts/verify-apk-signin.mjs sebagai "nilai harapan". Bila keystore
+# yang benar-benar menandatangani APK berbeda dari baris di bawah — keystore
+# terganti, atau build jatuh ke kunci debug karena secret ANDROID_KEYSTORE_BASE64
+# belum di-set — pemeriksaan GAGAL sebelum rilis. Ini penting karena Google
+# menolak login native untuk pasangan (package, SHA-1) yang tidak terdaftar,
+# dan gejalanya baru muncul di perangkat (error 12500), bukan saat build.
+#
+# Sidik jari ini BUKAN rahasia: ia tercetak di setiap APK dan memang didaftarkan
+# di Google Cloud Console. Wajib SAMA dengan:
+#   Google Cloud Console → APIs & Services → Credentials
+#   → OAuth client ID tipe "Android" untuk package com.fixify.app.
+#
+# Rotasi keystore adalah perubahan yang disengaja: daftarkan SHA-1 baru di
+# Console, perbarui secret ANDROID_KEYSTORE_BASE64, lalu perbarui baris ini.
+#
+# Format: satu baris, 20 byte heksadesimal huruf besar, dipisah titik dua.
+# (SHA-1 keystore DEBUG lokal tidak dicatat di sini — itu untuk pengembangan,
+#  bukan untuk APK rilis.)
+
+AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68

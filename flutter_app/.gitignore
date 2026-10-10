@@ -24,3 +24,6 @@ lib/env_override.dart
 
 # konfigurasi Firebase/Google (diisi lokal saat setup Google Sign-In)
 android/app/google-services.json
+
+# Diff golden yang dihasilkan otomatis saat tes visual gagal (flutter test).
+failures/

@@ -9,6 +9,11 @@
 --     komisi platform dipotong dari saldo teknisi — idempoten,
 --     mencerminkan src/lib/balance.js di web (APP_FEE 5000).
 -- Jalankan di Supabase SQL Editor. Idempoten (aman diulang).
+--
+-- ⚠️ USANG: definisi set_job_status di file ini memotong KOMISI SAJA.
+-- Aturan yang berlaku (DIKUNCI) = KOMISI + BIAYA APP + saldo tidak boleh
+-- negatif → jalankan supabase/enforce-nonnegative-balance.sql TERAKHIR.
+-- Rincian: docs/balance-rule.md.
 -- =========================================================
 
 -- 0) Prasyarat: kolom saldo & tabel transaksi (dari migrasi saldo).

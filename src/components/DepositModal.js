@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { submitBalanceDeposit } from "@/app/actions/technician";
-import { formatRupiah } from "@/lib/pricing";
+import { formatRupiah, nonNegative, balanceShortfall } from "@/lib/pricing";
 import { createClient } from "@/lib/supabase/client";
 import { optimizeImage } from "@/components/ServiceImageUpload";
 import { X, Upload, Loader2, CheckCircle2, Wallet } from "lucide-react";
@@ -117,8 +117,14 @@ export default function DepositModal({ balance, onClose, onSubmitted }) {
             <div className="rounded-xl bg-brand-tint/60 px-4 py-3 text-sm">
               <p className="text-navy">
                 Transfer ke rekening platform, lalu laporkan di sini. Saldo aktifmu sekarang:{" "}
-                <strong className="text-navy">{formatRupiah(balance)}</strong>
+                <strong className="text-navy">{formatRupiah(nonNegative(balance))}</strong>
               </p>
+              {balanceShortfall(balance) > 0 && (
+                <p className="text-xs text-amber mt-1">
+                  Saldo terpakai habis — kekurangan {formatRupiah(balanceShortfall(balance))} dari komisi. Setoran ini
+                  akan menutupnya.
+                </p>
+              )}
             </div>
 
             <div>

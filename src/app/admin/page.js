@@ -48,7 +48,7 @@ export default async function AdminPage() {
       <div className="max-w-md mx-auto px-5 py-20 text-center">
         <p className="text-coral font-medium">{bookingsRes.error}</p>
         <p className="text-ink-soft text-sm mt-2">
-          Untuk mengaktifkan akses admin, ubah kolom <code>role</code> pada tabel <code>profiles</code> akun kamu menjadi <code>'admin'</code> lewat Supabase Table Editor.
+          Untuk mengaktifkan akses admin, ubah kolom <code>role</code> pada tabel <code>profiles</code> akun kamu menjadi <code>&apos;admin&apos;</code> lewat Supabase Table Editor.
         </p>
       </div>
     );

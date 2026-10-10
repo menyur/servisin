@@ -1,7 +1,10 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
+import '../config.dart';
+import '../signup_handoff.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
@@ -24,6 +27,16 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _loading = false;
   bool _obscure = true;
 
+  @override
+  void dispose() {
+    _name.dispose();
+    _email.dispose();
+    _phone.dispose();
+    _address.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
   /// 0-4: panjang>=6, huruf kecil, huruf besar, angka.
   int get _strength {
     final v = _password.text;
@@ -45,11 +58,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
         name: _name.text.trim(),
         phone: _phone.text.trim(),
         address: _address.text.trim(),
+        // Android: tombol verifikasi di email balik ke app lewat deep link
+        // fixify://confirm — sesi langsung aktif, pengguna mendarat di beranda.
+        emailRedirectTo: kIsWeb ? null : AppConfig.signupConfirmRedirect,
       );
       if (!mounted) return;
       if (res.session == null) {
-        // Proyek web menonaktifkan "Confirm email", tapi kalau aktif:
-        showSnack(context, 'Akun dibuat! Cek email untuk verifikasi lalu masuk.');
+        // "Confirm email" aktif: tunggu verifikasi. Di Android tautan email
+        // membuka app kembali (bukan browser) — catat email yang menunggu
+        // supaya app bisa menampilkan layar Selamat Datang setelah terverifikasi.
+        if (!kIsWeb) await SignupHandoff.remember(_email.text.trim());
+        if (!mounted) return;
+        showSnack(context,
+            'Akun dibuat! Buka tautan verifikasi di email — kamu akan kembali ke aplikasi.');
         Navigator.pushReplacementNamed(context, '/login');
       } else {
         Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
