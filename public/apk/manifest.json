@@ -1,10 +1,10 @@
 {
   "version": "1.2.3",
   "build": "8",
-  "builtAt": "2026-10-11T06:21:39Z",
+  "builtAt": "2026-10-11T06:35:53Z",
   "checksums": {
-    "fixify-arm64.apk": "6d40e0bbc221dfce6713903942bc0d94caee347719d5ffca53e3e8c0387dd82f",
-    "fixify-armv7a.apk": "0363c5a9f6f2a7a861d69725c5840f71cacbb474e7cf9defb14e05597a45e237"
+    "fixify-arm64.apk": "90545b00f0fa1a8b0ae5b7204c79159c0eb9103f5e47052be3df1b6b4638f112",
+    "fixify-armv7a.apk": "02f13bdd4a10d2b1646525b5a384cd94f75ddb0d1477112d7cb5154cb9befd8a"
   },
   "sizes": {
     "fixify-arm64.apk": 20008473,
