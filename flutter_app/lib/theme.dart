@@ -30,6 +30,11 @@ class AppColors {
 }
 
 class AppTheme {
+  /// Font yang dibundel (assets/fonts) — dipakai eksplisit di gaya-gaya tema
+  /// yang TIDAK mewarisi DefaultTextStyle, agar tetap Roboto di perangkat apa
+  /// pun (lihat `fonts:` di pubspec.yaml).
+  static const String fontFamily = 'Roboto';
+
   /// Gaya tombol garis RINGKAS untuk konteks yang lebarnya TIDAK terbatas
   /// (anak non-flex sebuah `Row`, atau di dalam `Align`).
   ///
@@ -46,6 +51,9 @@ class AppTheme {
   static ThemeData get light {
     final base = ThemeData(
       useMaterial3: true,
+      // Kunci utama: seluruh TextTheme memakai Roboto yang dibundel, bukan
+      // font sistem pabrikan HP.
+      fontFamily: fontFamily,
       colorScheme: ColorScheme.fromSeed(
         seedColor: AppColors.brand,
         primary: AppColors.brand,
@@ -70,6 +78,7 @@ class AppTheme {
         elevation: 0,
         centerTitle: false,
         titleTextStyle: TextStyle(
+          fontFamily: fontFamily,
           color: AppColors.navy,
           fontSize: 18,
           fontWeight: FontWeight.w700,
@@ -100,8 +109,9 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: AppColors.brand, width: 1.5),
         ),
-        hintStyle: const TextStyle(color: AppColors.inkSoft),
-        labelStyle: const TextStyle(color: AppColors.navy, fontWeight: FontWeight.w600),
+        hintStyle: const TextStyle(fontFamily: fontFamily, color: AppColors.inkSoft),
+        labelStyle: const TextStyle(
+            fontFamily: fontFamily, color: AppColors.navy, fontWeight: FontWeight.w600),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
@@ -109,7 +119,8 @@ class AppTheme {
           foregroundColor: Colors.white,
           minimumSize: const Size.fromHeight(48),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+          textStyle: const TextStyle(
+              fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 15),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
@@ -118,7 +129,8 @@ class AppTheme {
           side: const BorderSide(color: AppColors.brand, width: 1.5),
           minimumSize: const Size.fromHeight(48),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+          textStyle: const TextStyle(
+              fontFamily: fontFamily, fontWeight: FontWeight.w700, fontSize: 15),
         ),
       ),
       chipTheme: base.chipTheme.copyWith(
@@ -130,7 +142,7 @@ class AppTheme {
       snackBarTheme: const SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         backgroundColor: AppColors.navy,
-        contentTextStyle: TextStyle(color: Colors.white),
+        contentTextStyle: TextStyle(fontFamily: fontFamily, color: Colors.white),
       ),
     );
   }
