@@ -19,6 +19,7 @@
 # Cara pakai:
 #   GitHub → Actions → "Live Probe (regression gate)" → Run workflow.
 #   Lokal: npm run verify:live   (kredensial dari .env.local)
+#   Notifikasi produksi saja (tanpa kredensial): npm run verify:notif-env
 #
 # Secret yang dibutuhkan:
 #   SUPABASE_SERVICE_ROLE_KEY  ← satu-satunya rahasia; ada di .env.local lokal
@@ -96,6 +97,31 @@ jobs:
       # Jalankan penuh di mesin yang punya device: node scripts/smoke-google-login.mjs
       - name: Selftest parser smoke test login Google (tanpa device)
         run: node scripts/smoke-google-login.mjs --selftest
+
+  # Gate go-live notifikasi: memanggil /api/health PRODUKSI dan gagal bila
+  # service role / FCM / VAPID tidak terbaca atau init FCM tidak siap.
+  # Read-only dan TANPA repository secret (hanya HTTP GET ke endpoint publik),
+  # jadi sengaja terpisah: tetap terlihat gagal walau secret service-role belum
+  # di-set. Dua kejadian nyata yang dijaga di sini — service role ada di daftar
+  # tapi tidak terbaca deployment, dan init firebase-admin v14 gagal senyap —
+  # kedua-duanya dulu lolos tanpa satu pun CI merah.
+  notif-env:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Tidak perlu `npm ci`: hanya memakai fetch bawaan Node.
+      - name: Selftest logika penilai (tanpa jaringan)
+        run: node scripts/verify-notif-env.mjs --selftest
+
+      - name: Pastikan notifikasi produksi siap kirim
+        run: node scripts/verify-notif-env.mjs
 
   live-probe:
     runs-on: ubuntu-latest

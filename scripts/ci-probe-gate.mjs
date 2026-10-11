@@ -10,18 +10,20 @@
 //   node scripts/ci-probe-gate.mjs --only=realtime-rls,audit-f3-f6
 //   node scripts/ci-probe-gate.mjs --list   # daftar langkah tanpa menjalankan
 //
-// Sebelas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
+// Dua belas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
 // kredensial), E2E pengingat setor admin sampai ke aplikasi (penanda terbaca
 // sesi teknisi), RLS bucket bukti setor (pemilik saja, tidak bocor ke teknisi
 // lain / anon), retensi riwayat 30 hari (chat & laporan dihapus, pesanan
 // ditandai, catatan keuangan utuh), konfigurasi provider Google
-// (client Web vs Android — read-only),
+// (client Web vs Android — read-only), kesiapan notifikasi produksi
+// (service role + FCM + VAPID terbaca & init FCM siap — read-only),
 // publikasi realtime, realtime ber-RLS, audit F3–F6, E2E transaksional F7
 // (komisi/voucher), E2E klaim teknisi (keahlian+area), dan E2E pengiriman push
 // "pekerjaan baru" ke perangkat teknisi yang cocok.
 // Total ±2 menit di jaringan normal.
 //
-// PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`).
+// PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`
+// dan `notif-env` — keduanya murni baca).
 // Mereka membuat baris/akun uji sementara di Supabase produksi (termasuk saldo
 // & voucher pada langkah E2E), memverifikasi perilaku nyata, lalu menghapusnya
 // lagi — dan setiap langkah melaporkan sisa data uji (harus 0). Kredensial
@@ -68,6 +70,12 @@ const STEPS = [
     label: "Konfigurasi Google: Supabase memakai client OAuth WEB, bukan ANDROID",
     args: ["scripts/verify-google-provider.mjs"],
     guards: "login Google tidak diam-diam rusak (redirect_uri_mismatch / audience native tidak cocok)",
+  },
+  {
+    id: "notif-env",
+    label: "Notifikasi produksi: service role, FCM, dan VAPID terbaca & FCM siap mengirim",
+    args: ["scripts/verify-notif-env.mjs"],
+    guards: "deployment produksi benar-benar bisa mengirim notifikasi (bukan hanya variabel env terdaftar) — pernah gagal senyap: service role tak terbaca → worker skip, dan init firebase-admin v14 gagal tanpa error",
   },
   {
     id: "realtime-publication",
