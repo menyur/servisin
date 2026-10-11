@@ -83,6 +83,11 @@ class PushService {
         await Api.registerFcmToken(token);
       }
 
+      // Sapu antrean push yang tertunda — mis. pesan chat masuk saat perangkat
+      // ini mati sehingga pemicu worker dari pengirim sudah lewat. Idempoten
+      // (baris yang sudah terkirim dihapus worker oleh server).
+      if (Api.isLoggedIn) unawaited(Api.kickPushWorker());
+
       _initialized = true;
     } catch (e) {
       if (kDebugMode) debugPrint('[push] init dilewati/gagal: $e');

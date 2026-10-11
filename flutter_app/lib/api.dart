@@ -262,18 +262,27 @@ class Api {
       'sender_id': uid,
       'body': body.trim(),
     });
-    _kickPushWorker();
+    unawaited(kickPushWorker());
   }
 
-  /// Panggil POST /api/push-worker (fire-and-forget, tanpa menunggu).
-  /// Gagal = tidak masalah — worker juga dipicu interaksi berikutnya
-  /// (chat/push berikutnya akan menyapu antrean yang tertunda).
-  static void _kickPushWorker() {
-    // URL web live — dipakai juga sebagai origin OAuth/redirect. Bila nanti
-    // berganti, cukup ubah di sini (dipakai worker push dan deep-link FCM).
-    const siteOrigin = 'https://fixify.id';
-    WorkerKickHelper.kick('$siteOrigin/api/push-worker');
+  /// URL worker push — origin diambil dari [AppConfig.webBaseUrl], sumber yang
+  /// sama dengan pemanggilan API web lain dan bisa diarahkan lewat
+  /// `--dart-define=WEB_BASE_URL=...`.
+  ///
+  /// JANGAN hardcode domain di sini. Sebelumnya nilai ini `https://fixify.id`
+  /// yang TIDAK menunjuk deployment mana pun (koneksi gagal, HTTP 000),
+  /// sehingga worker tak pernah dijalankan: antrean `push_outbox` menumpuk
+  /// dengan `attempts=0` dan notifikasi chat tidak pernah sampai ke perangkat
+  /// penerima. Dijaga oleh test/push_worker_origin_test.dart.
+  static String pushWorkerUrl() {
+    final origin = AppConfig.webBaseUrl.replaceAll(RegExp(r'/+$'), '');
+    return '$origin/api/push-worker';
   }
+
+  /// Picu POST /api/push-worker (fire-and-forget) untuk menyapu antrean push
+  /// yang tertunda. Gagal = tidak masalah — worker dipicu lagi pada interaksi
+  /// berikutnya atau saat aplikasi dibuka.
+  static Future<void> kickPushWorker() => WorkerKickHelper.kick(pushWorkerUrl());
 
   /// Berlangganan pesan baru secara realtime. Mengembalikan fungsi
   /// cleanup untuk membatalkan channel (dipanggil di dispose).
