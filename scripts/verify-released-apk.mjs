@@ -14,7 +14,10 @@
 //      font yang dibundel (bawaan: Roboto) dan berkas TTF-nya benar-benar
 //      terpaket — pemisah utama tampilan HP vs emulator (font sistem pabrikan)
 //      akan kembali kambuh kalau langkah ini hilang;
-//   4. halaman rilis (`/releases/tag/<tag>`) bisa dibuka.
+//   4. `AndroidManifest.xml` di dalam APK benar-benar memuat id kanal
+//      notifikasi (`fixify_default`) — tanpa itu notifikasi chat jatuh ke kanal
+//      fallback Android dan tidak tampil sebagai heads-up;
+//   5. halaman rilis (`/releases/tag/<tag>`) bisa dibuka.
 //
 // Tanpa kredensial: repo publik, jadi cuma GET biasa. Butuh Node 18+ (fetch).
 //
@@ -23,6 +26,7 @@
 //   node scripts/verify-released-apk.mjs --variant=arm64
 //   node scripts/verify-released-apk.mjs --skip-download   # hanya HEAD/manifest
 //   node scripts/verify-released-apk.mjs --expect-font=Roboto
+//   node scripts/verify-released-apk.mjs --expect-channel=fixify_default
 //   node scripts/verify-released-apk.mjs --tag=apk-latest
 //
 // Exit code: 0 = semua lulus, 1 = ada yang gagal.
@@ -53,6 +57,7 @@ const hasFlag = (nama) => argv.includes(`--${nama}`);
 const TAG = arg("tag") ?? APK_RELEASE_TAG;
 const MANIFEST_REL = arg("manifest") ?? "public/apk/manifest.json";
 const EXPECT_FONT = arg("expect-font") ?? "Roboto";
+const EXPECT_CHANNEL = arg("expect-channel") ?? "fixify_default";
 const SKIP_DOWNLOAD = hasFlag("skip-download");
 const TIMEOUT_MS = Number(arg("timeout") ?? 120000);
 const onlyVariant = arg("variant");
@@ -281,6 +286,26 @@ for (const { id, file } of variants) {
     }
   } catch (err) {
     check("rincian berkas font", false, ringkas(err));
+  }
+
+  // 3d. Kanal notifikasi di AndroidManifest biner (AXML) milik APK terbit.
+  // Id kanal yang tidak ikut terpaket = notifikasi chat buatan server jatuh ke
+  // kanal fallback Android (importance DEFAULT → tanpa heads-up). Id ini juga
+  // harus sama dengan yang dibuat MainActivity dan dikirim src/lib/fcm.js.
+  const manEntri = cari("AndroidManifest.xml");
+  if (!manEntri) {
+    check("ada AndroidManifest.xml di dalam APK", false);
+  } else {
+    try {
+      const axml = bacaEntri(buf, manEntri, "AndroidManifest.xml");
+      // String pool AXML bisa UTF-8 atau UTF-16LE tergantung aapt2.
+      const ada =
+        axml.includes(Buffer.from(EXPECT_CHANNEL, "utf8")) ||
+        axml.includes(Buffer.from(EXPECT_CHANNEL, "utf16le"));
+      check(`AndroidManifest memuat kanal notifikasi '${EXPECT_CHANNEL}'`, ada);
+    } catch (err) {
+      check("AndroidManifest.xml terbaca", false, ringkas(err));
+    }
   }
 }
 

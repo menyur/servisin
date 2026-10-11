@@ -22,7 +22,11 @@
 //   3. env kosong → tidak siap dengan alasan 'env-fcm-tidak-lengkap';
 //   4. penjaga statis: src/lib/fcm.js dilarang memakai API v13 yang sudah
 //      dihapus (`credential.cert` / `.messaging(`) dan wajib memakai subpath
-//      modular firebase-admin/app + firebase-admin/messaging.
+//      modular firebase-admin/app + firebase-admin/messaging;
+//   5. kesamaan id kanal notifikasi di KETIGA tempat (server fcm.js, meta-data
+//      default_notification_channel_id, MainActivity) karena id yang tidak
+//      cocok membuat Android membuang notifikasi ke kanal fallback
+//      ber-importance DEFAULT — bunyi keluar tapi tidak heads-up.
 //
 // Tiap skenario dijalankan di PROSES TERPISAH karena hasil init di-cache per
 // proses (persis seperti satu instance serverless) — sama seperti aslinya.
@@ -37,6 +41,11 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_FCM = path.join(ROOT, "src/lib/fcm.js");
+const SUMBER_MANIFEST = path.join(ROOT, "flutter_app/android/app/src/main/AndroidManifest.xml");
+const SUMBER_AKTIVITAS = path.join(
+  ROOT,
+  "flutter_app/android/app/src/main/kotlin/com/fixify/app/MainActivity.kt"
+);
 const SELF = fileURLToPath(import.meta.url);
 
 const checks = [];
@@ -192,6 +201,37 @@ check(
 check(
   "mengembalikan jumlah perangkat terkirim dari sendFcmToUser",
   /return delivered;/.test(kode) && /delivered \+= 1/.test(kode)
+);
+
+// 6) Kanal notifikasi: id harus sama di server, manifest, dan MainActivity.
+const kanalServer = /channelId:\s*"([^"]+)"/.exec(kode)?.[1] ?? null;
+check("src/lib/fcm.js menyebut channelId secara eksplisit", Boolean(kanalServer), String(kanalServer));
+
+const manifest = readFileSync(SUMBER_MANIFEST, "utf8");
+const kanalManifest =
+  /com\.google\.firebase\.messaging\.default_notification_channel_id"\s*\r?\n\s*android:value="([^"]+)"/.exec(
+    manifest
+  )?.[1] ?? null;
+check(
+  "AndroidManifest mendeklarasikan default_notification_channel_id",
+  Boolean(kanalManifest),
+  String(kanalManifest ?? "(tidak ada) — notifikasi jatuh ke kanal fallback")
+);
+
+const aktivitas = readFileSync(SUMBER_AKTIVITAS, "utf8");
+const kanalAktivitas = /CHANNEL_ID\s*=\s*"([^"]+)"/.exec(aktivitas)?.[1] ?? null;
+check(
+  "MainActivity membuat kanal notifikasi (createNotificationChannel)",
+  /createNotificationChannel\(/.test(aktivitas)
+);
+check(
+  "kanal pakai IMPORTANCE_HIGH agar chat tampil heads-up",
+  /IMPORTANCE_HIGH/.test(aktivitas)
+);
+check(
+  `id kanal sama di server/manifest/MainActivity (${kanalServer})`,
+  Boolean(kanalServer) && kanalServer === kanalManifest && kanalServer === kanalAktivitas,
+  `server=${kanalServer} manifest=${kanalManifest} aktivitas=${kanalAktivitas}`
 );
 
 console.log("=".repeat(72));

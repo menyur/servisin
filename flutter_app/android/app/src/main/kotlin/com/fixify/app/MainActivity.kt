@@ -1,7 +1,10 @@
 package com.fixify.app
 
 import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -33,6 +36,35 @@ class MainActivity : FlutterActivity() {
     private val channelName = "fixify/google_signin"
     private val requestCode = 9017
     private var pending: MethodChannel.Result? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        ensureNotificationChannel()
+    }
+
+    /**
+     * Kanal "fixify_default" — id yang sama dengan channelId yang dikirim server
+     * (src/lib/fcm.js) dan default_notification_channel_id di AndroidManifest.
+     *
+     * Tanpa kanal ini Android membuang notifikasi FCM ke
+     * "fcm_fallback_notification_channel" ber-importance DEFAULT: suara keluar,
+     * tetapi notifikasi chat TIDAK muncul sebagai heads-up (tidak melayang di
+     * atas layar) dan pengguna tidak bisa mengatur kanalnya terpisah di setelan
+     * OS. Didaftarkan sekali di awal; pemanggilan berikutnya hanya memperbarui.
+     * Dijaga oleh npm run verify:fcm. API 26+ (NotificationChannel).
+     */
+    private fun ensureNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val kanal = NotificationChannel(
+            CHANNEL_ID,
+            "Notifikasi Fixify",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "Pesan chat, status pesanan, dan tawaran pekerjaan"
+            enableVibration(true)
+        }
+        getSystemService(NotificationManager::class.java)?.createNotificationChannel(kanal)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -104,5 +136,10 @@ class MainActivity : FlutterActivity() {
         pending?.error("DISPOSED", "Activity dimusnahkan", null)
         pending = null
         super.onDestroy()
+    }
+
+    companion object {
+        /** Harus sama dengan channelId di src/lib/fcm.js. */
+        private const val CHANNEL_ID = "fixify_default"
     }
 }

@@ -45,8 +45,11 @@ class PushService {
       // Android 13+ butuh izin runtime POST_NOTIFICATIONS.
       await fm.requestPermission(alert: true, badge: true, sound: true);
 
-      // Channel "fixify_default" dikirim server pada tiap pesan — daftarkan
-      // agar notifikasi tampil dengan nama & prioritas benar di setelan OS.
+      // Kanal "fixify_default" yang diminta server (channelId di
+      // src/lib/fcm.js) DIDAFTARKAN di sisi Android oleh MainActivity
+      // (IMPORTANCE_HIGH → notifikasi chat muncul sebagai heads-up) dan
+      // dideklarasikan sebagai default_notification_channel_id di
+      // AndroidManifest. Di sini cukup atur tampilan saat app di depan.
       await fm.setForegroundNotificationPresentationOptions(
         alert: true, badge: true, sound: true,
       );

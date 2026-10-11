@@ -100,6 +100,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- Kanal default untuk notifikasi FCM. NAMANYA WAJIB sama dengan
+             channelId yang dikirim server (src/lib/fcm.js) dan kanal yang
+             dibuat MainActivity (fixify_default). Bila tidak dideklarasikan,
+             Android membuang notifikasi ke "fcm_fallback_notification_channel"
+             ber-importance DEFAULT: bunyi tetap keluar tapi TIDAK muncul
+             sebagai heads-up dan kanalnya tidak bisa diatur pengguna. Dijaga
+             oleh npm run verify:fcm. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="fixify_default" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
