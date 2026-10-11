@@ -77,10 +77,13 @@ async function getSubscriptions(userId) {
  * Kirim push ke satu user (semua perangkatnya).
  * Subscription kadaluarsa/410 otomatis dihapus.
  * Tidak pernah melempar error — gagal push tak boleh menggagalkan aksi utama.
+ *
+ * @returns {Promise<number>} jumlah langganan browser yang benar-benar
+ *   menerima (0 = fitur mati / tidak ada langganan / semua gagal).
  */
 export async function sendPushToUser(userId, { title, body, url = "/dashboard", tag = "fixify", event = null }) {
   const wp = pushClient();
-  if (!wp) return; // fitur mati tanpa error
+  if (!wp) return 0; // fitur mati tanpa error
 
   let subs = [];
   try {
@@ -89,18 +92,19 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
       // hormati preferensi user — peristiwa dimatikan → jangan kirim
       if (event) {
         const prefs = await getPrefs(admin, userId);
-        if (prefs[event] === false) return;
+        if (prefs[event] === false) return 0;
       }
     }
     subs = await getSubscriptions(userId);
   } catch (err) {
     console.warn("[push] gagal membaca subscription:", err.message);
-    return;
+    return 0;
   }
-  if (subs.length === 0) return;
+  if (subs.length === 0) return 0;
 
   const payload = JSON.stringify({ title, body, url, tag, event });
   const deadIds = [];
+  let delivered = 0;
 
   await Promise.allSettled(
     subs.map(async (sub) => {
@@ -109,6 +113,7 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
           payload
         );
+        delivered += 1;
       } catch (err) {
         // 404/410 = subscription mati (browser hapus/uninstall) → tandai hapus
         if (err.statusCode === 404 || err.statusCode === 410) deadIds.push(sub.id);
@@ -122,6 +127,8 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
     const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
     await admin.from("push_subscriptions").delete().in("id", deadIds);
   }
+
+  return delivered;
 }
 
 /** Public key untuk client (subscribe). Null bila env belum lengkap. */

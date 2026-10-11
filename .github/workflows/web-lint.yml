@@ -62,6 +62,13 @@ jobs:
           set -o pipefail
           npm run lint 2>&1 | tee lint.log
 
+      # Init FCM diperiksa di sini (tanpa jaringan & tanpa rahasia: kunci RSA
+      # dibuat lokal) karena kegagalannya SENYAP — notifikasi Android berhenti
+      # tanpa error di lint/build. Regresi nyata: firebase-admin v14 menghapus
+      # `credential.cert()`, sehingga pengiriman ke APK mati tanpa jejak.
+      - name: Verifikasi init FCM (notifikasi Android)
+        run: npm run verify:fcm
+
       # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
       # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
       # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,

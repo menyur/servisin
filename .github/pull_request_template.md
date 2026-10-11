@@ -46,6 +46,26 @@ Isi bagian yang relevan saja; hapus bagian yang tidak dipakai.
 - [ ] `flutter test test/font_parity_test.dart` lulus
 - [ ] Sudah dilihat di minimal satu ukuran layar sempit (≤ 360 px) tanpa overflow
 
+## Verifikasi notifikasi (wajib bila menyentuh `src/lib/fcm.js`, `src/lib/push.js`, `src/lib/notify.js`, atau worker push)
+
+<!-- Latar: kegagalan FCM bisa SENYAP. firebase-admin v14 menghapus
+     `credential.cert()` dan `admin.messaging()`; saat itu init gagal tanpa
+     error terlihat, /api/health tetap melaporkan env ada, dan antrean push
+     tetap ditandai terkirim — notifikasi Android mati total tanpa jejak. -->
+
+- [ ] `npm run verify:fcm` lulus (init FCM siap dengan service account uji; API v13 tidak dipakai lagi)
+- [ ] Worker `/api/push-worker` hanya menghapus baris antrean bila ada perangkat yang benar-benar menerima (`sent` > 0, sisanya `pending`)
+- [ ] Bila diuji di perangkat: notifikasi benar-benar tampil (tempel bukti di bawah)
+
+<details>
+<summary>Bukti notifikasi di perangkat (screenshot / logcat)</summary>
+
+```text
+<!-- tempel hasil di sini -->
+```
+
+</details>
+
 ## Verifikasi APK rilis (wajib bila menyentuh rilis/unduhan/CI APK)
 
 Dijalankan **setelah** workflow `Build APK Android` selesai dan aset diunggah.

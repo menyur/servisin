@@ -13,12 +13,24 @@
 import { sendPushToUser as sendWebPush, sendNewJobPushToTechnicians as webNewJobBroadcast } from "./push.js";
 import { sendFcmToUser, sendFcmToTechniciansNewJob } from "./fcm.js";
 
-/** Kirim web-push + FCM sekaligus ke satu user. */
+/**
+ * Kirim web-push + FCM sekaligus ke satu user.
+ *
+ * @returns {Promise<{web:number, fcm:number, total:number}>} jumlah perangkat
+ *   yang benar-benar menerima di tiap kanal. Pemanggil yang peduli (worker
+ *   antrean /api/push-worker) memakai `total` untuk memutuskan apakah baris
+ *   antrean boleh dihapus — sebelumnya "terkirim" palsu mungkin terjadi saat
+ *   FCM mati senyap. Pemanggil lama boleh mengabaikan nilai ini.
+ */
 export async function sendPushToUser(userId, { url = "/dashboard", ...rest }) {
-  await Promise.allSettled([
+  const [web, fcm] = await Promise.allSettled([
     sendWebPush(userId, { url, ...rest }),
     sendFcmToUser(userId, { route: url, ...rest }),
   ]);
+  const n = (hasil) => (hasil.status === "fulfilled" ? Number(hasil.value) || 0 : 0);
+  const webCount = n(web);
+  const fcmCount = n(fcm);
+  return { web: webCount, fcm: fcmCount, total: webCount + fcmCount };
 }
 
 /** Broadcast "pekerjaan baru" ke teknisi — web push + FCM sekaligus. */

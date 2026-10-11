@@ -12,6 +12,16 @@
  * Tanpa env tersebut fitur ini mati dengan aman (no-op) — alur lama web-push
  * tidak terganggu. Kirim selalu fire-and-forget: gagal push tidak boleh
  * menggagalkan aksi utama (konfirmasi bayar, penugasan, dsb).
+ *
+ * PENTING (regresi yang pernah terjadi): firebase-admin v14 sudah MENGHAPUS
+ * namespace gaya lama `admin.credential.cert()` dan `admin.messaging()`.
+ * Memakainya membuat `admin.credential` undefined → init gagal SENYAP
+ * (`[fcm] inisialisasi firebase-admin gagal: Cannot read properties of
+ * undefined (reading 'cert')`) sehingga tidak ada satu pun notifikasi Android
+ * yang terkirim, padahal /api/health melaporkan env-nya ada dan worker tetap
+ * menandai antrean "terkirim". Karena itu init memakai subpath modular
+ * (`firebase-admin/app` + `firebase-admin/messaging`) dan statusnya bisa
+ * dibaca dari luar lewat [fcmReadiness] serta npm run verify:fcm.
  */
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { technicianReceivesJob } from "./skill-match.js";
@@ -19,23 +29,56 @@ import { technicianReceivesJob } from "./skill-match.js";
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+// Field minimum service account Firebase (Project Settings → Service accounts).
+const FIELD_WAJIB = ["project_id", "client_email", "private_key"];
+
 let cachedAdmin = null; // { messaging }
+let initError = null; // alasan terakhir gagal init (untuk /api/health)
+let lastSendError = null; // kode error kirim terakhir (bukan rahasia)
 
 /** firebase-admin dimuat lazy — aplikasi tetap jalan walau belum diinstall. */
 async function adminMessaging() {
   if (cachedAdmin) return cachedAdmin;
   const b64 = process.env.FCM_SERVICE_ACCOUNT_BASE64;
-  if (!b64 || !SERVICE_URL || !SERVICE_KEY) return null;
+  if (!b64 || !SERVICE_URL || !SERVICE_KEY) {
+    initError = "env-fcm-tidak-lengkap";
+    return null;
+  }
   try {
-    const { default: firebaseAdmin } = await import("firebase-admin");
+    const [{ initializeApp, getApps, cert }, { getMessaging }] = await Promise.all([
+      import("firebase-admin/app"),
+      import("firebase-admin/messaging"),
+    ]);
     const creds = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
-    const app = firebaseAdmin.initializeApp({ credential: firebaseAdmin.credential.cert(creds) });
-    cachedAdmin = { messaging: firebaseAdmin.messaging(app) };
+    const hilang = FIELD_WAJIB.filter((k) => !creds[k]);
+    if (hilang.length > 0) {
+      throw new Error(`service account tidak lengkap: ${hilang.join(", ")} hilang`);
+    }
+    const app = getApps().length
+      ? getApps()[0]
+      : initializeApp({ credential: cert(creds), projectId: creds.project_id });
+    cachedAdmin = { messaging: getMessaging(app) };
+    initError = null;
     return cachedAdmin;
   } catch (err) {
+    initError = err.message;
     console.warn("[fcm] inisialisasi firebase-admin gagal:", err.message);
     return null;
   }
+}
+
+/**
+ * Kesiapan FCM yang SEBENARNYA (bukan sekadar "env terisi") untuk diagnostik
+ * luar seperti /api/health. Tidak pernah memuat nilai rahasia — hanya status
+ * dan pesan error.
+ */
+export async function fcmReadiness() {
+  const bundle = await adminMessaging();
+  return {
+    ready: Boolean(bundle),
+    error: bundle ? null : initError,
+    lastSendError,
+  };
 }
 
 /** Token FCM milik satu user (semua perangkatnya) via service role. */
@@ -56,10 +99,15 @@ async function getTokens(admin, userId) {
  * - Hormati preferensi user (profiles.notification_prefs, sama dengan web-push).
  * - Token invalid/unregistered otomatis dihapus dari fcm_tokens.
  * - Tidak pernah melempar error.
+ *
+ * @returns {Promise<number>} jumlah perangkat yang BENAR-BENAR menerima.
+ *   0 berarti tidak ada yang terkirim (env kosong, fitur dimatikan user, tak
+ *   ada token, atau FCM menolak) — pemanggil (worker) memakai angka ini untuk
+ *   memutuskan baris antrean dihapus atau dicoba ulang.
  */
 export async function sendFcmToUser(userId, { title, body, route = "/orders", tag = "fixify", event = null, data = {} }) {
   const bundle = await adminMessaging();
-  if (!bundle) return; // fitur mati tanpa env — no-op
+  if (!bundle) return 0; // fitur mati / init gagal — no-op, tanpa kirim
 
   const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
   try {
@@ -69,7 +117,7 @@ export async function sendFcmToUser(userId, { title, body, route = "/orders", ta
         .select("notification_prefs")
         .eq("id", userId)
         .single();
-      if (profile?.notification_prefs?.[event] === false) return;
+      if (profile?.notification_prefs?.[event] === false) return 0;
     }
   } catch {
     /* preferensi tak terbaca → tetap kirim */
@@ -80,9 +128,13 @@ export async function sendFcmToUser(userId, { title, body, route = "/orders", ta
     tokens = await getTokens(admin, userId);
   } catch (err) {
     console.warn("[fcm] baca token gagal:", err.message);
-    return;
+    lastSendError = `baca-token: ${err.message}`;
+    return 0;
   }
-  if (tokens.length === 0) return;
+  if (tokens.length === 0) {
+    lastSendError = "tidak-ada-token";
+    return 0;
+  }
 
   // Android notification + data: data.route dibaca app saat notifikasi ditap
   // (aplikasi tertutup) — deep link langsung ke layar terkait.
@@ -99,25 +151,33 @@ export async function sendFcmToUser(userId, { title, body, route = "/orders", ta
     ),
   };
 
+  let delivered = 0;
   try {
     const resp = await bundle.messaging.sendEachForMulticast(message);
     const deadIds = [];
     resp.responses.forEach((r, i) => {
-      if (!r.success) {
-        const code = r.error?.errorInfo?.code || "";
-        if (code === "messaging/registration-token-not-registered" || code === "messaging/invalid-registration-token") {
-          deadIds.push(tokens[i].id);
-        } else {
-          console.warn("[fcm] gagal kirim ke token:", code || r.error?.message);
-        }
+      if (r.success) {
+        delivered += 1;
+        return;
+      }
+      const code = r.error?.errorInfo?.code || "";
+      if (code === "messaging/registration-token-not-registered" || code === "messaging/invalid-registration-token") {
+        deadIds.push(tokens[i].id);
+      } else {
+        lastSendError = code || r.error?.message || "tidak-diketahui";
+        console.warn("[fcm] gagal kirim ke token:", code || r.error?.message);
       }
     });
     if (deadIds.length > 0) {
       await admin.from("fcm_tokens").delete().in("id", deadIds);
+      if (delivered === 0) lastSendError = "token-kedaluwarsa";
     }
+    if (delivered > 0) lastSendError = null;
   } catch (err) {
+    lastSendError = err.message;
     console.warn("[fcm] pengiriman multicast gagal:", err.message);
   }
+  return delivered;
 }
 
 /**

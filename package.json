@@ -26,7 +26,8 @@
     "verify:flutter-version": "node scripts/check-flutter-version.mjs",
     "verify:apk-release": "node scripts/verify-apk-release.mjs",
     "verify:released-apk": "node scripts/verify-released-apk.mjs",
-    "verify:fonts": "node scripts/verify-font-family.mjs"
+    "verify:fonts": "node scripts/verify-font-family.mjs",
+    "verify:fcm": "node scripts/verify-fcm-init.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
