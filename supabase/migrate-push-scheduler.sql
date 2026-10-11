@@ -31,6 +31,14 @@
 --   kustom). Domain produksi saat ini: servisin-six.vercel.app
 --
 -- CARA MENJALANKAN (pilih salah satu)
+--   0. PALING SEDIKIT KLIK & LANGSUNG (tanpa SQL sama sekali):
+--      Supabase Dashboard → Integrations → Database Webhooks → Create:
+--        table  : push_outbox      event  : Insert
+--        type   : HTTP Request     method : POST
+--        URL    : https://servisin-six.vercel.app/api/push-worker
+--      Webhook ini memanggil worker SEKETIKA setiap baris antrean masuk, jadi
+--      notifikasi chat tidak menunggu jadwal apa pun. Lapisan jadwal di bawah
+--      (untuk menyapu sisa kegagalan) tetap disarankan.
 --   A. Supabase Dashboard → SQL Editor → tempel seluruh berkas ini → Run
 --      (idempoten, aman diulang).
 --   B. Tanpa SQL: Database → Extensions → aktifkan pg_cron dan pg_net, lalu
@@ -40,9 +48,12 @@
 --   Bila ekstensi belum tersedia di plan/menu Anda, aktifkan dulu di
 --   Database → Extensions (pg_cron, pg_net), lalu jalankan ulang berkas ini.
 --
--- CATATAN: workflow .github/workflows/push-sweeper.yml sudah menyapu tiap 5
---   menit tanpa penyiapan apa pun. Migrasi ini melengkapinya dengan latensi
---   ±1 menit dan tanpa ketergantungan pada GitHub Actions.
+-- CATATAN: workflow .github/workflows/push-sweeper.yml sudah menyapu tanpa
+--   penyiapan apa pun, TETAPI cron GitHub Actions TIDAK tepat waktu — keluhan
+--   umum 15 menit–2 jam tertunda, bahkan pernah berhenti tanpa sebab. Jadi
+--   anggap workflow itu jaring pengaman terakhir, bukan penjadwal utama;
+--   lapisan database (trigger/webhook + pg_cron) yang membuat notifikasi
+--   benar-benar cepat dan bisa diandalkan.
 -- ============================================================================
 
 -- ---------- 1) Ekstensi ----------
