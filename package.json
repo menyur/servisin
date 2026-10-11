@@ -28,7 +28,8 @@
     "verify:released-apk": "node scripts/verify-released-apk.mjs",
     "verify:fonts": "node scripts/verify-font-family.mjs",
     "verify:fcm": "node scripts/verify-fcm-init.mjs",
-    "verify:notif-env": "node scripts/verify-notif-env.mjs"
+    "verify:notif-env": "node scripts/verify-notif-env.mjs",
+    "verify:cron-auth": "node scripts/verify-cron-auth.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

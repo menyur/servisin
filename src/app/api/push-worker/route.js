@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { sendPushToUser } from "@/lib/notify";
+import { fcmReadiness, sendFcmSelfTest } from "@/lib/fcm";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -19,6 +20,50 @@ const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
  * Sekarang `delivered == 0` → baris dibiarkan (attempts naik) untuk dicoba
  * ulang, dan jumlahnya dilaporkan di respons agar kelihatan dari luar.
  */
+/**
+ * GET /api/push-worker?selftest=1 — UJI SIAP KIRIM FCM (tanpa mengirim
+ * notifikasi ke siapa pun): kirim ke token palsu dan nilai jawaban Google.
+ * Dipakai gate go-live (npm run verify:notif-env) di CI/penjadwal.
+ *
+ * Hasilnya di-cache 60 detik per instance supaya pemanggil luar tidak bisa
+ * memaksa server memanggil FCM berulang-ulang. Tanpa `?selftest=1` → 405
+ * (jalur drain tetap POST saja).
+ */
+let selftestCache = { at: 0, hasil: null };
+const SELFTEST_TTL_MS = 60_000;
+
+export async function GET(request) {
+  const url = new URL(request.url);
+  if (url.searchParams.get("selftest") !== "1") {
+    return NextResponse.json(
+      { error: "Method Not Allowed", pakai: "POST untuk menyapu antrean, GET ?selftest=1 untuk uji kirim FCM" },
+      { status: 405 }
+    );
+  }
+  const now = Date.now();
+  if (selftestCache.hasil && now - selftestCache.at < SELFTEST_TTL_MS) {
+    return NextResponse.json(
+      { ok: selftestCache.hasil.ok, fcm: selftestCache.hasil, cache: true, umurDetik: Math.round((now - selftestCache.at) / 1000) },
+      { status: 200 }
+    );
+  }
+  try {
+    const [kesiapan, kirim] = [await fcmReadiness(), await sendFcmSelfTest()];
+    const hasil = {
+      ready: kesiapan.ready,
+      initError: kesiapan.error,
+      lastSendError: kesiapan.lastSendError,
+      selftest: kirim,
+      ok: Boolean(kesiapan.ready && kirim.ok),
+    };
+    selftestCache = { at: now, hasil };
+    return NextResponse.json({ ok: hasil.ok, fcm: hasil, cache: false }, { status: 200 });
+  } catch (err) {
+    console.error("[push-worker] selftest fatal:", err?.message);
+    return NextResponse.json({ ok: false, error: "selftest-gagal" }, { status: 500 });
+  }
+}
+
 export async function POST() {
   try {
     if (!SERVICE_URL || !SERVICE_KEY) {

@@ -1,0 +1,82 @@
+# Penyapu antrean push + gate notifikasi produksi — berjalan TANPA aplikasi
+# dibuka dan TANPA memakai jatah Vercel Cron (Hobby hanya boleh 2, sudah
+# terpakai retensi riwayat & laporan bulanan).
+#
+# Dua tugas:
+#   1. POST /api/push-worker → menyapu `push_outbox` yang menumpuk karena
+#      pemicu dari aplikasi (chat dikirim saat penerima tidak membuka app)
+#      tidak pernah terjadi. Sebelum ini, notifikasi chat hanya sampai kalau
+#      pengguna membuka aplikasi — inilah penyebab "notifikasi tidak masuk".
+#   2. npm run verify:notif-env → gate: env service role/FCM/VAPID harus terbaca
+#      DI DEPLOYMENT AKTIF, `notifikasi.fcmReady` harus true, DAN uji kirim FCM
+#      sungguhan (GET /api/push-worker?selftest=1) harus dijawab Google sebagai
+#      error level token (artinya kredensial & proyek sehat, bukan
+#      mismatched-credential). Ini yang dulu lolos senyap: env terdaftar,
+#      health bilang true, tapi pengiriman mati.
+#
+# Tanpa rahasia sama sekali: drain-nya endpoint publik dan gate-nya hanya HTTP
+# GET. Jadi gate tetap berjalan walau repository secret belum di-set.
+#
+# Catatan keandalan: cron GitHub hanya sepresisi ±5 menit dan bisa tertunda saat
+# antrean runner padat; jadwal juga dinonaktifkan GitHub bila repo tidak ada
+# aktivitas 60 hari. Untuk latensi ~1 menit & tanpa ketergantungan itu, pakai
+# supabase/migrate-push-scheduler.sql (pg_cron + pg_net) — keduanya aman
+# berjalan bersamaan karena take_push_batch memakai FOR UPDATE SKIP LOCKED.
+#
+# Lokal: npm run verify:notif-env  ·  curl -X POST https://servisin-six.vercel.app/api/push-worker
+
+name: Push Sweeper + Gate Notifikasi
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+# Jadwal yang menumpuk tidak ada gunanya: batalkan yang lama.
+concurrency:
+  group: push-sweeper
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sapu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Drain antrean. `attempts` menunjukkan apakah endpoint benar-benar
+      # berjalan (bukan 404 halaman HTML atau 500 tanpa keterangan).
+      - name: Sapu antrean push
+        run: |
+          set -o pipefail
+          kode=$(curl -sS -o jawaban.json -w "%{http_code}" -X POST \
+            --max-time 60 --retry 3 --retry-delay 5 --retry-connrefused \
+            https://servisin-six.vercel.app/api/push-worker)
+          echo "HTTP $kode"
+          cat jawaban.json
+          echo
+          if [ "$kode" != "200" ]; then
+            echo "::error::/api/push-worker menjawab HTTP $kode — antrean notifikasi tidak tersapu."
+            echo "Gagal: drain tidak berjalan (HTTP $kode)"
+            exit 1
+          fi
+          node -e "
+            const j = JSON.parse(require('node:fs').readFileSync('jawaban.json', 'utf8'));
+            if (j.ok !== true) {
+              console.error('Respons drain menyatakan gagal:', JSON.stringify(j));
+              process.exit(1);
+            }
+            console.log('Tersapu: sent=' + (j.sent ?? 0) + ' pending=' + (j.pending ?? 0));
+          "
+
+      # Gate notifikasi: env terbaca + FCM siap + uji kirim sungguhan.
+      - name: Gate notifikasi produksi
+        run: npm run verify:notif-env

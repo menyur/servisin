@@ -81,6 +81,72 @@ export async function fcmReadiness() {
   };
 }
 
+// Token sengaja tidak terdaftar untuk uji kirim. Formatnya sengaja mirip token
+// asli (base64url, panjang) supaya FCM menjawab dengan error level TOKEN — bukan
+// error format payload. Tidak pernah menyasar perangkat siapa pun.
+const TOKEN_UJI = "fixify-selftest-token-0000000000000000000000000000000000000000000000";
+
+// Error FCM yang berarti "kredensial & proyek SEHAT, hanya tokennya palsu".
+const KODE_TOKEN = [
+  "messaging/registration-token-not-registered",
+  "messaging/invalid-registration-token",
+];
+
+/**
+ * UJI KIRIM FCM SUNGGUHAN (bukan sekadar init) untuk gate go-live: kirim satu
+ * pesan ke token yang sengaja tidak ada, lalu nilai jawabannya.
+ *
+ * Kalau kredensial salah, proyek service account tidak cocok dengan app, atau
+ * firebase-admin gagal init (regresi v14), jawabannya error autentikasi /
+ * mismatched-credential → `ok:false`. Kalau kredensial sehat, Google menjawab
+ * dengan error level token → `ok:true`.
+ *
+ * Tidak mengirim notifikasi ke siapa pun dan tidak menyentuh antrean.
+ * @returns {Promise<{ok:boolean, stage:string, code:string, message:string}>}
+ */
+export async function sendFcmSelfTest() {
+  const bundle = await adminMessaging();
+  if (!bundle) {
+    return {
+      ok: false,
+      stage: "init",
+      code: initError || "init-gagal",
+      message: "firebase-admin tidak siap — pengiriman ke APK Android mati",
+    };
+  }
+  try {
+    const resp = await bundle.messaging.sendEachForMulticast({
+      tokens: [TOKEN_UJI],
+      notification: { title: "Uji Fixify", body: "selftest" },
+      android: { priority: "high", notification: { channelId: "fixify_default" } },
+    });
+    const r = resp.responses?.[0] ?? {};
+    if (r.success) {
+      return { ok: true, stage: "kirim", code: "terkirim", message: "FCM menerima pesan" };
+    }
+    const code = r.error?.errorInfo?.code || r.error?.code || "tidak-diketahui";
+    const message = r.error?.message || "";
+    const kodeToken = KODE_TOKEN.includes(code);
+    // `messaging/invalid-argument` bisa berarti payload salah ATAU token tidak
+    // sah. Payload kita tetap, jadi hanya dianggap sehat bila pesannya menyebut
+    // token — supaya bug payload kita sendiri tidak lolos sebagai "sehat".
+    const kodeTokenLain = code === "messaging/invalid-argument" && /token/i.test(message);
+    return {
+      ok: kodeToken || kodeTokenLain,
+      stage: kodeToken || kodeTokenLain ? "token" : "kirim",
+      code,
+      message,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      stage: "kirim",
+      code: err?.errorInfo?.code || err?.code || "exception",
+      message: err?.message || String(err),
+    };
+  }
+}
+
 /** Token FCM milik satu user (semua perangkatnya) via service role. */
 async function getTokens(admin, userId) {
   const { data, error } = await admin

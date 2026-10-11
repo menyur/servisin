@@ -54,7 +54,8 @@ Isi bagian yang relevan saja; hapus bagian yang tidak dipakai.
      tetap ditandai terkirim — notifikasi Android mati total tanpa jejak. -->
 
 - [ ] `npm run verify:fcm` lulus (init FCM siap dengan service account uji; API v13 tidak dipakai lagi)
-- [ ] `npm run verify:notif-env` lulus bila menyentuh env notifikasi (service role / FCM / VAPID) — produksi harus benar-benar siap kirim, bukan sekadar env terdaftar
+- [ ] `npm run verify:notif-env` lulus bila menyentuh env notifikasi (service role / FCM / VAPID) — produksi harus benar-benar siap kirim, bukan sekadar env terdaftar; termasuk uji kirim FCM sungguhan
+- [ ] `npm run verify:cron-auth` lulus bila menyentuh endpoint cron/penjadwal (Authorization Bearer dari Vercel Cron wajib diterima)
 - [ ] Worker `/api/push-worker` hanya menghapus baris antrean bila ada perangkat yang benar-benar menerima (`sent` > 0, sisanya `pending`)
 - [ ] Bila diuji di perangkat: notifikasi benar-benar tampil (tempel bukti di bawah)
 

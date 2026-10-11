@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { collectMonthlyCompleted, buildMonthlyReportCsv } from "@/lib/monthly-report";
 import { sendMonthlyReportEmail } from "@/lib/email";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cronAuthorized } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -13,27 +14,20 @@ export const maxDuration = 60;
  * juga bisa dipanggil manual:
  *   curl "http://localhost:3000/api/cron/monthly-report?month=9&year=2026" -H "x-cron-secret: <CRON_SECRET>"
  *
- * Auth: header x-cron-secret ATAU ?secret= — harus sama dengan env CRON_SECRET.
+ * Auth: header x-cron-secret ATAU ?secret= ATAU `Authorization: Bearer
+ * <CRON_SECRET>` (yang dikirim Vercel Cron) — lihat src/lib/cron-auth.js.
  * Tanpa CRON_SECRET di env, endpoint hanya bisa dipanggil dari localhost.
  *
  * Parameter opsional: month (1-12), year. Default: bulan berjalan.
  */
 export async function GET(request) {
-  const url = new URL(request.url);
-  const secret = request.headers.get("x-cron-secret") || url.searchParams.get("secret");
-  const configured = process.env.CRON_SECRET;
-
-  // auth: wajib secret bila terkonfigurasi; localhost boleh tanpa (development)
-  const isLocal = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (configured && secret !== configured) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Auth bersama (lib/cron-auth): menerima x-cron-secret, ?secret=, DAN
+  // Authorization: Bearer <CRON_SECRET> yang dikirim Vercel Cron otomatis.
+  const auth = cronAuthorized(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
-  if (!configured && !isLocal) {
-    return NextResponse.json(
-      { error: "CRON_SECRET belum diisi di env — endpoint hanya tersedia dari localhost" },
-      { status: 401 }
-    );
-  }
+  const url = auth.url;
 
   const monthParam = Number(url.searchParams.get("month"));
   const yearParam = Number(url.searchParams.get("year"));

@@ -69,6 +69,12 @@ jobs:
       - name: Verifikasi init FCM (notifikasi Android)
         run: npm run verify:fcm
 
+      # Auth cron diuji di sini karena kegagalannya juga senyap: route hanya
+      # menerima x-cron-secret sementara Vercel Cron mengirim Authorization
+      # Bearer → jadwal harian 401 tanpa jejak, tugas terjadwal tak pernah jalan.
+      - name: Verifikasi auth endpoint cron
+        run: npm run verify:cron-auth
+
       # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
       # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
       # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,

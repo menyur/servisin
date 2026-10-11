@@ -11,11 +11,19 @@
 //      tetap terbaca `true`, worker tetap menghapus baris antrean seolah
 //      terkirim, dan tidak satu pun notifikasi Android sampai.
 //
-// Karena itu pemeriksaan ini tidak berhenti di "env terbaca". Ia memanggil
-// /api/health di deployment nyata dan menuntut:
-//   * service role, FCM, dan VAPID terbaca (env presence), DAN
-//   * `notifikasi.fcmReady === true` — hasil init firebase-admin yang asli,
-//     persis hal yang dulu melaporkan `true` padahal pengiriman mati.
+// Karena itu pemeriksaan ini tidak berhenti di "env terbaca". Dua bagian:
+//
+//   A. /api/health di deployment nyata:
+//        * service role, FCM, dan VAPID terbaca (env presence), DAN
+//        * `notifikasi.fcmReady === true` — hasil init firebase-admin yang
+//          asli, persis hal yang dulu melaporkan `true` padahal kirim mati.
+//   B. UJI KIRIM FCM SUNGGUHAN (GET /api/push-worker?selftest=1): server
+//      mengirim satu pesan ke token yang sengaja tidak terdaftar dan menilai
+//      jawaban Google. Error level TOKEN = kredensial & proyek sehat; error
+//      autentikasi/mismatched-credential = kirim ke APK Android mati. Init
+//      yang berhasil saja tidak cukup: hanya jalan ini yang membuktikan
+//      service account benar-benar diakui Google. Tidak ada notifikasi yang
+//      sampai ke pengguna (tokennya palsu).
 //
 // Read-only dan TANPA rahasia: hanya HTTP GET ke endpoint publik, jadi bisa
 // dijalankan kapan saja, termasuk di CI tanpa repository secret.
@@ -25,6 +33,7 @@
 //   node scripts/verify-notif-env.mjs --url=https://contoh.vercel.app
 //   node scripts/verify-notif-env.mjs --selftest      # uji logika (tanpa jaringan)
 //   node scripts/verify-notif-env.mjs --attempts=3 --timeout=15000
+//   node scripts/verify-notif-env.mjs --no-send        # hanya bagian A (debug)
 //
 // Kode keluar: 0 = lulus, 1 = ada yang gagal (termasuk produksi tak terjangkau).
 // ============================================================================
@@ -52,6 +61,7 @@ const ATTEMPTS = Math.max(1, Number(arg("attempts") ?? 4));
 const TIMEOUT_MS = Number(arg("timeout") ?? 15000);
 const JEDA_MS = Number(arg("delay") ?? 6000);
 const SELFTEST = argv.includes("--selftest");
+const LEWATI_KIRIM = argv.includes("--no-send");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -94,6 +104,35 @@ export function nilaiHealth(payload) {
     if (notif.fcmLastSendError) info.push(`kirim terakhir gagal: ${notif.fcmLastSendError}`);
   }
 
+  return { gagal, info };
+}
+
+/**
+ * Nilai jawaban uji kirim FCM. Murni (tanpa jaringan) supaya bisa diuji sendiri.
+ * @returns {{gagal: string[], info: string[]}}
+ */
+export function nilaiSelftest(payload) {
+  const gagal = [];
+  const info = [];
+  if (!payload || typeof payload !== "object") {
+    return { gagal: ["respons uji kirim FCM bukan objek JSON"], info };
+  }
+  const fcm = payload.fcm ?? {};
+  const kirim = fcm.selftest ?? {};
+
+  if (fcm.ready === false) {
+    gagal.push(
+      `FCM tidak siap di server: ${fcm.initError ?? "alasan tidak dilaporkan"} — periksa FCM_SERVICE_ACCOUNT_BASE64 (base64 JSON service account)`
+    );
+  } else if (kirim.ok !== true) {
+    gagal.push(
+      `uji kirim FCM GAGAL (stage=${kirim.stage ?? "?"}, code=${kirim.code ?? "?"}): ${kirim.message ?? "tanpa pesan"} — kredensial/proyek FCM tidak diakui Google`
+    );
+  }
+  if (payload.ok !== true && gagal.length === 0) {
+    gagal.push("respons uji kirim menyatakan ok=false tanpa alasan yang dikenali");
+  }
+  if (kirim.code) info.push(`jawaban FCM: ${kirim.code} (stage ${kirim.stage ?? "?"})`);
   return { gagal, info };
 }
 
@@ -142,8 +181,35 @@ if (SELFTEST) {
   const okInfo = info.gagal.length === 0 && info.info.length === 1;
   if (!okInfo) gagalSelftest += 1;
   console.log(`${okInfo ? "lulus" : "GAGAL"}  kegagalan kirim terakhir hanya dilaporkan, bukan kegagalan`);
+
+  // Logika bagian B (uji kirim FCM sungguhan).
+  const kirimDasar = { ok: true, fcm: { ready: true, selftest: { ok: true, stage: "token", code: "messaging/registration-token-not-registered" } } };
+  const kasusKirim = [
+    ["uji kirim sehat (error level token) → lulus", kirimDasar, 0],
+    [
+      "kredensial salah (mismatched-credential) → gagal",
+      { ok: false, fcm: { ready: true, selftest: { ok: false, stage: "kirim", code: "messaging/mismatched-credential", message: "Sender ID mismatch" } } },
+      1,
+    ],
+    [
+      "init FCM gagal (kasus firebase-admin v14) → gagal",
+      { ok: false, fcm: { ready: false, initError: "Cannot read properties of undefined (reading 'cert')" } },
+      1,
+    ],
+    ["respons uji kirim rusak → gagal", null, 1],
+  ];
+  for (const [nama, payload, harap] of kasusKirim) {
+    const { gagal } = nilaiSelftest(payload);
+    const dapat = gagal.length === 0 ? 0 : 1;
+    const ok = dapat === harap;
+    if (!ok) gagalSelftest += 1;
+    console.log(`${ok ? "lulus" : "GAGAL"}  ${nama}${ok ? "" : ` — harap exit ${harap}, dapat ${dapat}`}`);
+    if (ok && gagal.length) console.log(`       alasan: ${gagal[0]}`);
+  }
+
+  const total = kasus.length + 1 + kasusKirim.length;
   console.log("=".repeat(72));
-  console.log(`${gagalSelftest === 0 ? "LULUS" : "GAGAL"}: selftest ${kasus.length + 1 - gagalSelftest}/${kasus.length + 1}`);
+  console.log(`${gagalSelftest === 0 ? "LULUS" : "GAGAL"}: selftest ${total - gagalSelftest}/${total}`);
   process.exit(gagalSelftest === 0 ? 0 : 1);
 }
 
@@ -185,12 +251,58 @@ if (!payload) {
   process.exit(1);
 }
 
-const { gagal, info } = nilaiHealth(payload);
+const health = nilaiHealth(payload);
+const gagal = [...health.gagal];
 console.log(`\nenv terbaca : ${JSON.stringify(payload.env ?? {})}`);
 console.log(`notifikasi  : ${JSON.stringify(payload.notifikasi ?? null)}`);
-if (info.length) for (const i of info) console.log(`  info: ${i}`);
+for (const i of health.info) console.log(`  info: ${i}`);
 
-console.log("=".repeat(72));
+// --- B. UJI KIRIM FCM SUNGGUHAN --------------------------------------------
+if (LEWATI_KIRIM) {
+  console.log("\nB) Uji kirim FCM — DILEWATI (--no-send)");
+} else {
+  console.log("\nB) Uji kirim FCM sungguhan (GET /api/push-worker?selftest=1)");
+  let kirimPayload = null;
+  let kirimErr = null;
+  let status = null;
+  for (let i = 1; i <= ATTEMPTS; i++) {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
+    try {
+      const res = await fetch(`${BASE_URL}/api/push-worker?selftest=1`, {
+        headers: { accept: "application/json", "cache-control": "no-cache" },
+        signal: ac.signal,
+      });
+      status = res.status;
+      const teks = await res.text();
+      if (res.status === 405) {
+        kirimErr = "HTTP 405 — deployment produksi belum memuat probe uji kirim (?selftest=1); deploy dulu versi terbaru";
+        break;
+      }
+      if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+      kirimPayload = JSON.parse(teks);
+      kirimErr = null;
+      break;
+    } catch (err) {
+      kirimErr =
+        err?.name === "AbortError" ? `timeout ${TIMEOUT_MS / 1000}s` : err.message;
+      if (i < ATTEMPTS) await sleep(JEDA_MS);
+    } finally {
+      clearTimeout(t);
+    }
+  }
+
+  if (!kirimPayload) {
+    gagal.push(`/api/push-worker?selftest=1 tidak bisa dibaca (${kirimErr})`);
+  } else {
+    const nilai = nilaiSelftest(kirimPayload);
+    gagal.push(...nilai.gagal);
+    console.log(`  respons     : ${JSON.stringify(kirimPayload.fcm ?? kirimPayload)}`);
+    for (const i of nilai.info) console.log(`  info: ${i}`);
+  }
+}
+
+console.log("=" .repeat(72));
 if (gagal.length) {
   console.log(`GAGAL: ${gagal.length} masalah notifikasi di produksi:`);
   for (const g of gagal) console.log(`  - ${g}`);
@@ -199,5 +311,9 @@ if (gagal.length) {
   console.log("Ingat: menambah variabel TIDAK cukup — nilai harus terbaca deployment aktif.");
   process.exit(1);
 }
-console.log("LULUS: service role, FCM, dan VAPID terbaca dan FCM siap mengirim.");
+console.log(
+  LEWATI_KIRIM
+    ? "LULUS: service role, FCM, dan VAPID terbaca dan FCM siap (uji kirim dilewati)."
+    : "LULUS: env lengkap, FCM siap, dan uji kirim sungguhan dijawab Google."
+);
 process.exit(0);

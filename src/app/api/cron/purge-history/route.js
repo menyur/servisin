@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cronAuthorized } from "@/lib/cron-auth";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -15,27 +16,20 @@ export const maxDuration = 60;
  *   curl "http://localhost:3000/api/cron/purge-history" -H "x-cron-secret: <CRON_SECRET>"
  *   curl "http://localhost:3000/api/cron/purge-history?days=30" -H "x-cron-secret: <CRON_SECRET>"
  *
- * Auth: header x-cron-secret ATAU ?secret= — harus sama dengan env CRON_SECRET.
+ * Auth: header x-cron-secret ATAU ?secret= ATAU `Authorization: Bearer
+ * <CRON_SECRET>` (yang dikirim Vercel Cron) — lihat src/lib/cron-auth.js.
  * Tanpa CRON_SECRET, endpoint hanya bisa dipanggil dari localhost.
  *
  * Prasyarat: supabase/migrate-history-retention.sql sudah dijalankan.
  */
 export async function GET(request) {
-  const url = new URL(request.url);
-  const secret = request.headers.get("x-cron-secret") || url.searchParams.get("secret");
-  const configured = process.env.CRON_SECRET;
-
-  // auth: wajib secret bila terkonfigurasi; localhost boleh tanpa (development)
-  const isLocal = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
-  if (configured && secret !== configured) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Auth bersama (lib/cron-auth): menerima x-cron-secret, ?secret=, DAN
+  // Authorization: Bearer <CRON_SECRET> yang dikirim Vercel Cron otomatis.
+  const auth = cronAuthorized(request);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
-  if (!configured && !isLocal) {
-    return NextResponse.json(
-      { error: "CRON_SECRET belum diisi di env — endpoint hanya tersedia dari localhost" },
-      { status: 401 }
-    );
-  }
+  const url = auth.url;
 
   const daysParam = Number(url.searchParams.get("days"));
   const retentionDays = Number.isFinite(daysParam) && daysParam > 0 ? Math.floor(daysParam) : 30;
