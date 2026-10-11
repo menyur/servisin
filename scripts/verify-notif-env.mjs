@@ -60,6 +60,11 @@ const BASE_URL = (arg("url") ?? process.env.PROD_BASE_URL ?? DEFAULT_URL).replac
 const ATTEMPTS = Math.max(1, Number(arg("attempts") ?? 4));
 const TIMEOUT_MS = Number(arg("timeout") ?? 15000);
 const JEDA_MS = Number(arg("delay") ?? 6000);
+// Anggaran terpisah untuk uji kirim: bagian ini boleh menunggu DEPLOY selesai
+// (probe ?selftest=1 baru ada setelah deployment memuat kode terbaru), sehingga
+// jedanya lebih panjang daripada pemeriksaan health.
+const ATTEMPTS_SEND = Math.max(1, Number(arg("attempts-send") ?? 10));
+const JEDA_SEND_MS = Number(arg("delay-send") ?? 20000);
 const SELFTEST = argv.includes("--selftest");
 const LEWATI_KIRIM = argv.includes("--no-send");
 
@@ -261,11 +266,12 @@ for (const i of health.info) console.log(`  info: ${i}`);
 if (LEWATI_KIRIM) {
   console.log("\nB) Uji kirim FCM — DILEWATI (--no-send)");
 } else {
-  console.log("\nB) Uji kirim FCM sungguhan (GET /api/push-worker?selftest=1)");
+  console.log(
+    `\nB) Uji kirim FCM sungguhan (GET /api/push-worker?selftest=1) — sampai ${ATTEMPTS_SEND}×${JEDA_SEND_MS / 1000}s (menunggu deploy bila perlu)`
+  );
   let kirimPayload = null;
   let kirimErr = null;
-  let status = null;
-  for (let i = 1; i <= ATTEMPTS; i++) {
+  for (let i = 1; i <= ATTEMPTS_SEND; i++) {
     const ac = new AbortController();
     const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
     try {
@@ -273,11 +279,17 @@ if (LEWATI_KIRIM) {
         headers: { accept: "application/json", "cache-control": "no-cache" },
         signal: ac.signal,
       });
-      status = res.status;
       const teks = await res.text();
       if (res.status === 405) {
-        kirimErr = "HTTP 405 — deployment produksi belum memuat probe uji kirim (?selftest=1); deploy dulu versi terbaru";
-        break;
+        // Versi kode di branch dan deployment produksi belum sinkron (probe
+        // baru masuk main, Vercel masih membangun). Bukan notifikasi rusak —
+        // tunggu deploy, jangan gagal palsu. Masih gagal bila tidak kunjung ada.
+        kirimErr = `HTTP 405 — deployment produksi belum memuat probe ?selftest=1 (sudah menunggu ${Math.round(((i - 1) * JEDA_SEND_MS) / 1000)}s)`;
+        if (i < ATTEMPTS_SEND) {
+          if (i === 1) console.log("  menunggu deployment produksi memuat probe…");
+          await sleep(JEDA_SEND_MS);
+        }
+        continue;
       }
       if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
       kirimPayload = JSON.parse(teks);
@@ -286,7 +298,7 @@ if (LEWATI_KIRIM) {
     } catch (err) {
       kirimErr =
         err?.name === "AbortError" ? `timeout ${TIMEOUT_MS / 1000}s` : err.message;
-      if (i < ATTEMPTS) await sleep(JEDA_MS);
+      if (i < ATTEMPTS_SEND) await sleep(JEDA_SEND_MS);
     } finally {
       clearTimeout(t);
     }
