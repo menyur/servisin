@@ -64,6 +64,8 @@ jobs:
   # Pemeriksaan konfigurasi provider Google Supabase (client Web vs Android).
   # Read-only dan TANPA repository secret, jadi sengaja dipisah dari job di
   # bawah: tetap gagal-terlihat walau SUPABASE_SERVICE_ROLE_KEY belum di-set.
+  # (Dependensi tetap dipasang karena langkah smoke selftest butuh
+  #  scripts/lib/probe-env.mjs — lihat komentar di langkah `npm ci`.)
   # Pemeriksaan yang sama juga ikut di langkah pertama `npm run verify:live`
   # (scripts/ci-probe-gate.mjs) — di sini ia berjalan sendiri agar statusnya
   # terbaca jelas dan bisa dipakai sebagai required check tersendiri.
@@ -82,9 +84,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
 
-      # Tidak perlu `npm ci`: pemeriksa ini hanya memakai modul bawaan Node
-      # (fetch + node:fs) dan tidak menyentuh Supabase dengan kredensial.
+      # `npm ci` WAJIB: `verify-google-provider.mjs` memang hanya memakai modul
+      # bawaan Node, tetapi `smoke-google-login.mjs --selftest` (langkah 3 di
+      # bawah) mengimpor scripts/lib/probe-env.mjs yang menarik
+      # @supabase/supabase-js. Tanpa pemasangan dependensi, langkah itu gagal
+      # ERR_MODULE_NOT_FOUND di runner — dulu lolos di lokal hanya karena
+      # node_modules sudah ada, sehingga job ini merah terus di CI tanpa alasan
+      # yang terlihat. Tidak ada rahasia yang dipakai di job ini.
+      - name: Pasang dependensi
+        run: npm ci
+
       - name: Selftest logika pemeriksa (tanpa jaringan)
         run: node scripts/verify-google-provider.mjs --selftest
 
