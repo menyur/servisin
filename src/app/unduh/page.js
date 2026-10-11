@@ -9,12 +9,16 @@ export const metadata = {
 };
 
 // APK Flutter release dipisah per ABI (57 MB fat → ±20 MB per varian):
-//   /apk/fixify-arm64.apk  → HP modern 64-bit
-//   /apk/fixify-armv7a.apk → HP lama 32-bit
-// Dibuild otomatis oleh GitHub Actions (.github/workflows/build-apk.yml)
-// saat ada push yang mengubah flutter_app/** dan di-commit bot ke public/apk/.
-// Tombol per varian + ukurannya dicek lewat route /api/apk-status tanpa
-// rebuild halaman.
+//   fixify-arm64.apk  → HP modern 64-bit
+//   fixify-armv7a.apk → HP lama 32-bit
+// Berkasnya BUKAN bagian dari repo: dipublikasikan sebagai aset GitHub Release
+// (tag bergulir `apk-latest`) — lihat src/lib/apk-release.js. Git hanya
+// menyimpan public/apk/manifest.json (versi, ukuran, checksum).
+// Dibuild + diunggah otomatis oleh GitHub Actions
+// (.github/workflows/build-apk.yml) saat push mengubah flutter_app/**.
+// Tombol per varian + URL/ukuran/checksum diambil dari route /api/apk-status
+// (yang juga mem-404-kan tautan bila aset rilisnya hilang) tanpa rebuild
+// halaman ini.
 export default function UnduhPage() {
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">

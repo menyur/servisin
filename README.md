@@ -52,14 +52,18 @@ Semua variabel di `.env.example` yang berakhiran rahasia (tanpa `NEXT_PUBLIC_`) 
 
 ## 5. Aplikasi Android (APK)
 
-Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`, yang membaca dua varian hasil CI di `public/apk/` — `fixify-arm64.apk` (HP 64-bit) dan `fixify-armv7a.apk` (HP lama 32-bit) — beserta `manifest.json` (versi, tanggal build, SHA-256 untuk verifikasi unduhan).
+Halaman **`/unduh`** menyediakan APK siap pasang + panduan instalasi dan alternatif "pasang lewat Chrome" (PWA). Status tombol diatur otomatis oleh `/api/apk-status`, yang membaca dua varian hasil CI — `fixify-arm64.apk` (HP 64-bit) dan `fixify-armv7a.apk` (HP lama 32-bit) — beserta `public/apk/manifest.json` (versi, tanggal build, ukuran, SHA-256 untuk verifikasi unduhan).
 
-APK **tidak dibangun manual**: [build-apk.yml](.github/workflows/build-apk.yml) membangunnya dari `flutter_app/` lewat `flutter build apk --release --split-per-abi`, lalu bot meng-commit APK + manifest ke `public/apk/`. Alurnya:
+APK **tidak disimpan di Git**: berkasnya (±20 MB per varian) dipublikasikan sebagai **aset GitHub Release** pada tag bergulir `apk-latest`, dan halaman `/unduh` menaut langsung ke sana lewat [`src/lib/apk-release.js`](src/lib/apk-release.js). Sebelumnya setiap rilis menambah ±39 MB ke riwayat Git sehingga repo membengkak dan tiap clone ikut mengunduh tumpukan APK lama; sekarang Git hanya menyimpan `manifest.json` beberapa ratus byte.
+
+APK **tidak dibangun manual**: [build-apk.yml](.github/workflows/build-apk.yml) membangunnya dari `flutter_app/` lewat `flutter build apk --release --split-per-abi --obfuscate --split-debug-info=build/symbols` (obfuscation + pemisahan info debug mengecilkan APK; symbol map disimpan sebagai artifact agar stack trace tetap terbaca), mengunggah asetnya ke Release, lalu bot meng-commit **hanya** `manifest.json`. Alurnya:
 
 1. Push ke `main` yang mengubah `flutter_app/**` (atau jalankan workflow manual) → build jalan.
 2. Job gate `live-probe` harus lulus lebih dulu. Tanpa secret `SUPABASE_SERVICE_ROLE_KEY` build **tertahan** (keadaan darurat: jalankan manual dengan input `skip_gate=true`).
 3. Signing release dibaca dari secret `ANDROID_KEYSTORE_BASE64` + `ANDROID_KEYSTORE_PASSWORD`; bila belum di-set, APK di-sign dengan debug key dan **tidak bisa** install-over-install antar build.
 4. **Simpan signing key** (mis. lewat `flutter_app/android/backup-keystore.sh`) — tanpa itu aplikasi tidak bisa diupdate di perangkat yang sudah terpasang.
+5. Job menjalankan juga `flutter build apk --release --analyze-size` (build terpisah — flag itu tidak bisa digabung `--split-debug-info`) lalu meringkasnya dengan [`scripts/summarize-apk-size.mjs`](scripts/summarize-apk-size.mjs) ke halaman ringkasan job: komponen penyumbang ukuran terbesar (engine, kode Dart, dex, aset) plus paket Dart terbesar. Berkas analisisnya diunggah sebagai artifact `apk-size-report`.
+6. Verifikasi cepat konfigurasi jalur unduh tanpa kredensial: `npm run verify:apk-release`.
 
 Package ID aplikasi: **`com.fixify.app`** — harus sama di `applicationId` ([flutter_app/android/app/build.gradle.kts](flutter_app/android/app/build.gradle.kts)), OAuth Android client di Google Cloud Console, dan [flutter_app/android/app/google-services.json](flutter_app/android/app/google-services.json).
 
@@ -75,7 +79,7 @@ fixify/
   src/app/actions/     -> semua Server Actions (auth, bookings, admin, technician, reviews, reports, push)
   src/components/      -> komponen UI (wizard booking, dashboard client, admin tabs, ilustrasi)
   src/lib/             -> client supabase (browser/server/middleware/admin), pricing, email, push, balance
-  public/apk/          -> fixify.apk (dibaca /api/apk-status)
+  public/apk/          -> manifest.json (versi, ukuran, SHA-256; berkas APK ada di Release tag `apk-latest`)
 ```
 
 ## Skema database (ringkas)

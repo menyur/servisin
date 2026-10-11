@@ -239,7 +239,13 @@ perbarui secret `ANDROID_KEYSTORE_BASE64` → perbarui baris di
 sertifikat bukan rahasia (tercetak di setiap APK), dan dengan begitu pergantian
 keystore yang tidak disengaja gagal terdeteksi sebelum rilis.
 
-### APK yang sudah terbit (public/apk) — diaudit, bukan hanya keystore lokal
+### APK yang akan diterbitkan (mampir di public/apk) — diaudit, bukan hanya keystore lokal
+
+> Sejak APK dipublikasikan sebagai aset GitHub Release (tag `apk-latest`),
+> folder `public/apk/` terisi HANYA selama build di CI — dipakai untuk
+> pemeriksaan di bawah, lalu dibersihkan sebelum commit. Setelah terbit,
+> berkasnya ada di halaman rilis, bukan di repo. Untuk memeriksa APK lokal
+> secara manual, arahkan skripnya: `--apk=path/ke/app-release.apk`.
 
 Keystore lokal bisa benar sementara APK di `public/apk/` ditandatangani kunci
 lain (build lama, atau build darurat dengan kunci debug). Karena berkas itulah

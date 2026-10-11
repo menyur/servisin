@@ -27,3 +27,9 @@ runs.json
 run.json
 flutter_app/android/app/google-services1.json
 emulator-preview.html
+
+# APK TIDAK disimpan di Git: tiap rilis ±39 MB masuk riwayat dan tiap clone
+# ikut mengunduhnya. Berkasnya dipublikasikan sebagai aset GitHub Release
+# (tag apk-latest) — lihat src/lib/apk-release.js dan
+# .github/workflows/build-apk.yml. Yang di-commit hanya manifest.json.
+/public/apk/*.apk

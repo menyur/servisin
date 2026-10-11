@@ -1,15 +1,19 @@
 # Build APK Android Fixify di runner GitHub.
 #
 # Latar: PC pengembang tidak punya Android SDK/JDK. Workflow ini membangun
-# APK release dari flutter_app dengan --split-per-abi (fat APK 57 MB →
-# ±20 MB per varian) lalu meng-commit hasilnya ke public/apk/:
+# APK release ter-obfuscate dari flutter_app dengan --split-per-abi
+# (fat APK 57 MB → ±20 MB per varian), mengunggahnya sebagai ASET GITHUB
+# RELEASE (tag `apk-latest`) di:
 #   - fixify-arm64.apk  → HP Android modern (64-bit, mayoritas)
 #   - fixify-armv7a.apk → HP Android lama (32-bit)
-# sehingga tombol unduh di halaman /unduh otomatis memakai APK terbaru
-# (ukuran & ketersediaan dicek /api/apk-status tanpa rebuild halaman).
+# lalu hanya meng-commit public/apk/manifest.json (versi, ukuran, checksum).
+#
+# APK TIDAK lagi masuk riwayat Git: sebelumnya setiap rilis menambah ±39 MB ke
+# repo dan setiap clone ikut mengunduh tumpukan APK lama. Halaman /unduh
+# menunjuk langsung ke aset Release (lihat src/lib/apk-release.js).
 #
 # Pemicu: push yang mengubah flutter_app/** atau workflow ini sendiri
-# (commit APK menyentuh public/apk saja → tidak memicu loop).
+# (commit manifest menyentuh public/apk/manifest.json → tidak memicu loop).
 
 name: Build APK Android
 
@@ -82,7 +86,8 @@ jobs:
     # tanpa kondisi ini — padahal justru itu tujuan skip_gate.
     if: ${{ always() && (needs.live-probe.result == 'success' || needs.live-probe.result == 'skipped') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # 60 menit: build APK + laporan --analyze-size (build AOT kedua)
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -180,11 +185,28 @@ jobs:
         working-directory: flutter_app
         run: flutter pub get
 
-      - name: Build APK release (split per ABI)
+      # --obfuscate + --split-debug-info: nama simbol Dart dikaburkan (APK lebih
+      # kecil dan lebih sulit dibongkar). Symbol map WAJIB disimpan — tanpa itu
+      # stack trace dari perangkat pengguna tak bisa dibaca lagi.
+      - name: Build APK release (split per ABI, ter-obfuscate)
         working-directory: flutter_app
         run: |
           set -o pipefail
-          flutter build apk --release --split-per-abi 2>&1 | tee build.log
+          flutter build apk --release --split-per-abi \
+            --obfuscate --split-debug-info=build/symbols 2>&1 | tee build.log
+          ls -la build/symbols
+
+      # Tanpa symbol map, stack trace dari perangkat pengguna hanya berisi nama
+      # simbol teracak sehingga crash tak bisa didiagnosis. Simpan 90 hari;
+      # baca dengan: flutter symbolize -i app.android-arm64.symbols < stack.txt
+      - name: Simpan symbol map obfuscation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-symbols
+          path: flutter_app/build/symbols
+          if-no-files-found: warn
+          retention-days: 90
 
       # Diagnostik: bila build gagal, keluarkan ekor log build sebagai
       # annotations error — terbaca lewat API publik tanpa akses admin.
@@ -199,6 +221,10 @@ jobs:
           fi
           tail -4 build.log | while IFS= read -r l; do echo "::error::TAIL|${l:0:170}"; done
 
+      # APK mampir sebentar di public/apk/ hanya agar pemeriksa tanda tangan
+      # (`verify-apk-signin.mjs --only-apk`, yang memang membaca folder itu)
+      # dan unggahan Release bekerja dari satu lokasi. Folder ini DIBERSIHKAN
+      # sebelum langkah commit — tidak ada APK yang masuk Git.
       - name: Salin APK per-ABI ke public/apk
         run: |
           mkdir -p public/apk
@@ -210,13 +236,17 @@ jobs:
 
       # Manifest untuk halaman /unduh: versi (pubspec.yaml), tanggal build,
       # dan checksum SHA-256 tiap APK — pengguna bisa memverifikasi unduhan.
-      - name: Buat manifest unduhan (versi, tanggal, SHA-256)
+      - name: Buat manifest unduhan (versi, tanggal, SHA-256, ukuran)
         run: |
           V=$(grep -E '^version:' flutter_app/pubspec.yaml | sed 's/version: *//;s/\r//')
           VER=$(echo "$V" | cut -d+ -f1)
           BUILD=$(echo "$V" | sed -n 's/.*+//p')
           C64=$(sha256sum public/apk/fixify-arm64.apk | cut -d' ' -f1)
           C32=$(sha256sum public/apk/fixify-armv7a.apk | cut -d' ' -f1)
+          # Ukuran dalam byte: halaman /unduh menampilkannya tanpa perlu
+          # menembak jaringan (aset Release hanya dicek keberadaannya).
+          S64=$(stat -c%s public/apk/fixify-arm64.apk)
+          S32=$(stat -c%s public/apk/fixify-armv7a.apk)
           cat > public/apk/manifest.json <<EOF
           {
             "version": "$VER",
@@ -225,6 +255,10 @@ jobs:
             "checksums": {
               "fixify-arm64.apk": "$C64",
               "fixify-armv7a.apk": "$C32"
+            },
+            "sizes": {
+              "fixify-arm64.apk": $S64,
+              "fixify-armv7a.apk": $S32
             }
           }
           EOF
@@ -240,16 +274,77 @@ jobs:
           set -o pipefail
           node scripts/verify-apk-signin.mjs --only-apk 2>&1 | tee apk-terbit.log
 
-      - name: Commit & push APK baru (bila berubah)
+      # Laporan "komponen penyumbang ukuran terbesar". --analyze-size TIDAK bisa
+      # digabung --split-debug-info (lihat flutter build apk --help), jadi ini
+      # build AOT terpisah dan TANPA obfuscation: komposisinya sama, angkanya
+      # sedikit berbeda dari APK yang diterbitkan. Dijalankan SETELAH APK
+      # disalin ke public/apk supaya tidak menimpa artefak yang akan terbit.
+      - name: Laporan ukuran APK (--analyze-size)
+        working-directory: flutter_app
+        run: |
+          set -o pipefail
+          flutter build apk --release --target-platform android-arm64 --analyze-size 2>&1 | tee analyze-size.log
+          node ../scripts/summarize-apk-size.mjs --log=analyze-size.log >> "$GITHUB_STEP_SUMMARY"
+
+      # Berkas analisis Flutter ditulis ke ~/.flutter-devtools (di luar
+      # workspace), jadi disalin dulu agar bisa diunggah sebagai artifact dan
+      # dibuka di DevTools → App Size.
+      - name: Simpan berkas analisis ukuran
+        if: always()
+        run: |
+          mkdir -p flutter_app/build/size-report
+          cp "$HOME"/.flutter-devtools/apk-code-size-analysis_*.json flutter_app/build/size-report/ 2>/dev/null || echo "::warning::berkas analisis ukuran tidak ditemukan"
+          ls -la flutter_app/build/size-report
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: apk-size-report
+          path: flutter_app/build/size-report
+          if-no-files-found: warn
+          retention-days: 30
+
+      # URUTAN PENTING: unggah aset rilis DULU, commit manifest BELAKANGAN.
+      # Nama aset tetap (di-clobber), jadi selama unggahan berjalan manifest
+      # lama masih cocok dengan aset lama. Bila dibalik, pengguna bisa
+      # mengunduh berkas baru sambil melihat checksum lama.
+      - name: Terbitkan APK ke GitHub Release (tag apk-latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -o pipefail
+          TAG="apk-latest"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Rilis $TAG sudah ada — asetnya diganti (clobber)."
+          else
+            gh release create "$TAG" \
+              --title "APK Android Fixify (rilis bergulir)" \
+              --notes "Aset APK diperbarui otomatis oleh .github/workflows/build-apk.yml pada setiap build. Tombol unduh di halaman /unduh menunjuk ke aset di sini."
+          fi
+          gh release upload "$TAG" \
+            public/apk/fixify-arm64.apk \
+            public/apk/fixify-armv7a.apk \
+            --clobber
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | "\(.name) — \(.size) byte"'
+
+      # APK tidak lagi di-commit (±39 MB per rilis dulu masuk riwayat Git).
+      # Bersihkan working tree agar tidak ada yang ikut ter-commit.
+      - name: Bersihkan APK dari working tree
+        run: |
+          rm -f public/apk/*.apk
+          ls -la public/apk
+
+      - name: Commit & push manifest unduhan (bila berubah)
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A public/apk
+          git add public/apk/manifest.json
           if git diff --cached --quiet; then
-            echo "APK identik dengan sebelumnya — tidak ada commit."
+            echo "Manifest identik dengan sebelumnya — tidak ada commit."
             exit 0
           fi
-          git commit -m "APK Android Fixify — build CI otomatis"
+          git commit -m "Manifest unduhan APK (versi, ukuran, checksum)"
           # Commit lain bisa masuk selama build berjalan (race push) —
           # rebase bot commit di atas main terbaru, coba sampai 3x.
           for i in 1 2 3; do

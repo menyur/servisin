@@ -151,7 +151,7 @@ class _BalanceScreenState extends State<BalanceScreen> {
                             padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                             children: [
                               if (_reminderVisible) ...[
-                                _DepositReminderBanner(
+                                DepositReminderBanner(
                                   reminderAt: _summary!.balanceReminderAt!,
                                   onDeposit: _openDepositFlow,
                                   onDismiss: _dismissReminder,
@@ -337,12 +337,15 @@ class _SummaryCard extends StatelessWidget {
 /// profiles.balance_reminder_at) dan saldo teknisi masih 0/minus. Hilang
 /// otomatis begitu saldo diisi; teksnya memberi tahu bahwa pengingat ini
 /// datang dari admin.
-class _DepositReminderBanner extends StatelessWidget {
+///
+/// Publik agar bisa diuji langsung (regresi lebar tak hingga pada tombol).
+class DepositReminderBanner extends StatelessWidget {
   final DateTime reminderAt;
   final VoidCallback onDeposit;
   final VoidCallback onDismiss;
 
-  const _DepositReminderBanner({
+  const DepositReminderBanner({
+    super.key,
     required this.reminderAt,
     required this.onDeposit,
     required this.onDismiss,
@@ -383,6 +386,13 @@ class _DepositReminderBanner extends StatelessWidget {
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  // WAJIB minimumSize berlebar TERBATAS: tema global memakai
+                  // Size.fromHeight (lebar tak hingga) demi tombol selebar
+                  // wadah. Di dalam `Wrap` lebar tak hingga itu tidak meledak,
+                  // tapi tombolnya menyerobot SELEBAR BARIS dan "Tutup"
+                  // terlempar ke baris berikutnya — layout dua tombol berdampingan
+                  // jadi rusak. Lihat button_row_guard_test.dart.
+                  minimumSize: const Size(0, 36),
                 ),
               ),
               TextButton(

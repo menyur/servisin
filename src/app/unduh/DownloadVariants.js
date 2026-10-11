@@ -100,10 +100,13 @@ export function DownloadVariants() {
 
         <div className="flex flex-wrap items-center gap-2.5">
           {info.variants.map((v, i) => (
+            // APK kini aset GitHub Release (lintas-origin), jadi atribut
+            // `download` tidak berlaku — GitHub sendiri mengirim
+            // `Content-Disposition: attachment` sehingga klik = langsung unduh.
             <a
               key={v.id}
               href={v.url}
-              download
+              rel="noreferrer"
               className={
                 i === 0
                   ? "inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-brand text-white font-semibold text-sm hover:bg-brand-deep transition shadow-sm"
@@ -121,6 +124,23 @@ export function DownloadVariants() {
             <ChecksumRow key={v.id} sha256={v.sha256} />
           ))}
         </div>
+
+        {/* Jalur alternatif bila tautan aset bermasalah: berkas APK hidup di
+            halaman rilis GitHub, bukan di server ini. */}
+        {info.releaseUrl ? (
+          <p className="text-xs text-ink-soft mt-2">
+            Berkas diunduh dari{" "}
+            <a
+              href={info.releaseUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-brand font-semibold hover:text-brand-deep"
+            >
+              aset rilis GitHub
+            </a>{" "}
+            — repo hanya menyimpan manifest kecil (versi, ukuran, checksum).
+          </p>
+        ) : null}
 
         {info.variants.some((v) => v.id === "arm64") ? (
           <p className="text-xs text-ink-soft mt-2">

@@ -1,57 +1,95 @@
-import { statSync, existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
+
+import { APK_VARIANTS, apkReleasePageUrl, apkAssetUrl } from "@/lib/apk-release";
 
 /**
  * Status ketersediaan APK untuk halaman /unduh.
- * APK dipisah per ABI oleh CI (flutter build apk --split-per-abi):
- *   - arm64  → HP Android modern (64-bit, mayoritas)
- *   - armv7a → HP Android lama (32-bit)
- * CI juga menulis public/apk/manifest.json berisi versi aplikasi, tanggal
- * build, dan checksum SHA-256 tiap APK — untuk verifikasi unduhan.
+ *
+ * APK TIDAK lagi disajikan dari `public/apk/` — berkasnya (±20 MB per varian)
+ * kini menjadi aset GitHub Release supaya riwayat Git tak membengkak. Yang
+ * tersisa di repo hanya `public/apk/manifest.json` (versi, ukuran, checksum)
+ * yang ditulis CI setiap build.
+ *
+ * Sumber kebenaran `available` = manifest (deterministik, tanpa jaringan),
+ * lalu diverifikasi dengan HEAD ke aset Release: kalau GitHub menjawab 404,
+ * tautannya dimatikan agar halaman tidak menawarkan unduhan mati. Galat
+ * jaringan/timeout sengaja TIDAK mematikan tautan (gangguan sesaat bukan bukti
+ * aset hilang).
  *
  * GET → {
  *   available: boolean,
- *   version?: string, build?: string, builtAt?: string,
+ *   version?, build?, builtAt?, releaseUrl?,
  *   variants: [{ id, url, available, sizeMb?, sha256? }]
  * }
- * Daftar file bersifat tetap (tidak mengungkap struktur folder lain).
  */
-const APK_VARIANTS = [
-  { id: "arm64", file: "fixify-arm64.apk" },
-  { id: "armv7a", file: "fixify-armv7a.apk" },
-];
+const MANIFEST_PATH = path.join(process.cwd(), "public", "apk", "manifest.json");
+const HEAD_TIMEOUT_MS = 3500;
 
-function bacaManifest(dir) {
+function bacaManifest() {
   try {
-    const m = JSON.parse(readFileSync(path.join(dir, "manifest.json"), "utf8"));
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
     if (typeof m !== "object" || m === null) return {};
     return {
       version: typeof m.version === "string" ? m.version : undefined,
       build: typeof m.build === "string" ? m.build : undefined,
       builtAt: typeof m.builtAt === "string" ? m.builtAt : undefined,
       checksums: typeof m.checksums === "object" && m.checksums !== null ? m.checksums : {},
+      sizes: typeof m.sizes === "object" && m.sizes !== null ? m.sizes : {},
     };
   } catch {
     return {};
   }
 }
 
+/**
+ * HEAD ke aset Release.
+ * @returns {{ ada: boolean, bytes?: number }} `ada: false` hanya bila GitHub
+ *   memastikan asetnya tidak ada (404/410).
+ */
+async function cekAset(url) {
+  try {
+    const res = await fetch(url, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: AbortSignal.timeout(HEAD_TIMEOUT_MS),
+    });
+    if (res.status === 404 || res.status === 410) return { ada: false };
+    const len = Number(res.headers.get("content-length"));
+    return { ada: true, bytes: Number.isFinite(len) && len > 0 ? len : undefined };
+  } catch {
+    return { ada: true }; // jaringan/timeout → jangan matikan tautan
+  }
+}
+
+const keMb = (bytes) => Math.round((bytes / (1024 * 1024)) * 10) / 10;
+
 export async function GET() {
   try {
-    const dir = path.join(process.cwd(), "public", "apk");
-    const { version, build, builtAt, checksums } = bacaManifest(dir);
-    const variants = APK_VARIANTS.map(({ id, file }) => {
-      const url = `/apk/${file}`;
-      const filePath = path.join(dir, file);
-      if (!existsSync(filePath)) {
-        return { id, url, available: false };
-      }
-      const sizeMb = Math.round((statSync(filePath).size / (1024 * 1024)) * 10) / 10;
-      const sha256 = typeof checksums?.[file] === "string" ? checksums[file] : undefined;
-      return { id, url, available: true, sizeMb, sha256 };
-    });
+    const { version, build, builtAt, checksums, sizes } = bacaManifest();
+
+    const variants = await Promise.all(
+      APK_VARIANTS.map(async ({ id, file }) => {
+        const url = apkAssetUrl(file);
+        const tercatat = typeof checksums?.[file] === "string";
+
+        // Belum pernah terbit → tidak perlu menembak jaringan.
+        if (!tercatat) return { id, url, available: false };
+
+        const { ada, bytes } = await cekAset(url);
+        if (!ada) return { id, url, available: false };
+
+        const ukuran = Number(sizes?.[file]) > 0 ? Number(sizes[file]) : bytes;
+        const variant = { id, url, available: true };
+        if (ukuran) variant.sizeMb = keMb(ukuran);
+        variant.sha256 = checksums[file];
+        return variant;
+      }),
+    );
+
     const respons = {
       available: variants.some((v) => v.available),
+      releaseUrl: apkReleasePageUrl(),
       variants,
     };
     if (version) respons.version = version;

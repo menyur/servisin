@@ -23,7 +23,8 @@
     "verify:claim": "node scripts/verify-e2e-technician-claim.mjs",
     "verify:notify": "node scripts/verify-e2e-push-notify.mjs",
     "verify:live": "node scripts/ci-probe-gate.mjs",
-    "verify:flutter-version": "node scripts/check-flutter-version.mjs"
+    "verify:flutter-version": "node scripts/check-flutter-version.mjs",
+    "verify:apk-release": "node scripts/verify-apk-release.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

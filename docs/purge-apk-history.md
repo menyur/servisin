@@ -37,6 +37,7 @@ Skrip otomatis: guard clean-tree → backup bundle `../servisin-backup-<timestam
 
 ### Tahap D — pencegahan (biar tidak membesar lagi)
 - APK baru: **timpa file yang sama** (`public/apk/fixify.apk`) per rilis, TANPA menambah nama baru per build (itu penyebab 11 versi arm64 menumpuk), ATAU pindahkan ke Supabase Storage/Release GitHub dan hapus dari repo.
+  - ✅ **Sudah dilakukan (Okt 2026)** lewat jalur kedua: APK kini aset GitHub Release pada tag bergulir `apk-latest` (lihat [src/lib/apk-release.js](../src/lib/apk-release.js)) dan tidak lagi di-commit — repo hanya menyimpan `public/apk/manifest.json`. Skrip ini tetap berguna bila ingin memangkas riwayat lama yang masih berisi blob APK (butuh force push).
 - Pertimbangkan `git lfs` hanya kalau memang tetap butuh versioning biner di git.
 
 ## Rollback (kalau ada apa-apa salah)
