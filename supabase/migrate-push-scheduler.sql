@@ -10,12 +10,17 @@
 --   saat penerima tidak memegang HP-nya baru terkirim saat dia membuka app —
 --   dan kalau tidak pernah dibuka, tidak pernah terkirim.
 --
--- CARA KERJA
---   pg_cron menjalankan tugas tiap menit; pg_net memanggil
---   POST https://<domain-produksi>/api/push-worker. Worker mengambil batch
---   `push_outbox` dengan FOR UPDATE SKIP LOCKED (aman berjalan bersamaan
---   dengan pemicu dari aplikasi maupun workflow CI), mengirim via FCM/web-push,
---   lalu menghapus baris yang benar-benar terkirim.
+-- CARA KERJA (dua lapis)
+--   1. INSTAN — trigger `after insert on push_outbox` memanggil
+--      net.http_post(POST /api/push-worker). Begitu pesan chat masuk dan
+--      antrean terisi, worker langsung dipanggil tanpa menunggu jadwal apa pun.
+--      Ini yang membuat notifikasi terasa realtime tanpa aplikasi dibuka.
+--   2. JARING PENGAMAN — pg_cron memanggil worker tiap menit untuk menyapu
+--      sisa yang gagal (mis. server sedang redeploy saat webhook menembak,
+--      atau FCM menolak sementara).
+--   Worker mengambil batch `push_outbox` dengan FOR UPDATE SKIP LOCKED (aman
+--   berjalan bersamaan dengan pemicu dari aplikasi maupun workflow CI),
+--   mengirim via FCM/web-push, lalu menghapus baris yang benar-benar terkirim.
 --
 --   Endpoint-nya TIDAK butuh rahasia: /api/push-worker bersifat publik
 --   (klien Flutter juga memanggilnya) dan hanya membalas hitungan. Karena itu
@@ -79,7 +84,29 @@ $fn$;
 comment on function public.kick_push_worker() is
   'Memanggil POST /api/push-worker (penyapu push_outbox) lewat pg_net. Dipakai cron tiap menit; aman dipanggil manual.';
 
--- ---------- 3) Jadwal tiap menit ----------
+-- ---------- 3) Kirim instan: trigger saat antrean bertambah ----------
+create or replace function public.kick_push_worker_on_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, net
+as $fn$
+begin
+  -- Kegagalan di sini TIDAK boleh menggagalkan insert chat: barisnya sudah ada
+  -- di antrean dan jadwal tiap menit akan menyapunya.
+  begin
+    perform public.kick_push_worker();
+  exception when others then
+    null;
+  end;
+  return null;   -- after statement trigger: nilai kembali diabaikan
+end;
+$fn$;
+
+comment on function public.kick_push_worker_on_insert() is
+  'Memicu worker segera setelah push_outbox bertambah (kirim instan, tanpa menunggu jadwal).';
+
+-- ---------- 4) Jadwal tiap menit (jaring pengaman) ----------
 -- Idempoten: buang jadwal bernama sama lebih dulu, lalu buat ulang.
 do $$
 begin
@@ -100,7 +127,29 @@ begin
   end if;
 end $$;
 
+-- ---------- 5) Pasang trigger kirim instan (butuh pg_net) ----------
+do $$
+begin
+  if exists (select 1 from pg_extension where extname = 'pg_net') then
+    drop trigger if exists trg_push_outbox_kick on public.push_outbox;
+    create trigger trg_push_outbox_kick
+      after insert on public.push_outbox
+      for each statement execute function public.kick_push_worker_on_insert();
+    raise notice 'Trigger kirim instan aktif: push_outbox bertambah → worker dipanggil saat itu juga.';
+  else
+    raise warning 'pg_net tidak tersedia → trigger kirim instan TIDAK dipasang. Notifikasi chat tetap terkirim lewat jadwal tiap menit / workflow penyapu (lebih lambat).';
+  end if;
+end $$;
+
 -- ============================================================================
+-- KONSEKUENSI YANG PERLU DIKETAHUI
+--   * Trigger ini membuat SETIAP insert ke push_outbox menembak satu HTTP call.
+--     Kalau /api/push-worker sedang tidak bisa diakses (mis. domain berubah),
+--     permintaan itu gagal di pg_net — baris antrean TETAP aman dan tersapu
+--     saat jadwal/penyapu berikutnya berhasil.
+--   * Ganti domain di public.kick_push_worker() bila domain produksi berubah:
+--     create or replace function public.kick_push_worker() ... (lihat bagian 2).
+--
 -- VERIFIKASI (read-only)
 --   a) Jadwal aktif:
 --      select jobid, jobname, schedule, active from cron.job where jobname = 'fixify-push-worker';
@@ -114,4 +163,13 @@ end $$;
 --      select count(*) from public.push_outbox;
 --   e) Uji manual tanpa menunggu menit berikutnya:
 --      select public.kick_push_worker();
+--   f) Trigger kirim instan terpasang:
+--      select tgname from pg_trigger where tgrelid = 'public.push_outbox'::regclass
+--        and not tgisinternal;
+--   g) Uji instan: insert satu baris ke push_outbox (user_id acak tanpa token),
+--      lalu lihat attempts-nya naik ± 5 detik kemudian — tanda worker langsung
+--      dipanggil tanpa jadwal:
+--      insert into public.push_outbox (user_id, event, title, body)
+--        values (gen_random_uuid(), 'chat_message', 'uji', 'uji instan');
+--      select attempts, created_at from public.push_outbox order by created_at desc limit 1;
 -- ============================================================================
