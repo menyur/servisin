@@ -108,6 +108,14 @@ jobs:
       - name: Verifikasi versi Flutter = .fvmrc
         run: node scripts/check-flutter-version.mjs
 
+      # Gate font: `fontFamily` hanya boleh memakai keluarga yang dibundel
+      # (pubspec `fonts:`). Nilai asing membuat Flutter diam-diam jatuh ke font
+      # sistem pabrikan HP → tampilan berbeda dari emulator. Dicek di sini juga
+      # (bukan hanya flutter-ci.yml) karena build-apk menerbitkan APK langsung
+      # dari push ke main — rilis harus berhenti sebelum APK dibangun.
+      - name: Verifikasi fontFamily hanya font bundel
+        run: node scripts/verify-font-family.mjs
+
       # lib/env_override.dart di-gitignore (digenerate lokal dari .env.local),
       # jadi runner tidak punya file itu — buat sebelum build.
       # Isinya kredensial PUBLIK client Supabase (publishable key): aman

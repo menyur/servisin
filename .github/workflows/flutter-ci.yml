@@ -30,11 +30,14 @@ on:
     paths:
       - "flutter_app/**"
       - ".github/workflows/flutter-ci.yml"
+      # Gate font di bawah ikut diperiksa saat skripnya sendiri berubah.
+      - "scripts/verify-font-family.mjs"
   push:
     branches: [main]
     paths:
       - "flutter_app/**"
       - ".github/workflows/flutter-ci.yml"
+      - "scripts/verify-font-family.mjs"
   workflow_dispatch:
 
 permissions:
@@ -72,6 +75,15 @@ jobs:
       #   npm run verify:flutter-version
       - name: Verifikasi versi Flutter = .fvmrc
         run: node scripts/check-flutter-version.mjs
+
+      # Gate font: `fontFamily` hanya boleh memakai keluarga yang benar-benar
+      # dibundel (pubspec `fonts:`). Nilai asing — salah ketik, font
+      # eksperimen, atau GoogleFonts.* — membuat Flutter DIAM-DIAM jatuh ke
+      # font sistem pabrikan HP, sehingga tampilan berbeda dari emulator dan
+      # tata letak bergeser/terpotong. Dijalankan sebelum build apa pun.
+      # Node sudah tersedia di runner (seperti check-flutter-version.mjs).
+      - name: Verifikasi fontFamily hanya font bundel
+        run: node scripts/verify-font-family.mjs
 
       # Sama seperti build-apk.yml: kredensial PUBLIK client Supabase
       # (publishable key) — aman, keamanan dijaga RLS di database.
