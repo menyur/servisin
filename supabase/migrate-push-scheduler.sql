@@ -30,8 +30,13 @@
 --   Ganti :domain di bawah bila domain produksi berubah (mis. ke domain
 --   kustom). Domain produksi saat ini: servisin-six.vercel.app
 --
--- CARA MENJALANKAN
---   Supabase Dashboard → SQL Editor → tempel seluruh berkas ini → Run (idempoten).
+-- CARA MENJALANKAN (pilih salah satu)
+--   A. Supabase Dashboard → SQL Editor → tempel seluruh berkas ini → Run
+--      (idempoten, aman diulang).
+--   B. Tanpa SQL: Database → Extensions → aktifkan pg_cron dan pg_net, lalu
+--      Integrations → Cron → buat tugas tiap menit dengan perintah
+--      `select public.kick_push_worker();` (fungsi dibuat oleh berkas ini, jadi
+--      SQL Editor tetap perlu dijalankan sekali untuk membuat fungsinya).
 --   Bila ekstensi belum tersedia di plan/menu Anda, aktifkan dulu di
 --   Database → Extensions (pg_cron, pg_net), lalu jalankan ulang berkas ini.
 --
