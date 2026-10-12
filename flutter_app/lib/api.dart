@@ -415,10 +415,16 @@ class Api {
   }
 
   /// Klaim pekerjaan (atomik di server — satu pekerjaan satu teknisi).
+  ///
+  /// Setelah sukses, server web diberi tahu (fire-and-forget) agar pelanggan
+  /// menerima push "teknisi ditugaskan": RPC ini hanya menulis baris bookings,
+  /// sedangkan kunci VAPID/FCM ada di server web.
   static Future<({bool ok, String? error})> claimJob(String bookingId) async {
     final res = await db.rpc('claim_job', params: {'p_booking': bookingId});
     final m = (res as Map).cast<String, dynamic>();
-    return (ok: m['ok'] == true, error: m['error'] as String?);
+    final ok = m['ok'] == true;
+    if (ok) unawaited(notifyBookingStatus(bookingId, 'technician_assigned'));
+    return (ok: ok, error: m['error'] as String?);
   }
 
   /// Pekerjaan yang ditugaskan ke saya (teknisi).
@@ -437,12 +443,19 @@ class Api {
   /// Bila completed: [commission] = komisi terpotong & [balance] = saldo
   /// terbaru (null bila migrasi `migrate-set-job-status-return.sql` belum
   /// dijalankan / sudah pernah dipotong sebelumnya).
+  /// Bila sukses, server web diberi tahu (fire-and-forget) agar pelanggan
+  /// menerima push "pengerjaan dimulai" / "pesanan selesai".
   static Future<({bool ok, String? error, num? commission, num? balance})> setJobStatus(
       String bookingId, String status) async {
     final res = await db.rpc('set_job_status', params: {'p_booking': bookingId, 'p_status': status});
     final m = (res as Map).cast<String, dynamic>();
+    final ok = m['ok'] == true;
+    if (ok) {
+      unawaited(notifyBookingStatus(
+          bookingId, status == 'completed' ? 'order_completed' : 'work_started'));
+    }
     return (
-      ok: m['ok'] == true,
+      ok: ok,
       error: m['error'] as String?,
       commission: m['commission'] as num?,
       balance: m['balance'] as num?,
@@ -466,17 +479,49 @@ class Api {
   /// berisi kode pesanan + alasan ke semua admin.
   /// Best-effort: gagal jaringan/env diabaikan.
   static Future<void> notifyAdminOfRelease(String bookingId) async {
+    await _notifyWeb('/api/notify-job-release', {'bookingId': bookingId});
+  }
+
+  /// Beri tahu server web bahwa status pesanan baru berubah dari sisi teknisi
+  /// (klaim / mulai / selesai) supaya pelanggan menerima PUSH. RPC Supabase
+  /// hanya menulis DB; kunci VAPID & FCM ada di server web.
+  /// [event]: 'technician_assigned' | 'work_started' | 'order_completed'.
+  /// Best-effort: gagal jaringan/env diabaikan.
+  static Future<void> notifyBookingStatus(String bookingId, String event) async {
+    await _notifyWeb('/api/notify-booking-status', {'bookingId': bookingId, 'event': event});
+  }
+
+  /// Beri tahu server web (pemegang kunci email) bahwa satu peristiwa perlu
+  /// dinotifikasikan ke semua ADMIN: [event] salah satu 'new_booking',
+  /// 'new_report', 'new_deposit' dengan [refId] = id barisnya.
+  ///
+  /// Server MEMVERIFIKASI bahwa baris itu memang milik pemanggil (RLS lewat
+  /// JWT-nya) sebelum mengirim — aplikasi tidak bisa memicu email tentang
+  /// pesanan/laporan orang lain. Isi email dibangun server dari database.
+  /// Bila antrean `admin_email_outbox` sudah terpasang, baris sudah dimasukkan
+  /// trigger DB dan panggilan ini cukup menyapunya (tidak ada email dobel);
+  /// bila belum, email dikirim langsung agar notifikasi tetap sampai.
+  /// Fire-and-forget: gagal kirim tak pernah mengganggu alur utama aplikasi.
+  static Future<void> notifyAdminEvent(String event, String? refId) async {
+    if (refId == null || refId.isEmpty) return;
+    await _notifyWeb('/api/notify-admin-event', {'event': event, 'refId': refId});
+  }
+
+  /// POST JSON ke server web dengan Bearer token sesi. Fire-and-forget —
+  /// respons & kegagalan diabaikan supaya notifikasi tak pernah mengganggu
+  /// alur utama aplikasi.
+  static Future<void> _notifyWeb(String path, Map<String, dynamic> body) async {
     try {
       final token = db.auth.currentSession?.accessToken;
       if (token == null) return;
       await http
           .post(
-            Uri.parse('${AppConfig.webBaseUrl}/api/notify-job-release'),
+            Uri.parse('${AppConfig.webBaseUrl}$path'),
             headers: {
               'Content-Type': 'application/json',
               'Authorization': 'Bearer $token',
             },
-            body: jsonEncode({'bookingId': bookingId}),
+            body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 8));
       // respons diabaikan — notifikasi best-effort
