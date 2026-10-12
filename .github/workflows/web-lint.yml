@@ -75,6 +75,13 @@ jobs:
       - name: Verifikasi auth endpoint cron
         run: npm run verify:cron-auth
 
+      # Tautan Kebijakan Privasi & Syarat di footer diperiksa di sini karena
+      # kegagalannya juga senyap: halaman legalnya tetap hidup dan build tetap
+      # hijau walau tautannya terhapus dari footer — pengguna (dan peninjau
+      # OAuth Google) jadi tak bisa menemukannya. Statis, tanpa jaringan.
+      - name: Verifikasi tautan legal di footer
+        run: npm run verify:legal-links
+
       # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
       # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
       # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,

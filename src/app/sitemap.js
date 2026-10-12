@@ -16,6 +16,8 @@ export default async function sitemap() {
     { url: `${base}/panduan-pelanggan`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
     { url: `${base}/panduan-teknisi`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
     { url: `${base}/unduh`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
+    { url: `${base}/privasi`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
+    { url: `${base}/syarat`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
     { url: `${base}/login`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
     { url: `${base}/register`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
   ];
