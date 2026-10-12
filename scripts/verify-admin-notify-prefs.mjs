@@ -236,7 +236,7 @@ if (env) {
         before.error?.message || `${before.list.length}/${semua.length} admin`
       );
 
-      const { data: cekKolom, error: colErr } = await admin
+      const { data: prefRow, error: colErr } = await admin
         .from("admin_notification_optouts")
         .select("admin_id, event")
         .eq("admin_id", target.id)
@@ -244,8 +244,8 @@ if (env) {
         .maybeSingle();
       check(
         "admin yang akan diuji belum punya opt-out (uji bersih)",
-        !colErr && !cekKolom,
-        colErr?.message || (ceKolom ? "sudah ada opt-out" : "belum ada")
+        !colErr && !prefRow,
+        colErr?.message || (prefRow ? "sudah ada opt-out" : "belum ada")
       );
 
       let cleaned = false;
