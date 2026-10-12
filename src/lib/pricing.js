@@ -88,6 +88,35 @@ export function planBalanceCut({ balance = 0, commission = 0, fee = 0 } = {}) {
 }
 
 /**
+ * Potongan KOMISI riil dari satu baris ledger `balance_transactions`
+ * (type 'earning'). `commission_amount` menyimpan porsi komisi; bila kolom itu
+ * kosong (baris lama), seluruh |amount| dianggap komisi.
+ *
+ * SATU SUMBER untuk laporan admin (ringkasan keuangan & Saldo Aktif) agar
+ * angka komisi/biaya app tidak pernah berbeda antar tampilan.
+ */
+export function ledgerCommission(tx) {
+  const amt = Math.abs(Number(tx?.amount) || 0);
+  if (tx?.commission_amount == null) return amt;
+  return Math.max(0, Math.min(Number(tx.commission_amount) || 0, amt));
+}
+
+/**
+ * Porsi BIAYA APLIKASI yang ikut dipotong dari saldo teknisi pada satu baris
+ * ledger 'earning' = |amount| − komisi. 0 untuk baris yang bukan potongan
+ * (top-up, penarikan, penyesuaian) atau saat potongan sebagian hanya menutup
+ * komisi.
+ *
+ * Kebijakan platform: saat pesanan selesai, saldo dipotong KOMISI + BIAYA
+ * APLIKASI pelanggan (`bookings.app_fee`) — lihat src/lib/balance.js dan
+ * supabase/enforce-nonnegative-balance.sql.
+ */
+export function ledgerAppFee(tx) {
+  if (!(Number(tx?.amount) < 0)) return 0;
+  return Math.max(0, Math.abs(Number(tx.amount) || 0) - ledgerCommission(tx));
+}
+
+/**
  * Besar kekurangan saldo (positif) ketika saldo negatif; 0 bila tidak.
  * Dipakai UI teknisi untuk memasangkan saldo minimum Rp 0 dengan penjelasan
  * "komisi melebihi setoran".

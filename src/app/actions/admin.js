@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail, sendTechnicianBalanceReminderEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
-import { computeSplit, commissionBase } from "@/lib/pricing";
+import { computeSplit, commissionBase, ledgerCommission, ledgerAppFee } from "@/lib/pricing";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
 import { ICONS } from "@/lib/icons";
@@ -1102,6 +1102,83 @@ export async function getCompletedBookingsCsvAdmin() {
   return { csv: "\uFEFF" + lines.join("\r\n"), filename: `pesanan-selesai-${stamp}.csv`, count: rows.length };
 }
 
+/**
+ * CSV laporan potongan BIAYA APLIKASI dari saldo teknisi (tab Saldo Aktif).
+ * Satu baris per pesanan selesai yang benar-benar memotong biaya aplikasi,
+ * memakai rumus yang sama dengan tab (ledgerCommission/ledgerAppFee) supaya
+ * angka di panel & di ekspor tak pernah berbeda. Gaya sama dengan
+ * getCompletedBookingsCsvAdmin: pemisah ";" + BOM + baris ringkasan.
+ */
+export async function getAppFeeReportCsvAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: txs, error } = await supabase
+    .from("balance_transactions")
+    .select("id, technician_id, booking_id, type, amount, commission_amount, created_at")
+    .eq("type", "earning")
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    if (/relation .* does not exist|schema cache/i.test(error.message || "")) {
+      return { error: "Tabel saldo belum ada — jalankan supabase/migrate-technician-balance.sql dulu." };
+    }
+    return { error: error.message };
+  }
+
+  const rows = (txs || []).filter((t) => ledgerAppFee(t) > 0);
+  const profiles = await fetchProfilesByIds(supabase, rows.map((r) => r.technician_id));
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+
+  const codeById = new Map();
+  const bookingIds = [...new Set(rows.map((r) => r.booking_id).filter(Boolean))];
+  for (let i = 0; i < bookingIds.length; i += 150) {
+    const { data } = await supabase.from("bookings").select("id, code").in("id", bookingIds.slice(i, i + 150));
+    for (const b of data || []) codeById.set(b.id, b.code);
+  }
+
+  const headers = ["Waktu", "Kode Pesanan", "Teknisi", "Email Teknisi", "Potongan Saldo", "Komisi", "Biaya Aplikasi"];
+  const fmtDate = (iso) => (iso ? new Date(iso).toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) : "-");
+
+  let totalCut = 0;
+  let totalCommission = 0;
+  let totalAppFee = 0;
+  const lines = [headers.map(csvEscape).join(";")];
+
+  for (const r of rows) {
+    const commission = ledgerCommission(r);
+    const appFee = ledgerAppFee(r);
+    const cut = Math.abs(Number(r.amount) || 0);
+    totalCut += cut;
+    totalCommission += commission;
+    totalAppFee += appFee;
+    lines.push(
+      [
+        fmtDate(r.created_at),
+        codeById.get(r.booking_id) || "-",
+        byId.get(r.technician_id)?.name || "-",
+        byId.get(r.technician_id)?.email || "-",
+        cut,
+        commission,
+        appFee,
+      ]
+        .map(csvEscape)
+        .join(";")
+    );
+  }
+
+  lines.push("");
+  lines.push(["Jumlah potongan", rows.length].map(csvEscape).join(";"));
+  lines.push(["Total potongan saldo", totalCut].map(csvEscape).join(";"));
+  lines.push(["Total komisi", totalCommission].map(csvEscape).join(";"));
+  lines.push(["Total biaya aplikasi", totalAppFee].map(csvEscape).join(";"));
+  lines.push(["Diekspor", new Date().toLocaleString("id-ID")].map(csvEscape).join(";"));
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  return { csv: "\uFEFF" + lines.join("\r\n"), filename: `biaya-aplikasi-${stamp}.csv`, count: rows.length };
+}
+
 /* ========================= ARSIP LAPORAN BULANAN ========================= */
 
 /**
@@ -1522,22 +1599,13 @@ export async function getFinanceSummaryAdmin() {
   const pendingWd = wds.filter((w) => w.status === "pending");
 
   // Potongan tiap baris earning (amount < 0) = komisi + biaya app.
-  // Komisi dari commission_amount (fallback: seluruh |amount| bila null,
-  // konsisten dengan summarizeBalance di Flutter); sisanya biaya app.
-  const commissionOf = (t) => {
-    const amt = Math.abs(Number(t.amount) || 0);
-    return t.commission_amount == null ? amt : Number(t.commission_amount) || 0;
-  };
-  const appFeeOf = (t) => {
-    if (!(Number(t.amount) < 0)) return 0;
-    return Math.max(0, Math.abs(Number(t.amount) || 0) - commissionOf(t));
-  };
-
-  const totalCommission = sum(earnings, commissionOf);
-  const totalAppFee = sum(earnings, appFeeOf);
+  // Rumusnya SATU SUMBER di src/lib/pricing.js (ledgerCommission/ledgerAppFee)
+  // agar laporan ini, tab "Saldo Aktif", dan aplikasi tak pernah berbeda.
+  const totalCommission = sum(earnings, ledgerCommission);
+  const totalAppFee = sum(earnings, ledgerAppFee);
   const monthEarnings = earnings.filter(inMonth);
-  const monthCommission = sum(monthEarnings, commissionOf);
-  const monthAppFee = sum(monthEarnings, appFeeOf);
+  const monthCommission = sum(monthEarnings, ledgerCommission);
+  const monthAppFee = sum(monthEarnings, ledgerAppFee);
 
   const summary = {
     totalBalance: sum(balances, (b) => b.balance),
@@ -1628,7 +1696,9 @@ export async function getTechnicianBalancesAdmin() {
       .select("id, name, email, phone, balance, commission_rate, approval_status")
       .eq("role", "technician")
       .order("name", { ascending: true }),
-    supabase.from("balance_transactions").select("technician_id, type, amount, commission_amount"),
+    supabase
+      .from("balance_transactions")
+      .select("id, technician_id, type, amount, commission_amount, booking_id, created_at"),
     supabase.from("balance_withdrawals").select("technician_id, amount, status"),
   ]);
 
@@ -1644,29 +1714,173 @@ export async function getTechnicianBalancesAdmin() {
   const technicians = techs.map((t) => {
     const myTx = txs.filter((x) => x.technician_id === t.id);
     const myWd = wds.filter((x) => x.technician_id === t.id);
+    const earning = myTx.filter((x) => x.type === "earning");
     const topup = sum(myTx.filter((x) => x.type === "topup"), (x) => x.amount);
-    const commission = sum(myTx.filter((x) => x.type === "earning"), (x) => x.commission_amount);
+    // Komisi & biaya app dipisah dengan rumus bersama (src/lib/pricing.js):
+    // satu baris earning = |amount| = komisi + biaya app.
+    const commission = sum(earning, ledgerCommission);
+    const appFee = sum(earning, ledgerAppFee);
     const wdApproved = sum(myWd.filter((x) => x.status === "approved"), (x) => x.amount);
     const wdPending = sum(myWd.filter((x) => x.status === "pending"), (x) => x.amount);
     return {
       ...t,
       total_topup: topup,
       total_commission: commission,
+      total_app_fee: appFee,
       total_withdrawn: wdApproved,
       pending_withdraw: wdPending,
       available: Number(t.balance || 0) - wdPending,
     };
   });
 
+  // Laporan potongan biaya aplikasi: satu baris per pesanan selesai yang
+  // benar-benar memotong biaya app dari saldo teknisi (terbaru lebih dulu).
+  // Ditampilkan di dalam tab "Saldo Aktif" agar terkonsolidasi dengan komisi.
+  const REPORT_LIMIT = 200;
+  const feeRows = txs
+    .filter((x) => x.type === "earning" && ledgerAppFee(x) > 0)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const shown = feeRows.slice(0, REPORT_LIMIT);
+
+  const nameById = new Map(technicians.map((t) => [t.id, t.name || t.email || "-"]));
+  let codeById = new Map();
+  const bookingIds = [...new Set(shown.map((r) => r.booking_id).filter(Boolean))];
+  if (bookingIds.length) {
+    const { data: bks } = await supabase.from("bookings").select("id, code").in("id", bookingIds);
+    codeById = new Map((bks || []).map((b) => [b.id, b.code]));
+  }
+
+  const appFeeReport = shown.map((r) => ({
+    id: r.id,
+    created_at: r.created_at,
+    technician_id: r.technician_id,
+    technician_name: nameById.get(r.technician_id) || "-",
+    booking_code: codeById.get(r.booking_id) || null,
+    app_fee: ledgerAppFee(r),
+    total_cut: Math.abs(Number(r.amount) || 0),
+  }));
+
+  const summary = {
+    totalBalance: sum(technicians, (t) => t.balance),
+    totalAvailable: sum(technicians, (t) => t.available),
+    totalCommission: sum(technicians, (t) => t.total_commission),
+    totalAppFee: sum(technicians, (t) => t.total_app_fee),
+    totalTopup: sum(technicians, (t) => t.total_topup),
+    pendingHold: sum(technicians, (t) => t.pending_withdraw),
+    count: technicians.length,
+  };
+
   return {
     technicians,
+    appFeeReport,
+    appFeeReportTotal: {
+      count: feeRows.length,        // seluruh baris (bukan hanya yang ditampilkan)
+      shown: appFeeReport.length,
+      amount: sum(feeRows, ledgerAppFee),
+      limit: REPORT_LIMIT,
+    },
+    summary,
+  };
+}
+
+/* ========================== PENILAIAN TEKNISI ========================== */
+
+/** Ambil baris `profiles` untuk sekumpulan id (dipecah agar URL tetap pendek). */
+async function fetchProfilesByIds(supabase, ids) {
+  const unique = [...new Set((ids || []).filter(Boolean))];
+  const out = [];
+  for (let i = 0; i < unique.length; i += 150) {
+    const { data } = await supabase.from("profiles").select("id, name, email").in("id", unique.slice(i, i + 150));
+    if (data) out.push(...data);
+  }
+  return out;
+}
+
+/**
+ * Daftar penilaian teknisi untuk panel admin.
+ *
+ * Yang dicari admin: SIAPA yang menilai (nama pengguna), teknisi yang dinilai,
+ * bintang, isi ulasan, pesanan terkait, dan kapan dinilai — plus ringkasan
+ * (jumlah, rata-rata, sebaran bintang) dan rekap per teknisi.
+ *
+ * Join profil dilakukan manual (bukan embed FK) supaya tetap jalan walau
+ * tabel reviews dibuat lewat Table Editor dengan nama constraint berbeda.
+ */
+export async function getAllReviewsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: revs, error } = await supabase
+    .from("reviews")
+    .select("id, booking_id, user_id, technician_id, rating, comment, created_at")
+    .order("created_at", { ascending: false })
+    .limit(1000);
+
+  if (error) {
+    if (/relation .* does not exist|schema cache/i.test(error.message || "")) {
+      return { error: "Tabel reviews belum ada — jalankan supabase/migrate-reviews.sql dulu." };
+    }
+    return { error: error.message };
+  }
+
+  const rows = revs || [];
+  const profiles = await fetchProfilesByIds(supabase, rows.flatMap((r) => [r.user_id, r.technician_id]));
+  const byId = new Map(profiles.map((p) => [p.id, p]));
+
+  const codeById = new Map();
+  const bookingIds = [...new Set(rows.map((r) => r.booking_id).filter(Boolean))];
+  for (let i = 0; i < bookingIds.length; i += 150) {
+    const { data } = await supabase.from("bookings").select("id, code").in("id", bookingIds.slice(i, i + 150));
+    for (const b of data || []) codeById.set(b.id, b.code);
+  }
+
+  const reviews = rows.map((r) => ({
+    id: r.id,
+    rating: Number(r.rating) || 0,
+    comment: r.comment || null,
+    created_at: r.created_at,
+    booking_id: r.booking_id,
+    booking_code: codeById.get(r.booking_id) || null,
+    user_id: r.user_id,
+    user_name: byId.get(r.user_id)?.name || null,
+    user_email: byId.get(r.user_id)?.email || null,
+    technician_id: r.technician_id,
+    technician_name: byId.get(r.technician_id)?.name || null,
+    technician_email: byId.get(r.technician_id)?.email || null,
+  }));
+
+  const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  let sum = 0;
+  for (const r of reviews) {
+    if (r.rating >= 1 && r.rating <= 5) distribution[r.rating] += 1;
+    sum += r.rating;
+  }
+
+  const byTechMap = new Map();
+  for (const r of reviews) {
+    const e =
+      byTechMap.get(r.technician_id) ||
+      { technician_id: r.technician_id, name: r.technician_name || "-", count: 0, sum: 0, low: 0, lastAt: null };
+    e.count += 1;
+    e.sum += r.rating;
+    if (r.rating <= 2) e.low += 1;
+    if (!e.lastAt || new Date(r.created_at) > new Date(e.lastAt)) e.lastAt = r.created_at;
+    byTechMap.set(r.technician_id, e);
+  }
+  const byTechnician = [...byTechMap.values()]
+    .map((e) => ({ technician_id: e.technician_id, name: e.name, count: e.count, avg: e.sum / e.count, low: e.low, lastAt: e.lastAt }))
+    .sort((a, b) => b.count - a.count || String(a.name).localeCompare(String(b.name)));
+
+  return {
+    reviews,
+    byTechnician,
     summary: {
-      totalBalance: sum(technicians, (t) => t.balance),
-      totalAvailable: sum(technicians, (t) => t.available),
-      totalCommission: sum(technicians, (t) => t.total_commission),
-      totalTopup: sum(technicians, (t) => t.total_topup),
-      pendingHold: sum(technicians, (t) => t.pending_withdraw),
-      count: technicians.length,
+      count: reviews.length,
+      avg: reviews.length ? sum / reviews.length : 0,
+      distribution,
+      withComment: reviews.filter((r) => (r.comment || "").trim().length > 0).length,
+      lowRatings: reviews.filter((r) => r.rating <= 2).length,
     },
   };
 }

@@ -2,22 +2,73 @@
 
 import { useMemo, useState } from "react";
 import { formatRupiah, nonNegative } from "@/lib/pricing";
-import { Wallet, Search, TrendingDown, TrendingUp, Landmark, Loader2, Hourglass, AlertTriangle, Bell, Plus, X } from "lucide-react";
-import { addTechnicianBalanceAdmin, remindTechnicianBalanceAdmin } from "@/app/actions/admin";
+import { Wallet, Search, TrendingDown, TrendingUp, Landmark, Loader2, Hourglass, AlertTriangle, Bell, Plus, X, Receipt, ChevronDown, FileDown } from "lucide-react";
+import { addTechnicianBalanceAdmin, remindTechnicianBalanceAdmin, getAppFeeReportCsvAdmin } from "@/app/actions/admin";
+
+/**
+ * Peta kunci urut (nilai <option>) → nama kolom pada baris teknisi.
+ * Sebelumnya nilai opsi ("commission") tidak cocok dengan nama field
+ * ("total_commission") sehingga urutannya diam-diam tidak bekerja.
+ */
+const SORT_FIELDS = {
+  balance: "balance",
+  commission: "total_commission",
+  app_fee: "total_app_fee",
+  total_withdrawn: "total_withdrawn",
+  name: "name",
+};
 
 /**
  * Tab "Saldo Aktif" — ringkasan & rincian saldo per teknisi:
  *   balance (aktif), available (balance − penarikan ditahan),
- *   total setor, total komisi terpotong, total ditarik, penarikan pending.
+ *   total setor, total komisi terpotong, total BIAYA APLIKASI terpotong,
+ *   total ditarik, penarikan pending, plus laporan potongan biaya aplikasi
+ *   per pesanan selesai (terkonsolidasi di tab ini, bukan menu terpisah).
  * Data dimuat lewat server action (admin-only), bisa dicari & diurutkan.
  */
-export default function TechnicianBalancesTab({ initialTechnicians, initialError }) {
+export default function TechnicianBalancesTab({
+  initialTechnicians,
+  initialError,
+  initialAppFeeReport = [],
+  initialAppFeeTotal = null,
+}) {
   const [technicians, setTechnicians] = useState(initialTechnicians || []);
+  const [appFeeReport, setAppFeeReport] = useState(initialAppFeeReport || []);
+  const [appFeeTotal, setAppFeeTotal] = useState(initialAppFeeTotal);
   const [error, setError] = useState(initialError);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
-  const [sortKey, setSortKey] = useState("balance"); // balance | name | commission | withdrawn
+  const [sortKey, setSortKey] = useState("balance"); // balance | commission | app_fee | total_withdrawn | name
   const [needsAction, setNeedsAction] = useState(false); // saring saldo 0/minus
+  const [showReport, setShowReport] = useState(false); // laporan biaya aplikasi
+  const [csvLoading, setCsvLoading] = useState(false);
+
+  /** Unduh laporan potongan biaya aplikasi sebagai CSV (gaya ekspor admin lain). */
+  async function downloadCsv() {
+    setCsvLoading(true);
+    setToast("");
+    try {
+      const res = await getAppFeeReportCsvAdmin();
+      if (res?.error) {
+        setToast(`Gagal mengunduh CSV: ${res.error}`);
+        return;
+      }
+      const blob = new Blob([res.csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = res.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setToast(`CSV laporan biaya aplikasi diunduh (${res.count} baris).`);
+    } catch (e) {
+      setToast(`Gagal mengunduh CSV: ${e?.message || "kesalahan tak terduga"}`);
+    } finally {
+      setCsvLoading(false);
+    }
+  }
   const [adjustTech, setAdjustTech] = useState(null); // modal tambah saldo
   const [remindingId, setRemindingId] = useState(null);
   const [toast, setToast] = useState("");
@@ -30,6 +81,8 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
       if (res.error) setError(res.error);
       else {
         setTechnicians(res.technicians || []);
+        setAppFeeReport(res.appFeeReport || []);
+        setAppFeeTotal(res.appFeeReportTotal || null);
         setError(null);
       }
     } finally {
@@ -43,12 +96,24 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
         (!q || (t.name || "").toLowerCase().includes(q.toLowerCase()) || (t.email || "").toLowerCase().includes(q.toLowerCase())) &&
         (!needsAction || Number(t.balance) <= 0)
     );
-    const dir = sortKey === "name" ? 1 : -1;
+    const key = SORT_FIELDS[sortKey] || "balance";
+    const dir = key === "name" ? 1 : -1;
     return [...filtered].sort((a, b) => {
-      if (sortKey === "name") return (a.name || "").localeCompare(b.name || "") * dir;
-      return (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0);
+      if (key === "name") return (a.name || "").localeCompare(b.name || "") * dir;
+      return (Number(b[key]) || 0) - (Number(a[key]) || 0);
     });
   }, [technicians, q, sortKey, needsAction]);
+
+  // Laporan potongan biaya aplikasi mengikuti kotak pencarian yang sama.
+  const reportRows = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return appFeeReport;
+    return appFeeReport.filter(
+      (r) =>
+        (r.technician_name || "").toLowerCase().includes(s) ||
+        (r.booking_code || "").toLowerCase().includes(s)
+    );
+  }, [appFeeReport, q]);
 
   const summary = useMemo(() => {
     const sum = (f) => technicians.reduce((s, t) => s + Number(f(t) || 0), 0);
@@ -56,6 +121,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
       totalBalance: sum((t) => t.balance),
       totalAvailable: sum((t) => t.available),
       totalCommission: sum((t) => t.total_commission),
+      totalAppFee: sum((t) => t.total_app_fee),
       pendingHold: sum((t) => t.pending_withdraw),
       count: technicians.length,
       // Teknisi bersaldo minus (utang) — kartu ringkasan menampilkan Rp 0,
@@ -94,6 +160,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
     { icon: Wallet, label: "Total saldo aktif", value: nonNegative(summary.totalBalance), cls: "text-navy" },
     { icon: Landmark, label: "Siap ditarik (−ditahan)", value: nonNegative(summary.totalAvailable), cls: "text-mint" },
     { icon: TrendingDown, label: "Total komisi terpotong", value: summary.totalCommission, cls: "text-brand-deep" },
+    { icon: Receipt, label: "Biaya aplikasi terpotong", value: summary.totalAppFee, cls: "text-coral" },
     { icon: Hourglass, label: "Penarikan ditahan", value: summary.pendingHold, cls: "text-amber" },
   ];
 
@@ -119,7 +186,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
       )}
 
       {/* Ringkasan */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         {cards.map((c) => (
           <div key={c.label} className="card !p-4">
             <div className="flex items-center gap-2 text-ink-soft text-xs mb-1">
@@ -154,6 +221,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
         <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="input !w-auto text-sm">
           <option value="balance">Urut: saldo tertinggi</option>
           <option value="commission">Urut: komisi terbesar</option>
+          <option value="app_fee">Urut: biaya aplikasi terbesar</option>
           <option value="total_withdrawn">Urut: ditarik terbanyak</option>
           <option value="name">Urut: nama A-Z</option>
         </select>
@@ -181,6 +249,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
               <th className="px-4 py-3 font-semibold text-right">Siap ditarik</th>
               <th className="px-4 py-3 font-semibold text-right">Total setor</th>
               <th className="px-4 py-3 font-semibold text-right">Komisi terpotong</th>
+              <th className="px-4 py-3 font-semibold text-right">Biaya app</th>
               <th className="px-4 py-3 font-semibold text-right">Ditarik</th>
               <th className="px-4 py-3 font-semibold text-right">Ditahan</th>
               <th className="px-4 py-3 font-semibold text-center">Komisi</th>
@@ -189,7 +258,7 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-ink-soft">
+                <td colSpan={9} className="px-4 py-8 text-center text-ink-soft">
                   {technicians.length === 0 ? "Belum ada teknisi terdaftar." : "Tidak cocok dengan pencarian."}
                 </td>
               </tr>
@@ -238,6 +307,9 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
                   </td>
                   <td className="px-4 py-3 text-right text-ink-soft">{formatRupiah(t.total_topup)}</td>
                   <td className="px-4 py-3 text-right text-brand-deep">-{formatRupiah(t.total_commission)}</td>
+                  <td className="px-4 py-3 text-right text-coral">
+                    {Number(t.total_app_fee) > 0 ? `-${formatRupiah(t.total_app_fee)}` : "—"}
+                  </td>
                   <td className="px-4 py-3 text-right text-ink-soft">{formatRupiah(t.total_withdrawn)}</td>
                   <td className="px-4 py-3 text-right text-amber">{Number(t.pending_withdraw) > 0 ? formatRupiah(t.pending_withdraw) : "—"}</td>
                   <td className="px-4 py-3 text-center text-ink-soft">{Number(t.commission_rate ?? 0)}%</td>
@@ -251,6 +323,78 @@ export default function TechnicianBalancesTab({ initialTechnicians, initialError
       <p className="text-xs text-ink-soft mt-3">
         &quot;Siap ditarik&quot; = saldo aktif dikurangi penarikan yang masih diproses. Komisi + biaya aplikasi dipotong otomatis saat pesanan ditandai selesai. Saldo bisa minus bila komisi lampau melebihi setoran (utang teknisi) — kartu ringkasan menampilkan Rp 0 untuk nilai negatif.
       </p>
+
+      {/* Laporan potongan biaya aplikasi — satu tempat dengan saldo aktif */}
+      <div className="card !p-0 mt-5 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setShowReport((v) => !v)}
+            aria-expanded={showReport}
+            className="flex-1 min-w-0 flex items-center justify-between gap-3 text-left hover:opacity-80"
+          >
+            <span className="flex items-center gap-2 font-display font-semibold text-navy">
+              <Receipt size={16} className="text-coral" /> Laporan potongan biaya aplikasi
+            </span>
+            <span className="flex items-center gap-2 text-sm">
+              <strong className="font-display text-coral">{formatRupiah(appFeeTotal?.amount ?? summary.totalAppFee)}</strong>
+              <ChevronDown size={16} className={`text-ink-soft transition-transform ${showReport ? "rotate-180" : ""}`} />
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={downloadCsv}
+            disabled={csvLoading}
+            title="Unduh laporan potongan biaya aplikasi (CSV)"
+            className="btn-outline !px-3 !py-1.5 text-xs flex items-center gap-1.5 shrink-0"
+          >
+            {csvLoading ? <Loader2 size={13} className="animate-spin" /> : <FileDown size={13} />} CSV
+          </button>
+        </div>
+        {showReport && (
+          <div className="border-t border-line">
+            {reportRows.length === 0 ? (
+              <p className="px-4 py-8 text-center text-ink-soft text-sm">
+                {appFeeReport.length === 0
+                  ? "Belum ada potongan biaya aplikasi dari saldo teknisi."
+                  : "Tidak cocok dengan pencarian."}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-ink-soft border-b border-line">
+                      <th className="px-4 py-2.5 font-semibold">Waktu</th>
+                      <th className="px-4 py-2.5 font-semibold">Teknisi</th>
+                      <th className="px-4 py-2.5 font-semibold">Pesanan</th>
+                      <th className="px-4 py-2.5 font-semibold text-right">Potongan saldo</th>
+                      <th className="px-4 py-2.5 font-semibold text-right">Biaya aplikasi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportRows.map((r) => (
+                      <tr key={r.id} className="border-b border-line/60">
+                        <td className="px-4 py-2.5 text-ink-soft whitespace-nowrap">
+                          {new Date(r.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}
+                        </td>
+                        <td className="px-4 py-2.5 text-navy">{r.technician_name}</td>
+                        <td className="px-4 py-2.5 text-ink-soft">{r.booking_code || "—"}</td>
+                        <td className="px-4 py-2.5 text-right text-ink-soft">-{formatRupiah(r.total_cut)}</td>
+                        <td className="px-4 py-2.5 text-right font-semibold text-coral">-{formatRupiah(r.app_fee)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="px-4 py-2.5 text-xs text-ink-soft border-t border-line">
+              Menampilkan {appFeeReport.length} dari {appFeeTotal?.count ?? appFeeReport.length} baris terbaru · total biaya
+              aplikasi {formatRupiah(appFeeTotal?.amount ?? summary.totalAppFee)}. Biaya aplikasi = porsi potongan saldo selain
+              komisi (senilai biaya aplikasi pesanan), ikut dipotong saat pesanan ditandai selesai.
+            </p>
+          </div>
+        )}
+      </div>
       {adjustTech && (
         <AdjustBalanceModal technician={adjustTech} onClose={() => setAdjustTech(null)} onSubmit={submitAdjust} />
       )}
