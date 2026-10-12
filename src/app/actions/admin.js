@@ -188,6 +188,35 @@ export async function getAllBookingsAdmin() {
 
   const bookings = data || [];
 
+  // Rincian VOUCHER yang dipakai pada tiap pesanan.
+  // bookings hanya menyimpan `discount_amount`; kode/nilai/asal voucher ada di
+  // baris `vouchers` (kolom used_booking_id). Best-effort: kolom itu bisa belum
+  // ada di DB lama — kartu admin tetap tampil tanpa rincian.
+  try {
+    const ids = bookings.map((b) => b.id);
+    const byBooking = new Map();
+    for (let i = 0; i < ids.length; i += 150) {
+      const { data: used } = await supabase
+        .from("vouchers")
+        .select("code, amount, source, used_at, used_booking_id")
+        .in("used_booking_id", ids.slice(i, i + 150));
+      for (const v of used || []) byBooking.set(v.used_booking_id, v);
+    }
+    for (const b of bookings) {
+      const v = byBooking.get(b.id);
+      if (v) {
+        b.voucher = {
+          code: v.code,
+          amount: Number(v.amount) || 0,
+          source: v.source || null,
+          used_at: v.used_at || null,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn("[admin] rincian voucher pesanan dilewati:", e?.message);
+  }
+
   // Bucket bukti pembayaran kini PRIVAT (hasil audit) — kolom menyimpan path.
   // Tukar ke signed URL agar <img> admin tetap bisa menampilkan buktinya.
   const pathLike = bookings.filter((b) => b.payment_proof_url && !b.payment_proof_url.startsWith("http"));

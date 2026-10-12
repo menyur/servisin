@@ -534,9 +534,21 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
               </div>
               <div className="text-sm text-ink-soft grid sm:grid-cols-2 gap-x-6 gap-y-1 mb-3">
                 <span>Telepon: {b.profiles?.phone || "-"}</span>
-                <span>Email: {b.profiles?.email}</span>                  {Number(b.discount_amount) > 0 && (
+                <span>Email: {b.profiles?.email}</span>
+                {b.voucher ? (
+                  <span
+                    className="text-mint sm:col-span-2"
+                    title={`Voucher ${b.voucher.code} · ${voucherSourceLabel(b.voucher.source)}`}
+                  >
+                    Voucher: <strong className="font-semibold">{b.voucher.code}</strong> (− {" "}
+                    {formatRupiah(b.voucher.amount || Number(b.discount_amount) || 0)}) · {voucherSourceLabel(b.voucher.source)}
+                    {b.voucher.used_at
+                      ? ` · dipakai ${new Date(b.voucher.used_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}`
+                      : ""}
+                  </span>
+                ) : Number(b.discount_amount) > 0 ? (
                   <span className="text-mint">Diskon voucher: - {formatRupiah(b.discount_amount)}</span>
-                )}
+                ) : null}
                 {refPoint && bookingDist[b.id] != null && (() => {
                   const d = bookingDist[b.id];
                   return (
