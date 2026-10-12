@@ -320,6 +320,26 @@ export async function sendAdminNewApplicantEmail(adminEmails, a) {
   return sendMail({ to: adminEmails, subject: `Pendaftar teknisi baru: ${a.name} — Fixify`, html });
 }
 
+/** Ke semua admin: ada pendaftar PELANGGAN baru (tanpa kurasi, sekadar info). */
+export async function sendAdminNewCustomerEmail(adminEmails, a) {
+  const html = wrapper(
+    "Pelanggan baru mendaftar",
+    `
+      <p>Akun pelanggan baru dibuat di Fixify:</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Nama", `<strong>${escHtml(a.name)}</strong>`)}
+        ${detailRow("Email", escHtml(a.email))}
+        ${detailRow("No. HP (WhatsApp)", escHtml(a.phone) || "-")}
+        ${a.address ? detailRow("Alamat", escHtml(a.address).replace(/\n/g, "<br />")) : ""}
+        ${detailRow("Status akun", "Aktif — bisa langsung membuat pesanan")}
+      </table>
+      <p>Tidak ada tindakan yang wajib dilakukan. Buka panel Admin → tab "Pengguna" bila perlu melihat daftar akun.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Pelanggan baru: ${a.name} — Fixify`, html });
+}
+
 /** Escape HTML untuk konten dari input user (mis. alasan pelepasan tugas). */
 function escHtml(s) {
   return String(s ?? "")

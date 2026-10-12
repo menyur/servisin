@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { debitTechnicianCommission } from "@/lib/balance";
 import { sendAdminNewDepositEmail, sendAdminNewWithdrawalEmail } from "@/lib/email";
+import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
 
 const TECHNICIAN_ALLOWED_STATUSES = ["in_progress", "completed"];
 
@@ -70,18 +71,30 @@ export async function updateJobStatus(bookingId, status) {
 /* ========================= SALDO: SETOR / TOP-UP ========================= */
 
 /**
- * Kirim email notifikasi pengajuan saldo ke semua admin.
+ * Kirim email notifikasi pengajuan saldo ke admin PENERIMA peristiwa itu
+ * (pengaturan panel → tab "Notif Email Admin").
  * Fire-and-forget: kegagalan email tidak menggagalkan pengajuan.
+ *
+ * SETORAN memakai antrean bersama (src/lib/admin-email.js) karena trigger DB
+ * sudah mengantrekannya — kalau dikirim langsung juga, emailnya jadi DOBEL.
+ * PENARIKAN belum punya trigger di antrean, jadi selalu dikirim langsung.
  */
 async function notifyAdminsBalanceRequest(supabase, kind, payload) {
-  try {
-    const { data: adminEmails } = await supabase.rpc("get_admin_emails");
-    if (!adminEmails?.length) return;
-    if (kind === "deposit") await sendAdminNewDepositEmail(adminEmails, payload);
-    else await sendAdminNewWithdrawalEmail(adminEmails, payload);
-  } catch (err) {
-    console.error("Gagal notifikasi saldo ke admin:", err?.message);
-  }
+  const direct = async () => {
+    try {
+      const adminEmails = await adminEmailsForEvent(
+        supabase,
+        kind === "deposit" ? "new_deposit" : "new_withdrawal"
+      );
+      if (!adminEmails?.length) return;
+      if (kind === "deposit") await sendAdminNewDepositEmail(adminEmails, payload);
+      else await sendAdminNewWithdrawalEmail(adminEmails, payload);
+    } catch (err) {
+      console.error("Gagal notifikasi saldo ke admin:", err?.message);
+    }
+  };
+  if (kind === "deposit") return notifyAdminsOrDirect(supabase, direct);
+  return direct();
 }
 
 /**

@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { sendAdminNewReportEmail } from "@/lib/email";
+import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
 
 /**
  * Laporan dari pelanggan: bebas (umum) atau terkait satu pesanan.
@@ -145,13 +146,15 @@ export async function submitTechnicianReport({ bookingId, title, content }) {
  * kegagalan email tidak boleh menggagalkan laporan yang sudah tersimpan.
  */
 async function notifyAdminsNewReport(supabase, payload) {
-  try {
-    const { data: adminEmails } = await supabase.rpc("get_admin_emails");
+  // Antrean bersama (src/lib/admin-email.js): jalur web & aplikasi memakai
+  // aturan identik, dan email tidak terkirim dua kali saat trigger DB sudah
+  // mengantrekan peristiwa ini.
+  await notifyAdminsOrDirect(supabase, async () => {
+    // Penerima mengikuti pengaturan panel admin untuk peristiwa "laporan baru".
+    const adminEmails = await adminEmailsForEvent(supabase, "new_report");
     if (!adminEmails?.length) return;
     await sendAdminNewReportEmail(adminEmails, payload);
-  } catch (err) {
-    console.error("Gagal notifikasi laporan ke admin:", err.message);
-  }
+  });
 }
 
 /**

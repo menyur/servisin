@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { calculateTotal, genBookingCode } from "@/lib/pricing";
 import { createPaymentTransaction } from "@/lib/payment";
 import { sendBookingConfirmationEmail, sendAdminNewBookingEmail, sendAdminPaymentProofEmail } from "@/lib/email";
+import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
 import { revalidatePath } from "next/cache";
 
 export async function createBooking(input) {
@@ -210,8 +211,16 @@ async function finishBookingCreation(supabase, { booking, service, profile, user
     total_price: booking.total_price,
   });
 
-  const { data: adminEmails } = await supabase.rpc("get_admin_emails");
-  if (adminEmails?.length) {
+  // Email ke semua admin: "ada pesanan baru masuk".
+  // Lewat antrean bersama (src/lib/admin-email.js) supaya jalur WEB dan APLIKASI
+  // memakai aturan identik dan tidak pernah mengirim dua kali: bila migrasi
+  // admin_email_outbox sudah dijalankan, trigger DB yang mengantrekan dan di
+  // sini cukup menyapu antrean.
+  await notifyAdminsOrDirect(supabase, async () => {
+    // Penerima mengikuti pengaturan panel admin untuk peristiwa "pesanan baru"
+    // (RPC menyaring admin yang mematikannya; sebelum migrasi = semua admin).
+    const adminEmails = await adminEmailsForEvent(supabase, "new_booking");
+    if (!adminEmails?.length) return;
     await sendAdminNewBookingEmail(adminEmails, {
       code: booking.code,
       service_name: service.name,
@@ -223,7 +232,7 @@ async function finishBookingCreation(supabase, { booking, service, profile, user
       payment_method: booking.payment_method,
       total_price: booking.total_price,
     });
-  }
+  });
 
   revalidatePath("/dashboard");
 

@@ -4,7 +4,8 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
-import { sendAdminNewApplicantEmail } from "@/lib/email";
+import { sendAdminNewApplicantEmail, sendAdminNewCustomerEmail } from "@/lib/email";
+import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
 
 export async function signUp(prevState, formData) {
   const name = formData.get("name");
@@ -61,25 +62,33 @@ export async function signUp(prevState, formData) {
     return { error: friendly };
   }
 
-  // Pendaftar teknisi baru → email ke semua admin (fire-and-forget:
-  // kegagalan email tidak boleh menggagalkan pendaftaran).
-  if (role === "technician") {
-    try {
-      const { data: adminEmails } = await supabase.rpc("get_admin_emails");
-      if (adminEmails?.length) {
-        await sendAdminNewApplicantEmail(adminEmails, {
-          name,
-          email,
-          phone,
-          address,
-          skill: skill || "-",
-          ktpUrl,
-        });
-      }
-    } catch (err) {
-      console.error("Gagal email pendaftar baru:", err?.message || err);
+  // Akun baru (teknisi maupun pelanggan) → email ke semua admin.
+  // Jalur resminya ANTREAN BERSAMA (src/lib/admin-email.js) yang dipicu trigger
+  // DB saat baris profiles dibuat — sehingga ketiga jalur (web, aplikasi,
+  // Google OAuth) tercakup dan tidak pernah dobel. Blok di bawah hanya dipakai
+  // sebagai fallback bila migrasi admin_email_outbox belum dijalankan.
+  // Fire-and-forget: kegagalan email tidak boleh menggagalkan pendaftaran.
+  await notifyAdminsOrDirect(supabase, async () => {
+    // Penerima dibedakan per jenis pendaftaran (teknisi vs pelanggan) sesuai
+    // pengaturan panel admin; sebelum migrasi = semua admin.
+    const adminEmails = await adminEmailsForEvent(
+      supabase,
+      role === "technician" ? "new_technician" : "new_customer"
+    );
+    if (!adminEmails?.length) return;
+    if (role === "technician") {
+      await sendAdminNewApplicantEmail(adminEmails, {
+        name,
+        email,
+        phone,
+        address,
+        skill: skill || "-",
+        ktpUrl,
+      });
+    } else {
+      await sendAdminNewCustomerEmail(adminEmails, { name, email, phone, address });
     }
-  }
+  });
 
   redirect(nextPath || "/dashboard");
 }

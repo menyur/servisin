@@ -618,7 +618,10 @@ class Api {
     if (map['error'] != null) {
       throw Exception(map['error']);
     }
-    return Booking.fromMap((map['booking'] as Map).cast<String, dynamic>());
+    final booking = Booking.fromMap((map['booking'] as Map).cast<String, dynamic>());
+    // Email ke semua admin: "ada pesanan baru masuk".
+    unawaited(notifyAdminEvent('new_booking', booking.id));
+    return booking;
   }
 
   /// Daftar pesanan milik user (join layanan + teknisi), terbaru dulu.
@@ -845,14 +848,24 @@ class Api {
           .maybeSingle();
       if (own != null) authorRole = 'technician';
     }
-    await db.from('reports').insert({
-      'author_id': uid,
-      'author_role': authorRole,
-      'title': title,
-      'content': content,
-      if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
-      if (attachmentPath != null) 'attachment_url': attachmentPath,
-    });
+    // `.select('id')` (tanpa `.single()`) supaya INSERT tetap gagal keras bila
+    // ditolak, tapi id-nya bisa dibawa ke notifikasi admin. Bila baris tak
+    // terbaca-balik (policy select belum ada), notifikasi saja yang dilewati.
+    final inserted = await db
+        .from('reports')
+        .insert({
+          'author_id': uid,
+          'author_role': authorRole,
+          'title': title,
+          'content': content,
+          if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
+          if (attachmentPath != null) 'attachment_url': attachmentPath,
+        })
+        .select('id');
+    // Email ke semua admin: ada laporan baru (server verifikasi kepemilikan).
+    if (inserted.isNotEmpty) {
+      unawaited(notifyAdminEvent('new_report', inserted.first['id'] as String?));
+    }
   }
 
   // ============ saldo teknisi ============
@@ -986,13 +999,21 @@ class Api {
       extension: 'jpg',
     );
 
-    await db.from('balance_deposits').insert({
-      'technician_id': uid,
-      'amount': amount,
-      'claimed_amount': amount,
-      'proof_url': path, // simpan PATH (bucket privat); admin lihat via signed URL
-      'status': 'pending',
-    });
+    final inserted = await db
+        .from('balance_deposits')
+        .insert({
+          'technician_id': uid,
+          'amount': amount,
+          'claimed_amount': amount,
+          'proof_url': path, // simpan PATH (bucket privat); admin lihat via signed URL
+          'status': 'pending',
+        })
+        .select('id');
+    // Email ke semua admin: teknisi mengajukan setor saldo (server verifikasi
+    // bahwa baris ini memang milik teknisi yang memanggil).
+    if (inserted.isNotEmpty) {
+      unawaited(notifyAdminEvent('new_deposit', inserted.first['id'] as String?));
+    }
     return path;
   }
 
