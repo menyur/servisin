@@ -290,11 +290,11 @@ export async function submitPaymentProof({ bookingId, proofUrl, amount }) {
     return { error: error.message };
   }
 
-  // email ke semua admin: bukti menunggu verifikasi (fire-and-forget)
+  // email ke admin penerima peristiwa "bukti pembayaran" (fire-and-forget)
   try {
-    const [{ data: profile }, { data: adminEmails }] = await Promise.all([
+    const [{ data: profile }, adminEmails] = await Promise.all([
       supabase.from("profiles").select("name, phone").eq("id", user.id).single(),
-      supabase.rpc("get_admin_emails"),
+      adminEmailsForEvent(supabase, "payment_proof"),
     ]);
     if (adminEmails?.length) {
       sendAdminPaymentProofEmail(adminEmails, {

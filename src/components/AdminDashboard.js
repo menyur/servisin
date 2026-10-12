@@ -26,7 +26,7 @@ import {
 } from "@/app/actions/admin";
 import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import LocationPickerMap from "@/components/LocationPickerMap";
@@ -36,6 +36,7 @@ import TechnicianReviewsTab from "@/components/TechnicianReviewsTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import PaymentSettingsTab from "@/components/PaymentSettingsTab";
+import AdminNotifyRecipientsTab from "@/components/AdminNotifyRecipientsTab";
 import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
@@ -412,6 +413,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
         <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
+        <TabButton active={tab === "notify-recipients"} onClick={() => setTab("notify-recipients")} icon={Mail} label="Notif Email Admin" />
       </div>
 
       {tab === "bookings" && (
@@ -926,6 +928,8 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       {tab === "banners" && <BannerAdminTab banners={initialBanners} bannersError={bannersError} />}
 
       {tab === "pay-settings" && <PaymentSettingsTab />}
+
+      {tab === "notify-recipients" && <AdminNotifyRecipientsTab />}
     </div>
   );
 }

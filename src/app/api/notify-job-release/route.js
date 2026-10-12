@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { sendPushToUser } from "@/lib/notify";
 import { offerReleasedJobToNearestTechnicians } from "@/lib/job-offer";
 import { sendAdminJobReleaseEmail } from "@/lib/email";
+import { adminEmailsForEvent } from "@/lib/admin-email";
 
 export const dynamic = "force-dynamic";
 
@@ -101,12 +102,12 @@ export async function POST(request) {
       console.warn("[notify-job-release] push admin gagal:", e?.message);
     }
 
-    // 2) Email ke semua admin lewat RPC security definer (dipakai juga cron laporan).
+    // 2) Email ke admin PENERIMA peristiwa "teknisi melepas tugas" — penyaring
+    //    pengaturan panel admin (RPC admin_emails_for_event); tanpa migrasi
+    //    pengaturan = semua admin seperti sebelumnya.
     let emailed = 0;
     try {
-      const { data: emails, error: rpcErr } = await createAdminClient().rpc("get_admin_emails");
-      if (rpcErr) throw new Error(rpcErr.message);
-      const list = (emails || []).filter(Boolean);
+      const list = await adminEmailsForEvent(createAdminClient(), "job_release");
       if (list.length > 0) {
         await sendAdminJobReleaseEmail(list, {
           code,

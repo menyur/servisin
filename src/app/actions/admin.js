@@ -9,6 +9,7 @@ import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balanc
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
+import { ADMIN_NOTIFY_EVENTS, ADMIN_NOTIFY_EVENT_KEYS } from "@/lib/admin-notify-events";
 
 // Nama ikon yang boleh dipakai layanan baru (validasi server-side).
 const ICON_NAMES = Object.keys(ICONS);
@@ -2093,4 +2094,117 @@ export async function savePaymentSettingsAdmin({ bank, number, name }) {
 
   revalidatePath("/admin");
   return { ok: true };
+}
+
+/* ================== PENERIMA NOTIFIKASI EMAIL ADMIN ================== */
+
+/**
+ * Setelan penerima email per peristiwa (tab "Notif Email Admin").
+ *
+ * Tabel `admin_notification_optouts` hanya menyimpan pasangan (admin, peristiwa)
+ * yang DIMATIKAN — tanpa baris berarti admin menerima peristiwa itu. Jadi admin
+ * baru & peristiwa baru otomatis menerima notifikasi (perilaku lama) sampai ada
+ * yang mematikannya. RPC admin_emails_for_event() di database memakai aturan
+ * yang sama, sehingga jalur web & jalur antrean tidak bisa berbeda.
+ *
+ * Tabel belum ada (migrasi belum dijalankan) → tetap kembalikan daftar admin
+ * dengan `warning`, bukan error, supaya tab bisa dibuka dan menjelaskan caranya.
+ */
+export async function getAdminNotificationSettingsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: adminRows, error: adminsErr } = await supabase
+    .from("profiles")
+    .select("id, name, email")
+    .eq("role", "admin")
+    .order("name", { ascending: true });
+  if (adminsErr) return { error: adminsErr.message };
+
+  const admins = (adminRows || []).map((a) => ({
+    id: a.id,
+    name: a.name || "-",
+    email: (a.email || "").trim(),
+  }));
+
+  // select GET (bukan { head: true }) supaya tabel-tidak-ada benar-benar error.
+  const { data: rows, error: tableErr } = await supabase
+    .from("admin_notification_optouts")
+    .select("admin_id, event");
+  if (tableErr) {
+    return {
+      admins,
+      events: ADMIN_NOTIFY_EVENTS,
+      optouts: [],
+      warning:
+        "Tabel pengaturan belum ada — saat ini SEMUA admin menerima SEMUA email. Jalankan " +
+        "supabase/migrate-admin-notification-prefs.sql di Supabase SQL Editor untuk mengaktifkan pengaturan ini.",
+    };
+  }
+
+  return {
+    admins,
+    events: ADMIN_NOTIFY_EVENTS,
+    optouts: (rows || []).map((r) => ({ adminId: r.admin_id, event: r.event })),
+  };
+}
+
+/**
+ * Simpan setelan penerima: menerima daftar pasangan (admin, peristiwa) yang
+ * DIMATIKAN, lalu mengganti seluruh isi tabel untuk admin yang tampil di panel.
+ * Hanya id admin asli & kunci peristiwa yang dikenal yang diterima (validasi
+ * server-side), jadi klien tidak bisa menyisipkan baris sembarangan.
+ */
+export async function saveAdminNotificationSettingsAdmin({ optouts } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: adminRows, error: adminsErr } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("role", "admin");
+  if (adminsErr) return { error: adminsErr.message };
+  const adminIds = (adminRows || []).map((r) => r.id);
+  const validIds = new Set(adminIds);
+
+  const wanted = [];
+  const seen = new Set();
+  for (const o of Array.isArray(optouts) ? optouts : []) {
+    const adminId = String(o?.adminId || "");
+    const event = String(o?.event || "");
+    if (!validIds.has(adminId) || !ADMIN_NOTIFY_EVENT_KEYS.includes(event)) continue;
+    const dedupe = `${adminId}:${event}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+    wanted.push({ admin_id: adminId, event });
+  }
+
+  // Deteksi migrasi belum jalan SEBELUM menghapus apa pun.
+  const { error: tableErr } = await supabase
+    .from("admin_notification_optouts")
+    .select("admin_id")
+    .limit(1);
+  if (tableErr) {
+    return {
+      error:
+        "Tabel pengaturan belum ada — jalankan supabase/migrate-admin-notification-prefs.sql di Supabase SQL Editor dulu.",
+    };
+  }
+
+  if (adminIds.length > 0) {
+    const { error: delErr } = await supabase
+      .from("admin_notification_optouts")
+      .delete()
+      .in("admin_id", adminIds);
+    if (delErr) return { error: delErr.message };
+  }
+  if (wanted.length > 0) {
+    const { error: insErr } = await supabase.from("admin_notification_optouts").insert(wanted);
+    if (insErr) return { error: insErr.message };
+  }
+
+  revalidatePath("/admin");
+  return { ok: true, muted: wanted.length };
 }
