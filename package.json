@@ -29,6 +29,8 @@
     "verify:fonts": "node scripts/verify-font-family.mjs",
     "verify:fcm": "node scripts/verify-fcm-init.mjs",
     "verify:notif-env": "node scripts/verify-notif-env.mjs",
+    "verify:email-env": "node scripts/verify-email-env.mjs",
+    "verify:email-send": "node scripts/verify-email-send.mjs",
     "verify:legal-links": "node scripts/verify-legal-links.mjs",
     "verify:cron-auth": "node scripts/verify-cron-auth.mjs",
     "verify:booking-status": "node scripts/verify-booking-status-notify.mjs",

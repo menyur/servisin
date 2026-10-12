@@ -18,17 +18,31 @@ async function sendMail({ to, subject, html, attachments }) {
   try {
     const { Resend } = await import("resend");
     const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
+    // PENTING: SDK resend TIDAK melempar untuk error API (kunci salah, domain
+    // pengirim belum terverifikasi, penerima ditolak) — ia mengembalikan
+    // `{ data, error }`. Sebelum ini hasilnya diabaikan sehingga pengiriman yang
+    // GAGAL dilaporkan sebagai sukses: baris antrean ikut ditandai terkirim dan
+    // email hilang tanpa jejak. Kembalikan `error` supaya pemanggil
+    // (drainAdminEmailOutbox) menahan baris untuk dicoba ulang.
+    const { data, error } = await resend.emails.send({
       from: process.env.EMAIL_FROM || "Fixify <onboarding@resend.dev>",
       to,
       subject,
       html,
       ...(attachments?.length ? { attachments } : {}),
     });
-    return { simulated: false };
+    if (error) {
+      const detail = `${error.name || "error"}: ${error.message || "tanpa pesan"}`;
+      console.error("Gagal mengirim email:", detail);
+      return { simulated: false, error: detail };
+    }
+    // `id` dipakai uji verify:email-send untuk membuktikan Resend benar-benar
+    // MENERIMA pesannya (bukan sekadar env terbaca).
+    return { simulated: false, id: data?.id };
   } catch (err) {
+    // Kegagalan jaringan/import — tidak terkirim, tapi bukan "simulasi".
     console.error("Gagal mengirim email:", err.message);
-    return { simulated: true, error: err.message };
+    return { simulated: false, error: err.message };
   }
 }
 
