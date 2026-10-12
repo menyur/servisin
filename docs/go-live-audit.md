@@ -1,5 +1,9 @@
 # Audit End-to-End Siap Produksi — Fixify
 
+> **Daftar periksa rilis:** langkah operasional menuju publik (env, webhook, domain, legal,
+> runbook hari-H, rollback) ada di [go-live-checklist.md](./go-live-checklist.md).
+> Dokumen ini fokus pada **hasil audit keamanan** (temuan F1–F10).
+
 Tanggal: 8 Oktober 2026
 Metode: audit statis SQL/kode (web `src/` + Flutter) + **probe live** ke Supabase produksi (`sgxlnhzezknmdhefsvvu`) + `npx next build`.
 Catatan metode: ronde 1–2 memakai probe **read-only** (kunci anon). Sejak ronde 3, sebagian pemeriksaan bersifat **tulis-lalu-hapus**: probe realtime dan probe F3–F6 membuat baris/akun uji sementara, memverifikasi perilaku nyata, lalu menghapusnya lagi dalam satu perintah yang sama — di akhir setiap run dilaporkan sisa baris (`0`) dan akun uji terhapus. Tidak ada data pengguna nyata yang diubah.
