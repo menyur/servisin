@@ -10,8 +10,8 @@ Supabase project yang sama dengan web. Kode UI full Dart — tidak ada WebView.
 | Login / Daftar / Lupa sandi | Autentikasi Supabase, metadata `name/phone/address/role` (paritas dengan web) |
 | Beranda | Kategori + katalog layanan dari DB, pencarian, filter kategori, harga & durasi |
 | Wizard Booking (3 langkah) | Varian layanan (mis. ukuran PK), catatan + foto keluhan, tanggal & slot jam `08:00-17:00`, 4 metode bayar, voucher, ringkasan biaya (subtotal + biaya aplikasi 5rb − diskon) |
-| Pesanan | Daftar + filter status, badge pipeline, penanda bukti ditolak |
-| Detail Pesanan | Alur status, kirim/kirim-ulang bukti bayar (foto + nominal, bucket privat `payment-proofs`), alasan penolakan admin, form penilaian teknisi (bintang + ulasan), buat laporan terkait pesanan |
+| Pesanan | Daftar + filter status, badge pipeline, penanda bukti ditolak (**hanya untuk pesanan milik sendiri** — teknisi tak melihat status bukti pelanggan) |
+| Detail Pesanan | Alur status, kirim/kirim-ulang bukti bayar (foto + nominal, bucket privat `payment-proofs`), alasan penolakan admin — keduanya **khusus pelanggan pemilik pesanan**, form penilaian teknisi (bintang + ulasan), buat laporan terkait pesanan |
 | Laporan | Daftar laporan + status + catatan admin, form buat laporan (judul, isi, kaitkan pesanan, lampiran) |
 | Voucher | Voucher aktif + peringatan masa berlaku < 7 hari |
 | Profil | Edit nama/HP/alamat, keluar |
@@ -77,4 +77,16 @@ lib/
 Aplikasi ini memakai tabel, bucket, dan RLS yang sudah ada di project Supabase:
 `profiles`, `categories`, `services`, `service_options`, `bookings` (+ kolom bukti bayar),
 `vouchers`, `reviews`, `reports`; bucket `payment-proofs` & `attachments` (privat).
-Tidak ada migrasi baru yang dibutuhkan.
+
+Notifikasi **email ke admin** dikirim oleh server web, bukan aplikasi. Setelah membuat
+pesanan/laporan/setoran, aplikasi memanggil `/api/notify-admin-event` (fire-and-forget);
+server memverifikasi bahwa barisnya milik pemanggil lalu mengirim email ke semua admin —
+jadi jalur ini bekerja **tanpa** penyiapan database tambahan. Untuk peristiwa yang tidak
+punya sesi (**pendaftaran akun**), jalurnya trigger DB: jalankan
+[../supabase/migrate-admin-email-outbox.sql](../supabase/migrate-admin-email-outbox.sql)
+sekali di SQL Editor web. Tidak ada perubahan kode aplikasi lain yang diperlukan.
+
+Admin juga bisa memilih **admin mana** yang menerima tiap jenis email itu (panel Admin → tab
+"Notif Email Admin", aktif setelah [../supabase/migrate-admin-notification-prefs.sql](../supabase/migrate-admin-notification-prefs.sql)
+dijalankan). Pengaturan itu murni sisi server — aplikasi tetap mengirim peristiwa yang sama,
+apa pun pilihan penerimanya.

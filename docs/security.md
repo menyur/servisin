@@ -24,6 +24,8 @@ Diverifikasi lewat audit (Sep 2026) — commit `c8b1e22` + `b474fc6`.
 | Katalog publik (categories, services, service_options, reviews, teknisi profil) | `for select using (true)` — hanya SELECT, INSERT/UPDATE tetap ketat |
 | Tabel admin-only (laporan bulanan) | SELECT admin saja |
 
+**Jebakan UI yang pernah jadi bug (penting):** policy `technician_id = auth.uid()` membuat teknisi bisa **membaca** baris pesanan yang ditugaskan — dan aplikasi Flutter memakai layar kartu/detail yang SAMA untuk pelanggan dan teknisi (`OrdersScreen`, `OrderDetailScreen`). Akibatnya, elemen yang hanya untuk pelanggan (peringatan "bukti pembayaran ditolak", tombol kirim/kirim ulang bukti, alasan penolakan) ikut muncul di aplikasi teknisi. **RLS tidak cukup** — UI harus memeriksa kepemilikan secara eksplisit lewat `Booking.isOwnedBy(uid)` (uid dari `Api.currentUserId`, dengan seam `currentUserId` untuk test). Periksa juga jalur aksinya (mis. `_uploadProof`) sebagai pengaman lapis kedua.
+
 File referensi: `supabase/schema.sql` + `supabase/fix-*.sql` / `supabase/migrate-*.sql` (idempoten, dijalankan lewat SQL Editor).
 
 **Booking publik?** Tidak ada select bebas ke tabel `bookings`. Fitur "Lacak Pesanan" lewat satu function security definer yang hanya menerima kode & mengembalikan kolom aman:
@@ -36,6 +38,8 @@ security definer set search_path = public
 ```
 
 Menambah jalur publik baru? Ikuti pola ini — function security definer yang mengembalikan kolom minimal, bukan policy select terbuka.
+
+**Penerima notifikasi admin per peristiwa.** Tabel `admin_notification_optouts` (migrasi [supabase/migrate-admin-notification-prefs.sql](../supabase/migrate-admin-notification-prefs.sql)) memakai policy `for all using (public.is_admin())` — hanya admin yang bisa membaca/mengubahnya. Penyaring penerimanya `admin_emails_for_event(p_event)` adalah function `security definer` yang **hanya mengembalikan alamat email** (sama seperti `get_admin_emails()` yang sudah ada), bukan data profil lain, jadi tidak menambah paparan baru. RPC worker antrean (`take_admin_email_batch`, `complete_admin_email`) tetap **hanya** service role.
 
 ---
 

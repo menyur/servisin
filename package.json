@@ -29,7 +29,14 @@
     "verify:fonts": "node scripts/verify-font-family.mjs",
     "verify:fcm": "node scripts/verify-fcm-init.mjs",
     "verify:notif-env": "node scripts/verify-notif-env.mjs",
-    "verify:cron-auth": "node scripts/verify-cron-auth.mjs"
+    "verify:cron-auth": "node scripts/verify-cron-auth.mjs",
+    "verify:booking-status": "node scripts/verify-booking-status-notify.mjs",
+    "verify:app-fee": "node scripts/verify-app-fee-split.mjs",
+    "verify:review-voucher": "node scripts/verify-review-voucher.mjs",
+    "verify:job-target": "node scripts/verify-job-target-fallback.mjs",
+    "verify:admin-email": "node scripts/verify-admin-email.mjs",
+    "verify:admin-notify-prefs": "node scripts/verify-admin-notify-prefs.mjs",
+    "verify:order-voucher": "node scripts/verify-order-voucher-detail.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
