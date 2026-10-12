@@ -22,7 +22,7 @@
  * boleh menggagalkan pelepasan tugas.
  */
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { technicianReceivesJob } from "./skill-match.js";
+import { selectJobTargets } from "./skill-match.js";
 import { sendPushToUser } from "./notify.js";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -145,14 +145,16 @@ export async function offerReleasedJobToNearestTechnicians(
       }
     }
 
-    const cocok = techs.filter(
-      (t) =>
-        t.id !== excludeUserId &&
-        technicianReceivesJob(t, {
-          categoryId: serviceCategory,
-          categoryName: serviceCategoryName,
-          address: booking?.address,
-        })
+    // Fail-open berlapis (area+keahlian → keahlian → semua) — paritas dengan
+    // broadcast "pekerjaan baru" (push.js/fcm.js) supaya tugas yang dilepas
+    // tidak menggantung tanpa penawaran saat alamat tak memuat nama area.
+    const { targets: cocok } = selectJobTargets(
+      techs.filter((t) => t.id !== excludeUserId),
+      {
+        categoryId: serviceCategory,
+        categoryName: serviceCategoryName,
+        address: booking?.address,
+      }
     );
     if (!cocok.length) return { offered: 0, matched: 0 };
 

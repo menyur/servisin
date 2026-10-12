@@ -24,7 +24,7 @@
  * dibaca dari luar lewat [fcmReadiness] serta npm run verify:fcm.
  */
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { technicianReceivesJob } from "./skill-match.js";
+import { selectJobTargets } from "./skill-match.js";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -293,13 +293,14 @@ export async function sendFcmToTechniciansNewJob(
 
   // Area + keahlian lewat satu helper bersama (src/lib/skill-match.js) supaya
   // web-push, FCM, klien Flutter, dan probe E2E tak pernah berbeda aturan.
-  const targets = techs.filter((t) =>
-    technicianReceivesJob(t, {
-      categoryId: serviceCategory,
-      categoryName: serviceCategoryName,
-      address: booking.address,
-    })
-  );
+  // Fail-open berlapis (area+keahlian → keahlian → semua) — paritas penuh
+  // dengan web-push; tanpa ini pesanan ber-alamat tanpa nama area tidak
+  // sampai ke teknisi mana pun.
+  const { targets } = selectJobTargets(techs, {
+    categoryId: serviceCategory,
+    categoryName: serviceCategoryName,
+    address: booking.address,
+  });
 
   const label = serviceName || "Layanan";
   const loc = (booking.address || "").trim();

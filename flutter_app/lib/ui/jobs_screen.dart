@@ -366,7 +366,7 @@ class _JobsScreenState extends State<JobsScreen> {
     // kategori layanan pesanan harus = profiles.skill teknisi.
     final skill = (_profile?.skill ?? '').trim();
     final hasSkill = skill.isNotEmpty;
-    final filtered = jobs.where((j) {
+    final strictFiltered = jobs.where((j) {
       if (hasArea && !_showAllAreas && !j.address.toLowerCase().contains(area)) {
         return false;
       }
@@ -379,6 +379,16 @@ class _JobsScreenState extends State<JobsScreen> {
       }
       return true;
     }).toList(growable: false);
+
+    // FAIL-OPEN (paritas server, src/lib/skill-match.js::selectJobTargets):
+    // penyaringan area/keahlian mencocokkan TEKS. Bila alamat pelanggan tidak
+    // memuat nama area teknisi, hasilnya kosong dan pekerjaan seolah hilang —
+    // padahal server tetap mengirim notifikasi sebagai cadangan. Daftar ini
+    // memakai aturan yang sama agar notifikasi itu ada isinya.
+    final fallbackAktif = strictFiltered.isEmpty &&
+        jobs.isNotEmpty &&
+        ((hasArea && !_showAllAreas) || (hasSkill && !_showAllSkills));
+    final filtered = fallbackAktif ? jobs : strictFiltered;
 
     final filterBar = (hasArea || hasSkill)
         ? _AreaFilterBar(
@@ -393,6 +403,9 @@ class _JobsScreenState extends State<JobsScreen> {
             shown: filtered.length,
             total: jobs.length,
             hasSkillFilter: hasSkill,
+            note: fallbackAktif
+                ? 'Tidak ada pekerjaan yang cocok area/keahlianmu — semua pekerjaan ditampilkan agar tidak hilang.'
+                : null,
             onPick: (all) => setState(() => _showAllAreas = all),
             onPickSkill: (all) => setState(() => _showAllSkills = all),
           )
@@ -493,6 +506,10 @@ class _AreaFilterBar extends StatelessWidget {
   final ValueChanged<bool> onPick;
   final ValueChanged<bool>? onPickSkill;
 
+  /// Penjelasan saat penyaringan gagal (fail-open: semua pekerjaan tampil
+  /// walau area/keahlian tidak cocok). Null = tidak menampilkan catatan.
+  final String? note;
+
   const _AreaFilterBar({
     required this.area,
     required this.showAll,
@@ -503,6 +520,7 @@ class _AreaFilterBar extends StatelessWidget {
     this.showAllSkills = false,
     this.hasSkillFilter = false,
     this.onPickSkill,
+    this.note,
   });
 
   bool get _hasArea => area.trim().isNotEmpty;
@@ -539,6 +557,13 @@ class _AreaFilterBar extends StatelessWidget {
           Text('$shown dari $total',
               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.inkSoft)),
         ]),
+        if (note != null) ...[
+          const SizedBox(height: 4),
+          Text(note!,
+              style: const TextStyle(fontSize: 11, color: AppColors.inkSoft),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 2),
+        ],
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 6, children: [
           if (_hasArea) ...[

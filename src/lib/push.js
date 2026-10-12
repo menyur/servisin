@@ -9,7 +9,7 @@
  */
 import webpush from "web-push";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { technicianReceivesJob } from "./skill-match.js";
+import { selectJobTargets } from "./skill-match.js";
 
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -193,13 +193,20 @@ export async function sendNewJobPushToTechnicians(
 
     // Area + keahlian lewat satu helper bersama (src/lib/skill-match.js) supaya
     // web-push, FCM, klien Flutter, dan probe E2E tak pernah berbeda aturan.
-    const targets = techs.filter((t) =>
-      technicianReceivesJob(t, {
-        categoryId: serviceCategory,
-        categoryName: serviceCategoryName,
-        address: booking.address,
-      })
-    );
+    // Fail-open berlapis: area+keahlian → keahlian → semua. Tanpa ini,
+    // pesanan ber-alamat "griya reang indah…" (tanpa nama area) tidak
+    // dikirim ke siapa pun sehingga pekerjaan menggantung tanpa teknisi.
+    const { targets, mode } = selectJobTargets(techs, {
+      categoryId: serviceCategory,
+      categoryName: serviceCategoryName,
+      address: booking.address,
+    });
+    if (mode !== "area_skill") {
+      console.warn(
+        `[push] area tidak cocok dengan alamat "${String(booking.address || "").slice(0, 60)}" — broadcast pakai mode '${mode}' (${targets.length} teknisi)`
+      );
+    }
+    if (targets.length === 0) return;
 
     const label = serviceName || "Layanan";
     const loc = (booking.address || "").trim();
