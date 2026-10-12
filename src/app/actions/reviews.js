@@ -70,7 +70,10 @@ export async function submitReview({ bookingId, rating, comment }) {
       user_id: user.id,
       technician_id: booking.technician_id,
       rating: rate,
-      comment: (comment || "").trim() || null,
+      // Kosong → string kosong, JANGAN null: di produksi kolom
+      // `reviews.comment` NOT NULL (dibuat lewat Table Editor) sehingga
+      // penilaian tanpa ulasan gagal tersimpan bila dikirim null.
+      comment: (comment || "").trim(),
     },
     { onConflict: "booking_id" }
   );
@@ -88,13 +91,17 @@ export async function submitReview({ bookingId, rating, comment }) {
     return { error: "Gagal menyimpan penilaian: " + error.message };
   }
 
-  // ---- Insentif: penilaian >REVIEW_INCENTIVE_DAYS hari setelah selesai → voucher ----
+  // ---- Insentif: penilaian BARU → voucher diskon otomatis.
+  //      Nilai & syarat umur (REVIEW_INCENTIVE_DAYS, default 0 = langsung)
+  //      dari src/lib/pricing.js — paritas dengan aplikasi Flutter.
   let voucher = null;
   try {
     const isNewReview = !booking.myRatingBefore;
-    if (isNewReview && booking.completed_at) {
-      const days = (Date.now() - new Date(booking.completed_at).getTime()) / 86_400_000;
-      if (days > REVIEW_INCENTIVE_DAYS) {
+    if (isNewReview) {
+      const days = booking.completed_at
+        ? (Date.now() - new Date(booking.completed_at).getTime()) / 86_400_000
+        : 0;
+      if (days >= REVIEW_INCENTIVE_DAYS) {
         voucher = await grantReviewVoucher(supabase, user.id, bookingId, days);
       }
     }

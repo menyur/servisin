@@ -78,10 +78,16 @@ void main() {
   });
 
   group('normalizeReviewComment (payload ke DB)', () {
-    test('kosong / spasi / null → null (bukan string kosong)', () {
-      expect(normalizeReviewComment(''), isNull);
-      expect(normalizeReviewComment('   '), isNull);
-      expect(normalizeReviewComment(null), isNull);
+    // PERUBAHAN PERILAKU (11 Okt 2026): dulu kosong → null. Di produksi kolom
+    // `reviews.comment` dibuat lewat Table Editor sebagai NOT NULL, sehingga
+    // penilaian TANPA ulasan ditolak ("null value in column comment violates
+    // not-null constraint"). Kini kosong → string kosong: diterima kolom
+    // NOT NULL maupun kolom nullable, jadi menilai tanpa ulasan selalu bisa.
+    // Pembaca tetap menganggap string kosong sebagai "tanpa ulasan".
+    test('kosong / spasi / null → string kosong (bukan null)', () {
+      expect(normalizeReviewComment(''), '');
+      expect(normalizeReviewComment('   '), '');
+      expect(normalizeReviewComment(null), '');
     });
 
     test('komentar terisi → di-trim', () {

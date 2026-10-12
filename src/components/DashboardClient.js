@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { getMyBookings } from "@/app/actions/bookings";
 import { createCustomerReport } from "@/app/actions/reports";
-import { formatRupiah } from "@/lib/pricing";
+import { formatRupiah, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
 import { StatusPill } from "@/components/StatusPipeline";
 import OrderReport from "@/components/OrderReport";
 import ReportForm from "@/components/ReportForm";
@@ -158,7 +158,7 @@ export default function DashboardClient({ initialBookings, customerName, custome
                     {/* selesai + belum dinilai: insentif menunggu */}
                     {b.status === "completed" && b.technician?.name && !b.myRating && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber bg-amber-tint px-2.5 py-1 rounded-full">
-                        <Gift size={12} /> Voucher Rp10.000 menunggu — nilai sekarang
+                        <Gift size={12} /> Voucher {formatRupiah(REVIEW_INCENTIVE_AMOUNT)} menunggu — nilai sekarang
                       </span>
                     )}
                     {/* selesai + ada teknisi: nilai langsung dari kartu */}
@@ -255,17 +255,13 @@ function payLabel(b) {
 }
 
 /**
- * Banner pengingat: pesanan selesai >3 hari yang belum dinilai —
- * insentif voucher Rp10.000 masih menunggu.
+ * Banner pengingat: pesanan selesai yang belum dinilai — insentif voucher
+ * (REVIEW_INCENTIVE_AMOUNT) masih menunggu. Voucher terbit otomatis begitu
+ * penilaian baru dikirim, jadi pengingat berlaku untuk semua pesanan selesai.
  */
 function ReviewReminderBanner({ bookings, onGoReview }) {
   const pending = bookings.filter(
-    (b) =>
-      b.status === "completed" &&
-      b.technician?.name &&
-      !b.myRating &&
-      b.completed_at &&
-      (Date.now() - new Date(b.completed_at).getTime()) / 86_400_000 > 3
+    (b) => b.status === "completed" && b.technician?.name && !b.myRating
   );
 
   if (pending.length === 0) return null;
@@ -279,7 +275,7 @@ function ReviewReminderBanner({ bookings, onGoReview }) {
             {pending.length} pesanan selesai belum kamu nilai.
           </span>{" "}
           <span className="text-ink-soft">
-            Beri penilaian dan dapatkan voucher diskon Rp10.000 untuk booking berikutnya.
+            Beri penilaian dan dapatkan voucher diskon {formatRupiah(REVIEW_INCENTIVE_AMOUNT)} untuk booking berikutnya.
           </span>
         </p>
       </div>

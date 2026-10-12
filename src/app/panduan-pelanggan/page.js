@@ -132,7 +132,7 @@ const STEPS = [
           memilih.
         </p>
         <p>
-          Bonusnya: menilai pesanan yang sudah selesai lebih dari 3 hari memberimu{" "}
+          Bonusnya: menilai pesanan yang sudah selesai memberimu{" "}
           <strong>voucher diskon {formatRupiah(REVIEW_INCENTIVE_AMOUNT)}</strong> untuk booking berikutnya —
           voucher otomatis muncul di tab <strong>Voucher Saya</strong>.
         </p>
@@ -178,7 +178,7 @@ const FAQ = [
   },
   {
     q: `Kenapa saya harus menilai teknisi?`,
-    a: `Penilaianmu membantu teknisi baik mendapat reputasi dan membantu pelanggan lain. Selain itu, menilai pesanan selesai yang berumur lebih dari 3 hari memberimu voucher ${formatRupiah(REVIEW_INCENTIVE_AMOUNT)} otomatis — dashboard bahkan mengingatkanmu dengan banner kalau ada penilaian yang tertunda.`,
+    a: `Penilaianmu membantu teknisi baik mendapat reputasi dan membantu pelanggan lain. Selain itu, setiap penilaian BARU untuk pesanan selesai memberimu voucher ${formatRupiah(REVIEW_INCENTIVE_AMOUNT)} otomatis (satu voucher per pesanan, langsung masuk tab Voucher Saya) — dashboard bahkan mengingatkanmu dengan banner kalau ada penilaian yang tertunda.`,
   },
   {
     q: "Bagaimana kalau hasil pengerjaan tidak sesuai harapan?",

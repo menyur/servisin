@@ -25,14 +25,18 @@ class WorkerKickHelper {
   }
 }
 
-/// Normalisasi komentar penilaian: string kosong/spasi → null.
+/// Normalisasi komentar penilaian: rapi-trim; kosong → string kosong.
 ///
-/// Kolom `comment` di database boleh NULL, jadi pelanggan yang menilai
-/// **tanpa komentar** menyimpan NULL (bukan string kosong) — sama dengan jalur
-/// web (`(comment || "").trim() || null` di src/app/actions/reviews.js).
-String? normalizeReviewComment(String? raw) {
-  final v = (raw ?? '').trim();
-  return v.isEmpty ? null : v;
+/// PENTING: jangan kirim `null`. Di produksi kolom `reviews.comment` dibuat
+/// lewat Table Editor sebagai **NOT NULL**, sehingga penilaian TANPA ulasan
+/// gagal dengan "null value in column comment violates not-null constraint" —
+/// pelanggan tidak bisa menilai kalau tidak menulis ulasan. String kosong
+/// diterima kolom NOT NULL maupun kolom nullable, jadi dipakai di kedua
+/// kondisi; jalur web menyamakan perilakunya
+/// (src/app/actions/reviews.js). Pembaca (`comment` truthy) tetap menganggap
+/// string kosong sebagai "tanpa ulasan".
+String normalizeReviewComment(String? raw) {
+  return (raw ?? '').trim();
 }
 
 /// Satu pintu akses ke Supabase: auth, katalog, booking, bukti bayar,
@@ -709,6 +713,16 @@ class Api {
     String? comment,
   }) async {
     final uid = db.auth.currentUser!.id;
+
+    // Apakah ini penilaian BARU? Hanya penilaian baru yang berhak voucher —
+    // memperbarui penilaian lama tidak menerbitkan voucher lagi (paritas web).
+    final prev = await db
+        .from('reviews')
+        .select('id')
+        .eq('booking_id', bookingId)
+        .maybeSingle();
+    final isNewReview = prev == null;
+
     final row = await db
         .from('reviews')
         .upsert({
@@ -729,19 +743,21 @@ class Api {
       );
     }
 
-    // ---- Insentif (paritas web): review BARU >3 hari setelah pesanan
-    // selesai → voucher TERIMAKASIH Rp 10.000, berlaku 90 hari.
-    // Kode & aturan identik dgn grantReviewVoucher (src/app/actions/reviews.js);
+    // ---- Insentif (paritas web): penilaian BARU → voucher TERIMAKASIH
+    // Rp 2.000 berlaku 90 hari, terbit SEGERA (reviewIncentiveDays = 0).
+    // Nilai & aturan wajib sama dgn grantReviewVoucher
+    // (src/app/actions/reviews.js) + REVIEW_INCENTIVE_* (src/lib/pricing.js);
     // anti-dobel lintas platform ditopang unique partial index
     // vouchers_review_incentive_booking_uidx (fix-review-voucher-idempotent.sql)
     // + pre-check existing di bawah.
     Map<String, dynamic>? voucher;
     try {
-      const reviewIncentiveDays = 3;
-      const reviewIncentiveAmount = 10000;
+      const reviewIncentiveDays = 0;
+      const reviewIncentiveAmount = 2000;
       const voucherValidityDays = 90;
 
-      // completed_at bisa belum ada di DB lama → nullable, null = lewati insentif
+      // completed_at bisa belum ada di DB lama → nullable; dianggap 0 hari
+      // (voucher tetap terbit karena syaratnya "sudah lewat >= 0 hari").
       final bk = await db
           .from('bookings')
           .select('completed_at')
@@ -754,7 +770,7 @@ class Api {
               .difference(DateTime.parse(completedAt))
               .inMicroseconds /
               Duration.microsecondsPerDay;
-      if (days > reviewIncentiveDays) {
+      if (isNewReview && days >= reviewIncentiveDays) {
         // Pre-check anti-dobel (jalur lambat); race window sempit ditutup
         // oleh unique index di DB — insert kedua gagal dan ditangkap catch.
         final existing = await db

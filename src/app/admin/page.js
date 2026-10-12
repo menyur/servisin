@@ -10,6 +10,7 @@ import {
   getFinanceSummaryAdmin,
   getAllBannersAdmin,
   getTechnicianBalancesAdmin,
+  getAllReviewsAdmin,
 } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import Link from "next/link";
@@ -29,7 +30,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
@@ -41,6 +42,7 @@ export default async function AdminPage() {
     getFinanceSummaryAdmin().catch(() => ({ error: "Gagal memuat ringkasan keuangan." })),
     getAllBannersAdmin().catch(() => ({ error: "Gagal memuat banner." })),
     getTechnicianBalancesAdmin().catch(() => ({ error: "Gagal memuat saldo teknisi." })),
+    getAllReviewsAdmin().catch(() => ({ error: "Gagal memuat penilaian teknisi." })),
   ]);
 
   if (bookingsRes.error) {
@@ -72,6 +74,12 @@ export default async function AdminPage() {
       bannersError={bannersRes.error || null}
       initialTechnicianBalances={techBalancesRes.technicians || []}
       technicianBalancesError={techBalancesRes.error || null}
+      initialTechnicianAppFee={techBalancesRes.appFeeReport || []}
+      technicianAppFeeTotal={techBalancesRes.appFeeReportTotal || null}
+      initialReviews={reviewsRes.reviews || []}
+      reviewsSummary={reviewsRes.summary || null}
+      reviewsByTechnician={reviewsRes.byTechnician || []}
+      reviewsError={reviewsRes.error || null}
     />
   );
 }

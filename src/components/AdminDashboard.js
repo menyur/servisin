@@ -32,6 +32,7 @@ import ServiceImageUpload from "@/components/ServiceImageUpload";
 import LocationPickerMap from "@/components/LocationPickerMap";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
 import TechnicianBalancesTab from "@/components/TechnicianBalancesTab";
+import TechnicianReviewsTab from "@/components/TechnicianReviewsTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import PaymentSettingsTab from "@/components/PaymentSettingsTab";
@@ -48,7 +49,7 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null }) {
   const [tab, setTab] = useState("bookings");
   const [bookings, setBookings] = useState(initialBookings);
   const [services, setServices] = useState(initialServices);
@@ -405,6 +406,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={Users} label="Pengguna & Teknisi" />
         <TabButton active={tab === "balance"} onClick={() => setTab("balance")} icon={Wallet} label={`Saldo Teknisi${(() => { const n = balanceDeposits.filter((d) => d.status === "pending").length + withdrawals.filter((w) => w.status === "pending").length; return n ? ` (${n})` : ""; })()}`} />
         <TabButton active={tab === "tech-balances"} onClick={() => setTab("tech-balances")} icon={PieChart} label="Saldo Aktif" />
+        <TabButton active={tab === "ratings"} onClick={() => setTab("ratings")} icon={Star} label="Penilaian Teknisi" />
         <TabButton active={tab === "applicants"} onClick={() => setTab("applicants")} icon={UserCheck} label={`Pendaftar Teknisi${pendingTechs.length ? ` (${pendingTechs.length})` : ""}`} />
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
@@ -881,7 +883,21 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       )}
 
       {tab === "tech-balances" && (
-        <TechnicianBalancesTab initialTechnicians={initialTechnicianBalances} initialError={technicianBalancesError} />
+        <TechnicianBalancesTab
+          initialTechnicians={initialTechnicianBalances}
+          initialError={technicianBalancesError}
+          initialAppFeeReport={initialTechnicianAppFee}
+          initialAppFeeTotal={technicianAppFeeTotal}
+        />
+      )}
+
+      {tab === "ratings" && (
+        <TechnicianReviewsTab
+          initialReviews={initialReviews}
+          initialSummary={reviewsSummary}
+          initialByTechnician={reviewsByTechnician}
+          initialError={reviewsError}
+        />
       )}
 
       {tab === "reports" && <ReportsView reports={reports} onUpdate={handleReportUpdate} />}
@@ -1812,7 +1828,7 @@ function VouchersView({ vouchers, users, error, onCreated, onDeleted }) {
       <h3 className="font-display font-semibold text-navy mb-3 mt-6">Semua voucher ({vouchers.length})</h3>
       {vouchers.length === 0 && !error && (
         <p className="text-ink-soft text-sm">
-          Belum ada voucher. Voucher insentif terbit otomatis saat pelanggan menilai pesanan selesai &gt;3 hari; kamu juga bisa membuat manual lewat form di atas.
+          Belum ada voucher. Voucher insentif terbit otomatis setiap pelanggan mengirim penilaian BARU untuk pesanan selesai (satu voucher per pesanan); kamu juga bisa membuat manual lewat form di atas.
         </p>
       )}
       <div className="space-y-2">

@@ -50,10 +50,16 @@ export function genBookingCode() {
 
 // ============================================================
 // Insentif penilaian: pelanggan yang menilai pesanan selesai
-// >REVIEW_INCENTIVE_DAYS setelah selesai mendapat voucher diskon.
+// mendapat voucher diskon otomatis.
+//
+// REVIEW_INCENTIVE_DAYS = 0 → voucher terbit SEGERA begitu penilaian baru
+// dikirim (dari web maupun aplikasi Flutter). Nilai > 0 mengembalikan syarat
+// "menilai setelah N hari baru dapat voucher". Hanya penilaian BARU yang
+// berhak — memperbarui penilaian lama tidak memberi voucher lagi (dijaga
+// unique index vouchers_review_incentive_booking_uidx).
 // ============================================================
-export const REVIEW_INCENTIVE_DAYS = 3;
-export const REVIEW_INCENTIVE_AMOUNT = 10000;
+export const REVIEW_INCENTIVE_DAYS = 0;
+export const REVIEW_INCENTIVE_AMOUNT = 2000;
 export const VOUCHER_VALIDITY_DAYS = 90;
 
 /**
