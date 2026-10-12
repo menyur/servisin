@@ -15,7 +15,12 @@ import 'review_sheet.dart';
 
 class OrderDetailScreen extends StatefulWidget {
   final Booking booking;
-  const OrderDetailScreen({super.key, required this.booking});
+
+  /// Seam uji: uid pengguna yang sedang login (default [Api.currentUserId]).
+  /// Dipakai memutuskan siapa PEMILIK pesanan — lihat [Booking.isOwnedBy].
+  final String? Function()? currentUserId;
+
+  const OrderDetailScreen({super.key, required this.booking, this.currentUserId});
 
   @override
   State<OrderDetailScreen> createState() => _OrderDetailScreenState();
@@ -240,6 +245,14 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   }
 
   Future<void> _uploadProof() async {
+    // Pengaman lapis kedua: hanya PEMILIK (pelanggan) yang boleh mengirim /
+    // mengirim ulang bukti. Teknisi yang ditugaskan juga bisa membuka layar ini
+    // (RLS "technician can view assigned bookings") — tombolnya sudah
+    // disembunyikan di UI, tapi guard di sini menjaga jalur lain.
+    if (!_b.isOwnedBy(Api.currentUserId)) {
+      showSnack(context, 'Hanya pelanggan pemilik pesanan yang bisa mengirim bukti pembayaran.', error: true);
+      return;
+    }
     // sumber gambar: galeri atau kamera (foto struk/rekening bisa diambil langsung)
     final source = await chooseImageSource(context, title: 'Bukti Pembayaran');
     if (source == null || !mounted) return; // pengguna menutup pilihan
@@ -353,9 +366,14 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   Widget build(BuildContext context) {
     final b = _b;
     final needsPayment = b.status == BookingStatus.pending;
-    final myId = Api.session?.user.id;
+    final myId = (widget.currentUserId ?? () => Api.currentUserId)();
     // Saya teknisi yang ditugaskan pada pesanan ini?
     final isAssignedTech = myId != null && b.technicianId == myId;
+    // Saya PEMILIK (pelanggan) pesanan ini? Hanya pemilik yang boleh melihat
+    // status bukti pembayaran (termasuk penolakan admin) dan mengirim bukti.
+    // Teknisi yang ditugaskan bisa membuka layar ini demi tugas, tapi urusan
+    // pembayaran pelanggan bukan miliknya sehingga tidak boleh muncul di sana.
+    final isOwner = b.isOwnedBy(myId);
 
     return Scaffold(
       appBar: AppBar(
@@ -391,8 +409,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           ),
           const SizedBox(height: 12),
 
-          // peringatan penolakan bukti
-          if (b.paymentRejected)
+          // peringatan penolakan bukti — HANYA untuk pelanggan pemilik pesanan;
+          // di aplikasi teknisi bagian ini tidak boleh tampil.
+          if (b.paymentRejected && isOwner)
             Container(
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(14),
@@ -456,7 +475,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                   ]),
                 ),
               if (b.paymentMethod != null)
-                _methodRow(canEdit: needsPayment && !isAssignedTech),
+                _methodRow(canEdit: needsPayment && isOwner),
               const Divider(height: 24),
               InfoRow('Subtotal', formatRupiah(b.subtotalPrice)),
               InfoRow('Biaya aplikasi', formatRupiah(b.appFee)),
@@ -590,7 +609,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
             icon: const Icon(Icons.receipt_long_rounded),
             label: const Text('Lihat Struk'),
           ),
-          if (needsPayment)
+          if (needsPayment && isOwner)
             Padding(
               padding: const EdgeInsets.only(top: 10),
               child: FilledButton.icon(

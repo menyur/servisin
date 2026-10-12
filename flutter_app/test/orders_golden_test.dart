@@ -27,6 +27,7 @@ Booking _b({
   int discountAmount = 0,
   String? technicianName,
   bool paymentRejected = false,
+  String? userId = 'cust-1',
 }) =>
     Booking(
       id: id,
@@ -43,6 +44,7 @@ Booking _b({
       address: 'Jl. Mawar 2',
       technicianName: technicianName,
       paymentRejected: paymentRejected,
+      userId: userId,
     );
 
 void main() {
@@ -54,32 +56,37 @@ void main() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       await tester.pumpWidget(MaterialApp(
-        home: OrdersScreen(loadBookings: () async => [
-          _b(
-            id: 'a',
-            code: 'SV-1001',
-            serviceName: 'Service AC',
-            status: BookingStatus.inProgress,
-            totalPrice: 150000,
-            technicianName: 'Budi Santoso',
-          ),
-          _b(
-            id: 'b',
-            code: 'SV-1002',
-            serviceName: 'Cuci Sofa',
-            status: BookingStatus.paid,
-            totalPrice: 130000,
-            discountAmount: 20000,
-          ),
-          _b(
-            id: 'c',
-            code: 'SV-1003',
-            serviceName: 'Perbaikan Kulkas',
-            status: BookingStatus.pending,
-            totalPrice: 200000,
-            paymentRejected: true,
-          ),
-        ]),
+        home: OrdersScreen(
+          loadBookings: () async => [
+            _b(
+              id: 'a',
+              code: 'SV-1001',
+              serviceName: 'Service AC',
+              status: BookingStatus.inProgress,
+              totalPrice: 150000,
+              technicianName: 'Budi Santoso',
+            ),
+            _b(
+              id: 'b',
+              code: 'SV-1002',
+              serviceName: 'Cuci Sofa',
+              status: BookingStatus.paid,
+              totalPrice: 130000,
+              discountAmount: 20000,
+            ),
+            _b(
+              id: 'c',
+              code: 'SV-1003',
+              serviceName: 'Perbaikan Kulkas',
+              status: BookingStatus.pending,
+              totalPrice: 200000,
+              paymentRejected: true,
+            ),
+          ],
+          // Pemilik pesanan = pemilik sesi, jadi pil "Bukti ditolak" tetap
+          // tampil di golden (paritas tampilan pelanggan).
+          currentUserId: () => 'cust-1',
+        ),
       ));
       await tester.pumpAndSettle();
 

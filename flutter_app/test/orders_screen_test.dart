@@ -4,6 +4,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fixify_app/models.dart';
 import 'package:fixify_app/ui/orders_screen.dart';
 
+/// Uid pelanggan pemilik pesanan pada test ini. Pesanan dibuat milik uid ini
+/// supaya layar memperlakukannya sebagai pesanan sendiri (default produksi).
+const String _myUid = 'cust-1';
+
 Booking _b({
   String id = 'b1',
   String code = 'SV-1001',
@@ -14,6 +18,7 @@ Booking _b({
   BookingStatus status = BookingStatus.inProgress,
   bool paymentRejected = false,
   String? technicianName,
+  String? userId = _myUid,
 }) =>
     Booking(
       id: id,
@@ -30,11 +35,17 @@ Booking _b({
       address: 'Jl. Mawar 2',
       paymentRejected: paymentRejected,
       technicianName: technicianName,
+      userId: userId,
     );
 
-Future<void> _pump(WidgetTester tester, List<Booking> data) async {
+Future<void> _pump(WidgetTester tester, List<Booking> data,
+    {String? viewerUid = _myUid}) async {
   await tester.pumpWidget(MaterialApp(
-    home: OrdersScreen(loadBookings: () async => data),
+    home: OrdersScreen(
+      loadBookings: () async => data,
+      // Seam uji: uid sesi yang membuka layar (tanpa Supabase di test).
+      currentUserId: () => viewerUid,
+    ),
   ));
   await tester.pumpAndSettle();
 }
@@ -70,6 +81,22 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+      'teknisi membuka pesanan yang ditugaskan: penolakan bukti pelanggan '
+      'TIDAK tampil', (tester) async {
+    // Regresi: daftar bisa memuat pesanan yang hanya DITUGASKAN (RLS teknisi),
+    // tetapi urusan bukti pembayaran pelanggan bukan milik teknisi.
+    await _pump(
+      tester,
+      [_b(paymentRejected: true, technicianName: 'Budi', userId: 'cust-9')],
+      viewerUid: 'tech-1',
+    );
+
+    expect(find.text('Bukti ditolak'), findsNothing);
+    expect(find.text('Budi'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('teknisi ditugaskan → chip teknisi menampilkan nama',
       (tester) async {
     await _pump(tester, [_b(technicianName: 'Budi Santoso')]);
@@ -89,7 +116,10 @@ void main() {
   testWidgets('gagal memuat → keadaan error, bukan daftar kosong',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
-      home: OrdersScreen(loadBookings: () async => throw Exception('jaringan mati')),
+      home: OrdersScreen(
+        loadBookings: () async => throw Exception('jaringan mati'),
+        currentUserId: () => _myUid,
+      ),
     ));
     await tester.pumpAndSettle();
 

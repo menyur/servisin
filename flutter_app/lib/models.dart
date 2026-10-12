@@ -238,6 +238,18 @@ class Booking {
   /// Pesanan punya titik lokasi (pin) — dipakai badge di kartu tugas.
   bool get hasPin => lat != null && lng != null;
 
+  /// Apakah [uid] adalah PEMILIK (pelanggan) pesanan ini — bukan teknisi yang
+  /// ditugaskan. Dipakai UI untuk menentukan siapa yang boleh melihat /
+  /// menjalankan alur bukti pembayaran (unggah, kirim ulang, peringatan
+  /// penolakan).
+  ///
+  /// Wajib eksplisit karena RLS "technician can view assigned bookings"
+  /// membuat teknisi bisa membaca baris pesanan yang ditugaskan ke mereka;
+  /// aplikasi memakai layar detail/kartu yang sama untuk kedua peran, jadi
+  /// tanpa pemeriksaan ini peringatan "bukti pembayaran ditolak admin" milik
+  /// pelanggan ikut tampil di aplikasi teknisi (bug).
+  bool isOwnedBy(String? uid) => uid != null && userId == uid;
+
   /// Stempel waktu untuk timeline status:
   /// * createdAt — pesanan dibuat (kolom created_at, selalu ada);
   /// * paymentConfirmedAt — admin mengonfirmasi pembayaran

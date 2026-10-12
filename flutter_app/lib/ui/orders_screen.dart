@@ -12,7 +12,12 @@ class OrdersScreen extends StatefulWidget {
   /// Seam uji: cara memuat daftar pesanan (default [Api.fetchMyBookings]).
   final Future<List<Booking>> Function()? loadBookings;
 
-  const OrdersScreen({super.key, this.loadBookings});
+  /// Seam uji: uid pengguna yang sedang login (default [Api.currentUserId]).
+  /// Dipakai untuk memutuskan siapa PEMILIK pesanan — hanya pemilik yang boleh
+  /// melihat peringatan bukti pembayaran ditolak (lihat [Booking.isOwnedBy]).
+  final String? Function()? currentUserId;
+
+  const OrdersScreen({super.key, this.loadBookings, this.currentUserId});
 
   @override
   State<OrdersScreen> createState() => _OrdersScreenState();
@@ -72,6 +77,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final list = (_bookings ?? const <Booking>[])
         .where((b) => _filter == null || b.status == _filter)
         .toList();
+
+    // Uid pemilik sesi ini. Daftar bisa ikut memuat pesanan yang hanya
+    // DITUGASKAN ke teknisi (RLS "technician can view assigned bookings"),
+    // jadi status bukti bayar hanya ditampilkan untuk pesanan milik sendiri.
+    final myId = (widget.currentUserId ?? () => Api.currentUserId)();
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -167,6 +177,7 @@ class _OrdersScreenState extends State<OrdersScreen> {
                                     index: i,
                                     child: _BookingCard(
                                       booking: b,
+                                      isOwner: b.isOwnedBy(myId),
                                       onTap: () async {
                                         await Navigator.pushNamed(context, '/order-detail', arguments: b);
                                         _load(); // refresh setelah kembali dari detail
@@ -194,13 +205,18 @@ IconData bookingStatusIcon(BookingStatus s) => switch (s) {
 
 class _BookingCard extends StatelessWidget {
   final Booking booking;
+
+  /// Apakah pengguna yang membuka layar ini PEMILIK (pelanggan) pesanan.
+  /// Teknisi yang ditugaskan tidak boleh melihat peringatan bukti bayar.
+  final bool isOwner;
   final VoidCallback onTap;
-  const _BookingCard({required this.booking, required this.onTap});
+  const _BookingCard({required this.booking, required this.isOwner, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final accent = statusAccent(booking.status);
-    final rejected = booking.paymentRejected;
+    // Peringatan bukti ditolak = urusan pelanggan pemilik pesanan saja.
+    final rejected = booking.paymentRejected && isOwner;
     final hasTech = booking.technicianName != null;
 
     return GestureDetector(
