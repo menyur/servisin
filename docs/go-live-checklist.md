@@ -21,8 +21,8 @@ Berkas terkait: [security.md](./security.md) · [google-oauth-setup.md](./google
 | Gate regresi `npm run verify:live` | ✅ **12/12 LULUS** | lokak: semua probe hijau, sisa data uji 0 |
 | Deployment produksi (`/api/health`) | ✅ `ok:true`, Node v24 | `https://servisin-six.vercel.app` |
 | Notifikasi produksi (`verify:notif-env`) | ✅ LULUS | service role, `CRON_SECRET`, FCM, VAPID terbaca; uji kirim FCM dijawab Google |
-| APK rilis (`apk-latest`) | ✅ v1.2.3 build 8, ber-tanda tangan | `verify:released-apk` 32/32 · `verify:apk-signin` LULUS |
-| Halaman unduh + manifest produksi | ✅ `/unduh` 200, `/api/apk-status` menyajikan v1.2.3 | SHA-256 cocok manifest |
+| APK rilis (`apk-latest`) | ✅ v1.2.4 build 9, ber-tanda tangan | `verify:released-apk` 32/32 · `verify:apk-signin` LULUS |
+| Halaman unduh + manifest produksi | ✅ `/unduh` 200, `/api/apk-status` menyajikan v1.2.4 | SHA-256 cocok manifest |
 | **Email transaksional** | ✅ **`verified` + pesan benar-benar sampai** | `/api/health` → `resendReady: true`, pengirim `Fixify <no-reply@fixify.id>` · `fixify.id` **`verified`** di Resend (DKIM TXT + `CNAME send` + `CNAME rsend`) · `npm run verify:email-tunggu` → [2a] LULUS, [2/3] LULUS, [3/3] LULUS (*exit 0*) · `npm run verify:email-send -- --to=<inbox> --wait=90` → id pesan `delivered` (bukan sekadar "Resend menerima") · **sisa pembersihan:** `MX mx1.hostinger.com` + `TXT v=spf1 …` masih menumpang di `send.fixify.id` — lihat catatan di bawah |
 
 **Artinya:** mesin produksi sudah sehat dan aman dari sisi kebijakan bisnis/keamanan.
