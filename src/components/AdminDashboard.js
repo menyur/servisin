@@ -26,7 +26,7 @@ import {
 } from "@/app/actions/admin";
 import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, ShieldCheck } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import LocationPickerMap from "@/components/LocationPickerMap";
@@ -37,6 +37,8 @@ import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import PaymentSettingsTab from "@/components/PaymentSettingsTab";
 import AdminNotifyRecipientsTab from "@/components/AdminNotifyRecipientsTab";
+import DailyOpsBoardTab from "@/components/DailyOpsBoardTab";
+import WarrantyClaimsAdminTab from "@/components/WarrantyClaimsAdminTab";
 import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
@@ -50,8 +52,10 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null }) {
-  const [tab, setTab] = useState("bookings");
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null }) {
+  // Tab pembuka = papan harian: pertanyaan pertama admin adalah "hari ini apa
+  // yang perlu saya kerjakan?", bukan "lihat semua pesanan".
+  const [tab, setTab] = useState("today");
   const [bookings, setBookings] = useState(initialBookings);
   const [services, setServices] = useState(initialServices);
   const [users, setUsers] = useState(initialUsers || []);
@@ -401,6 +405,12 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       </div>
 
       <div className="flex gap-2 mb-8 flex-wrap">
+        <TabButton
+          active={tab === "today"}
+          onClick={() => setTab("today")}
+          icon={CalendarDays}
+          label={`Hari Ini${board?.counts?.rilisPerluTindak ? ` (${board.counts.rilisPerluTindak} lepas)` : ""}`}
+        />
         <TabButton active={tab === "bookings"} onClick={() => setTab("bookings")} icon={ClipboardList} label={`Pesanan Masuk${unpaidCount ? ` (${unpaidCount} bayar)` : ""}`} />
         <TabButton active={tab === "vouchers"} onClick={() => setTab("vouchers")} icon={Ticket} label="Voucher" />
         <TabButton active={tab === "prices"} onClick={() => setTab("prices")} icon={Tags} label="Harga Layanan" />
@@ -410,11 +420,33 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "ratings"} onClick={() => setTab("ratings")} icon={Star} label="Penilaian Teknisi" />
         <TabButton active={tab === "applicants"} onClick={() => setTab("applicants")} icon={UserCheck} label={`Pendaftar Teknisi${pendingTechs.length ? ` (${pendingTechs.length})` : ""}`} />
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
+        <TabButton
+          active={tab === "warranty"}
+          onClick={() => setTab("warranty")}
+          icon={ShieldCheck}
+          label={`Garansi${board?.garansiTerbuka ? ` (${board.garansiTerbuka})` : ""}`}
+        />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
         <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
         <TabButton active={tab === "notify-recipients"} onClick={() => setTab("notify-recipients")} icon={Mail} label="Notif Email Admin" />
       </div>
+
+      {tab === "today" && (
+        <DailyOpsBoardTab
+          board={board}
+          error={boardError}
+          onOpenBookings={(bookingId) => {
+            // Buka tab Pesanan dengan baris itu sudah terbuka — di sanalah
+            // tombol penugasan teknisi berada (termasuk saran teknisi terdekat).
+            if (bookingId) setExpandedId(bookingId);
+            setTab("bookings");
+            setBookingFilter("all");
+          }}
+        />
+      )}
+
+      {tab === "warranty" && <WarrantyClaimsAdminTab />}
 
       {tab === "bookings" && (
         <div>

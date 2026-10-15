@@ -464,11 +464,35 @@ export async function updateServiceDetailAdmin(serviceId, input) {
   // imageUrl: URL baru dari upload, null = hapus foto, undefined = tidak diubah
   if (input.imageUrl !== undefined) patch.image_url = (input.imageUrl || "").trim() || null;
 
-  const { data, error } = await supabase
+  // warrantyDays: masa garansi pekerjaan (0 = tanpa garansi). undefined = tidak
+  // diubah. Kolomnya ditambahkan migrate-warranty-claims.sql — bila DB belum
+  // memilikinya, update diulang TANPA kolom ini supaya perubahan nama/harga
+  // tetap tersimpan (pola yang sama dengan confirmBookingPaymentAdmin).
+  if (input.warrantyDays !== undefined && input.warrantyDays !== null && input.warrantyDays !== "") {
+    const n = parseInt(input.warrantyDays, 10);
+    if (Number.isNaN(n) || n < 0 || n > 365) {
+      return { error: "Masa garansi harus angka 0–365 hari (0 = tanpa garansi)." };
+    }
+    patch.warranty_days = n;
+  }
+
+  let { data, error } = await supabase
     .from("services")
     .update(patch)
     .eq("id", serviceId)
     .select("*, categories(name)");
+
+  let warrantySkipped = false;
+  if (error && patch.warranty_days !== undefined && /warranty_days/.test(error.message || "")) {
+    delete patch.warranty_days;
+    warrantySkipped = true;
+    ({ data, error } = await supabase
+      .from("services")
+      .update(patch)
+      .eq("id", serviceId)
+      .select("*, categories(name)"));
+  }
+
   if (error) {
     if (/row-level security/i.test(error.message || "")) {
       return { error: "Database menolak (RLS) — jalankan supabase/fix-admin-services.sql dulu." };
@@ -483,7 +507,7 @@ export async function updateServiceDetailAdmin(serviceId, input) {
   revalidatePath("/admin");
   revalidatePath("/"); // nama/deskripsi baru langsung tampil di landing page
   revalidateTag("services");
-  return { service: data[0] };
+  return { service: data[0], warrantySkipped };
 }
 
 /** Aktif/nonaktifkan layanan tanpa menghapusnya (pesanan lama tetap utuh). */
@@ -2207,4 +2231,214 @@ export async function saveAdminNotificationSettingsAdmin({ optouts } = {}) {
 
   revalidatePath("/admin");
   return { ok: true, muted: wanted.length };
+}
+
+// ============================================================================
+// PAPAN OPERASIONAL HARIAN
+// ============================================================================
+
+/**
+ * Hari ini menurut zona WIB — bukan zona server.
+ * Server Vercel berjalan di UTC, sehingga `new Date().toISOString()` menggeser
+ * tanggal mundur 7 jam: pesanan pukul 06.00 WIB terbaca sebagai tanggal
+ * kemarin, tepat pada jam-jam tersibuk. Semua perbandingan "hari ini" di papan
+ * ini memakai tanggal WIB yang sama dengan yang dipakai pelanggan saat memesan.
+ */
+function tanggalWib() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date()); // en-CA menghasilkan YYYY-MM-DD
+}
+
+/** Kolom yang dibutuhkan papan — satu tempat agar tidak ada yang tertinggal. */
+const BOARD_SELECT =
+  "id, code, status, booking_date, booking_time, address, total_price, payment_method, technician_id, completed_at, created_at, " +
+  "services(name), " +
+  "customer:profiles!bookings_user_id_fkey(name, phone), " +
+  "technician:profiles!bookings_technician_id_fkey(id, name, phone)";
+
+/**
+ * Satu layar untuk menjawab "hari ini apa yang harus saya kerjakan?".
+ *
+ * Tanpa ini, jawabannya tersebar di beberapa tab berbentuk daftar: pesanan
+ * menunggu konfirmasi bayar ada di satu tempat, pekerjaan yang belum dapat
+ * teknisi di tempat lain, dan tugas yang dilepas teknisi tidak muncul di mana
+ * pun (dulu hanya lewat email). Yang dikumpulkan di sini hanya hal yang bisa
+ * DITINDAKLANJUTI sekarang, bukan seluruh riwayat.
+ */
+export async function getDailyOpsBoardAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak. Halaman ini khusus admin." };
+
+  const hariIni = tanggalWib();
+
+  const [jadwalRes, perluRes, bayarRes] = await Promise.all([
+    // Jadwal hari ini, urut jam.
+    supabase
+      .from("bookings")
+      .select(BOARD_SELECT)
+      .eq("booking_date", hariIni)
+      .order("booking_time", { ascending: true })
+      .limit(200),
+    // Sudah dibayar tetapi belum ada teknisi — inilah kolam yang teknisi ambil
+    // sendiri, dan yang harus ditugaskan admin bila tak kunjung diambil.
+    supabase
+      .from("bookings")
+      .select(BOARD_SELECT)
+      .eq("status", "paid")
+      .is("technician_id", null)
+      .order("booking_date", { ascending: true })
+      .order("created_at", { ascending: true })
+      .limit(100),
+    // Menunggu konfirmasi bayar (COD tidak perlu — uangnya tunai di lokasi).
+    supabase
+      .from("bookings")
+      .select(BOARD_SELECT)
+      .eq("status", "pending")
+      .neq("payment_method", "cod")
+      .order("created_at", { ascending: true })
+      .limit(100),
+  ]);
+
+  if (jadwalRes.error) return { error: jadwalRes.error.message };
+  const jadwal = jadwalRes.data || [];
+  const perluTeknisi = perluRes.data || [];
+  const menungguBayar = bayarRes.data || [];
+
+  // Antrean pelepasan tugas: hanya yang perlu ditindaklanjuti yang ditandai,
+  // tetapi riwayatnya tetap ditampilkan sebagai konteks kualitas teknisi.
+  let rilis = [];
+  let rilisError = null;
+  try {
+    const { data, error } = await supabase
+      .from("job_releases")
+      .select(
+        "id, booking_id, reason, created_at, " +
+          "technician:profiles!job_releases_technician_id_fkey(id, name), " +
+          "booking:bookings(code, status, technician_id, booking_date, booking_time, total_price, services(name))"
+      )
+      .order("created_at", { ascending: false })
+      .limit(40);
+    if (error) {
+      rilisError = /relation|does not exist/i.test(error.message || "")
+        ? "Tabel job_releases belum ada — jalankan supabase/migrate-job-release.sql di SQL Editor."
+        : error.message;
+    } else {
+      rilis = (data || []).map((r) => ({
+        ...r,
+        // Pekerjaan ini kembali ke kolam dan MASIH belum ada yang mengambilnya.
+        perluTeknisiBaru: r.booking?.status === "paid" && r.booking?.technician_id == null,
+      }));
+    }
+  } catch (e) {
+    rilisError = e?.message || "Gagal memuat pelepasan tugas.";
+  }
+
+  // Jumlah klaim garansi yang menunggu keputusan (null = tabelnya belum ada).
+  let garansiTerbuka = null;
+  try {
+    const { count, error } = await supabase
+      .from("warranty_claims")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "open");
+    if (!error) garansiTerbuka = count ?? 0;
+  } catch {
+    garansiTerbuka = null;
+  }
+
+  return {
+    board: {
+      hariIni,
+      jadwal,
+      perluTeknisi,
+      menungguBayar,
+      rilis,
+      rilisError,
+      garansiTerbuka,
+      counts: {
+        jadwalHariIni: jadwal.length,
+        menungguBayar: menungguBayar.length,
+        perluTeknisi: perluTeknisi.length,
+        dikerjakan: jadwal.filter((b) => b.status === "in_progress").length,
+        selesai: jadwal.filter((b) => b.status === "completed").length,
+        dibatalkan: jadwal.filter((b) => b.status === "cancelled").length,
+        rilisPerluTindak: rilis.filter((r) => r.perluTeknisiBaru).length,
+      },
+    },
+  };
+}
+
+// ============================================================================
+// KLAIM GARANSI
+// ============================================================================
+
+/**
+ * Daftar klaim garansi untuk panel admin (terbaru dulu).
+ * Pelanggan mengajukan lewat RPC create_warranty_claim di aplikasi; admin
+ * memutuskan di sini — menyetujui berarti kunjungan ulang gratis dibuatkan.
+ */
+export async function getWarrantyClaimsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("warranty_claims")
+    .select(
+      "id, reason, status, admin_note, created_at, decided_at, revisit_booking_id, " +
+        "customer:profiles!warranty_claims_customer_id_fkey(name, phone, email), " +
+        "technician:profiles!warranty_claims_technician_id_fkey(name, phone), " +
+        "booking:bookings!warranty_claims_booking_id_fkey(code, booking_date, booking_time, address, total_price, completed_at, services(name, warranty_days)), " +
+        "revisit:bookings!warranty_claims_revisit_booking_id_fkey(code, status, booking_date, booking_time)"
+    )
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (error) {
+    if (/relation|does not exist/i.test(error.message || "")) {
+      return {
+        error: "Tabel warranty_claims belum ada — jalankan supabase/migrate-warranty-claims.sql di SQL Editor.",
+      };
+    }
+    return { error: error.message };
+  }
+  return { claims: data || [] };
+}
+
+/**
+ * Putuskan klaim garansi. Keputusan dijalankan di database (RPC security
+ * definer) karena menyetujui klaim berarti MEMBUAT pesanan baru berharga 0 —
+ * operasi yang tidak boleh bisa ditiru klien mana pun.
+ *
+ * date/time opsional: admin memilih jadwal kunjungan ulang; bila kosong,
+ * database memakai besok dengan rentang jam yang sama seperti pesanan asal.
+ */
+export async function decideWarrantyClaimAdmin(claimId, decision, note = null, date = null, time = null) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!["approved", "rejected"].includes(decision)) return { error: "Keputusan tidak valid." };
+
+  const { data, error } = await supabase.rpc("decide_warranty_claim", {
+    p_claim: claimId,
+    p_status: decision,
+    p_note: (note || "").trim() || null,
+    p_date: date || null,
+    p_time: (time || "").trim() || null,
+  });
+
+  if (error) {
+    if (/does not exist|schema cache/i.test(error.message || "")) {
+      return { error: "Fungsi decide_warranty_claim belum ada — jalankan supabase/migrate-warranty-claims.sql dulu." };
+    }
+    return { error: error.message };
+  }
+  if (!data?.ok) return { error: data?.error || "Klaim gagal diputuskan." };
+
+  revalidatePath("/admin");
+  return { ok: true, result: data };
 }
