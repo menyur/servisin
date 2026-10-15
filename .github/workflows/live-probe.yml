@@ -99,6 +99,27 @@ jobs:
       - name: Selftest logika pemeriksa (tanpa jaringan)
         run: node scripts/verify-google-provider.mjs --selftest
 
+      # Selftest pemeriksa email: MURNI (tanpa jaringan, tanpa kredensial), jadi
+      # aman di CI. Yang dijaga di sini adalah LOGIKA PENILAINYA — syarat lulus
+      # gate email dan kalimat "MASALAH TERSISA" dari dokter email; kalau logika
+      # itu membusuk, kesimpulannya ikut salah tanpa ada yang tahu. Mode live-nya
+      # sengaja TIDAK di sini: butuh produksi + kunci Resend lokal, dan pipeline
+      # tidak boleh merah hanya karena kredensial email belum diisi.
+      - name: Selftest logika pemeriksa email (tanpa jaringan)
+        run: |
+          node scripts/verify-email-env.mjs --selftest
+          node scripts/verify-email-send.mjs --selftest
+          node scripts/verify-email-doctor.mjs --selftest
+
+      # Jalur lupa kata sandi: kontrak statis + alur kirim dengan admin & email
+      # TIRUAN. Seluruhnya tanpa jaringan dan tanpa kredensial, jadi aman di CI;
+      # yang dijaga adalah keseragaman jawaban akun-ada vs akun-tidak-ada
+      # (anti-enumerasi) dan jeda per alamat — dua hal yang, kalau rusak,
+      # merusak fitur ini secara diam-diam. Mode kirim nyatanya tetap opt-in
+      # (--to=…) dan tidak pernah dijalankan di sini.
+      - name: Selftest jalur reset kata sandi (kontrak + alur tiruan)
+        run: node scripts/verify-reset-endpoint.mjs
+
       - name: Pastikan provider Google memakai client Web, bukan Android
         run: node scripts/verify-google-provider.mjs
 

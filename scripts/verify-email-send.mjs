@@ -29,11 +29,10 @@
 // (RESEND_API_KEY) tidak tersedia — konsisten dengan skrip verify:* lain.
 // ============================================================================
 
-import { existsSync, readFileSync } from "node:fs";
-
-/** Alamat uji resmi Resend (simulasi event, tanpa inbox nyata). */
-const ALAMAT_UJI_DEFAULT = "delivered@resend.dev";
-const POLA_ALAMAT_UJI = /@(resend\.dev|example\.com|example\.org|test\.com)$/i;
+// Alamat uji, pembacaan .env.local, dan penilaian hasil kirim tinggal di
+// scripts/lib/email-health.mjs supaya verify:email-doctor memakai logika yang
+// PERSIS sama (bukan salinan yang bisa menyimpang).
+import { ALAMAT_UJI_DEFAULT, POLA_ALAMAT_UJI, bacaEnvLokal, nilaiKirim, parseWait } from "./lib/email-health.mjs";
 
 const argv = process.argv.slice(2);
 const arg = (nama) => {
@@ -42,39 +41,12 @@ const arg = (nama) => {
 };
 
 const TO = (arg("to") ?? process.env.EMAIL_TEST_TO ?? ALAMAT_UJI_DEFAULT).trim();
-const WAIT_S = argv.includes("--wait") ? Number(arg("wait") ?? 20) : 0;
+const WAIT_S = parseWait(argv);
 const SELFTEST = argv.includes("--selftest");
 
-/** Baca .env.local (hanya kunci yang diperlukan; nilainya TIDAK pernah dicetak). */
-function bacaEnvLokal(path = ".env.local") {
-  const out = {};
-  if (!existsSync(path)) return out;
-  for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, "").trim();
-  }
-  return out;
-}
-
-/**
- * Nilai hasil `sendMail` (src/lib/email.js). Murni (tanpa jaringan) supaya
- * logika ini bisa diuji sendiri lewat --selftest.
- * @returns {{gagal: string[], info: string[]}}
- */
-export function nilaiKirim(res) {
-  const gagal = [];
-  const info = [];
-  if (!res || typeof res !== "object") {
-    return { gagal: ["hasil kirim bukan objek"], info };
-  }
-  if (res.error) gagal.push(`Resend MENOLAK pengiriman — ${res.error}`);
-  if (res.simulated) gagal.push("pengiriman dilewati/di-simulasikan (tidak benar-benar terkirim)");
-  if (!res.error && !res.simulated && !res.id) {
-    gagal.push("Resend tidak mengembalikan id pesan — tidak ada bukti pesan diterima");
-  }
-  if (res.id) info.push(`id pesan Resend: ${res.id}`);
-  return { gagal, info };
-}
+// Pembacaan .env.local dan penilaian hasil kirim dipakai dari modul bersama;
+// diekspor ulang agar pemanggil lama (dan --selftest di bawah) tetap sama.
+export { nilaiKirim };
 
 // --- Mode selftest ---------------------------------------------------------
 if (SELFTEST) {
@@ -100,7 +72,22 @@ if (SELFTEST) {
   if (!okInfo) gagalSelftest += 1;
   console.log(`${okInfo ? "lulus" : "GAGAL"}  id pesan dilaporkan sebagai info`);
 
-  const total = kasus.length + 1;
+  // `--wait=60` harus diakui sama seperti `--wait` — bug lama membuat bentuk
+  // `--wait=60` diam-diam berarti "tidak menunggu", sehingga status kedatangan
+  // tak pernah ditanyakan ke Resend walau pengguna memintanya.
+  const kasusWait = [
+    ["--wait=60 diakui sebagai 60 detik", parseWait(["--wait=60"]), 60],
+    ["--wait tanpa nilai → bawaan 20 detik", parseWait(["--wait"]), 20],
+    ["tanpa --wait → tidak menunggu", parseWait(["--to=a@b.id"]), 0],
+    ["nilai tak masuk akal → bawaan, bukan nol", parseWait(["--wait=abc"]), 20],
+  ];
+  for (const [nama, dapat, harap] of kasusWait) {
+    const ok = dapat === harap;
+    if (!ok) gagalSelftest += 1;
+    console.log(`${ok ? "lulus" : "GAGAL"}  ${nama}${ok ? "" : ` — harap ${harap}, dapat ${dapat}`}`);
+  }
+
+  const total = kasus.length + 1 + kasusWait.length;
   console.log("=".repeat(72));
   console.log(`${gagalSelftest === 0 ? "LULUS" : "GAGAL"}: selftest ${total - gagalSelftest}/${total}`);
   process.exit(gagalSelftest === 0 ? 0 : 1);
@@ -167,10 +154,25 @@ if (hasil.gagal.length === 0 && res.id && WAIT_S > 0) {
   if (event && (event === "bounced" || event === "failed" || event === "complained")) {
     hasil.gagal.push(`Resend melaporkan status akhir "${event}" — pesan tidak sampai`);
   }
+  // Lulus tanpa --wait hanya membuktikan Resend MENERIMA pesan. Kalau --wait
+  // dipakai, katakan apa adanya: "delivered" = sampai, selain itu belum pasti —
+  // jangan biarkan kata LULUS menyiratkan kedatangan yang tidak diperiksa.
+  if (event === "delivered") console.log("kedatangan: Resend melaporkan status `delivered` — pesan sudah sampai ke penerima.");
+  else if (!hasil.gagal.length)
+    console.log(
+      `kedatangan: status terakhir ${event ? `\`${event}\`` : "belum dilaporkan"} dalam ${WAIT_S}s — Resend sudah MENERIMA pesan, kedatangan ke inbox belum dipastikan (lihat https://resend.com/emails).`
+    );
 }
 
-console.log("jejak    : tidak menyentuh database (tidak ada akun/baris uji dibuat),");
-console.log("           dan tidak ada inbox nyata yang dikirimi (alamat uji Resend).");
+// Jejak harus jujur soal PENERIMA: uji standar memakai alamat uji Resend, tetapi
+// --to=<alamat nyata> memang mengirim ke inbox betulan (itulah cara membuktikan
+// satu email benar-benar sampai).
+console.log("jejak    : tidak menyentuh database (tidak ada akun/baris uji dibuat).");
+console.log(
+  POLA_ALAMAT_UJI.test(TO)
+    ? "           penerima alamat UJI Resend — tidak ada inbox nyata yang dikirimi."
+    : `           penerima ALAMAT NYATA (${TO}) — email ini memang dikirim ke inbox itu.`
+);
 console.log("=".repeat(72));
 if (hasil.gagal.length) {
   console.log(`GAGAL: ${hasil.gagal.length} masalah pengiriman email:`);

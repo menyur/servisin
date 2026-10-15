@@ -28,6 +28,10 @@
 // Kode keluar: 0 = lulus, 1 = ada yang gagal (termasuk produksi tak terjangkau).
 // ============================================================================
 
+// Penilaian & pengambilan /api/health tinggal di scripts/lib/email-health.mjs
+// supaya verify:email-doctor memakai logika yang PERSIS sama (bukan salinan).
+import { ambilHealth, nilaiEmail } from "./lib/email-health.mjs";
+
 // Base URL produksi — sama dengan verify-notif-env.mjs dan AppConfig.webBaseUrl.
 const DEFAULT_URL = "https://servisin-six.vercel.app";
 
@@ -41,47 +45,9 @@ const BASE_URL = (arg("url") ?? process.env.PROD_BASE_URL ?? DEFAULT_URL).replac
 const TIMEOUT_MS = Number(arg("timeout") ?? 15000);
 const SELFTEST = argv.includes("--selftest");
 
-/**
- * Nilai kesiapan email dari payload /api/health. Murni (tanpa jaringan) supaya
- * logika ini bisa diuji sendiri lewat --selftest.
- * @returns {{gagal: string[], info: string[]}}
- */
-export function nilaiEmail(payload) {
-  const gagal = [];
-  const info = [];
-
-  if (!payload || typeof payload !== "object") {
-    return { gagal: ["respons /api/health bukan objek JSON"], info };
-  }
-  if (payload.ok !== true) gagal.push("respons /api/health tidak menyatakan ok");
-
-  const email = payload.email;
-  if (!email || typeof email !== "object") {
-    gagal.push(
-      "respons /api/health tidak memuat bagian `email` — deployment produksi belum memakai versi health yang melaporkan kesiapan email"
-    );
-    return { gagal, info };
-  }
-
-  // 1) Kunci Resend terbaca deployment aktif.
-  if (email.resendReady !== true) {
-    gagal.push(
-      "RESEND_API_KEY TIDAK terbaca di produksi — semua email (admin/pelanggan/teknisi) hanya disimulasikan ke log, tidak terkirim. " +
-        "Set di Vercel → Settings → Environment Variables (Production), lalu REDEPLOY."
-    );
-  }
-
-  // 2) Alamat pengirim bukan domain uji Resend.
-  if (typeof email.from === "string" && email.from) info.push(`pengirim: ${email.from}`);
-  if (email.fromIsTestDomain === true) {
-    gagal.push(
-      `alamat pengirim masih memakai domain uji Resend (resend.dev) — hanya bisa mengirim ke email pemilik akun Resend, penerima lain ditolak 403. ` +
-        `Verifikasi domain sendiri di https://resend.com/domains lalu set EMAIL_FROM (mis. "Fixify <no-reply@domainmu.id>").`
-    );
-  }
-
-  return { gagal, info };
-}
+// Dinilai oleh scripts/lib/email-health.mjs; diekspor ulang agar pemanggil lama
+// (dan --selftest di bawah) tetap memakai nama yang sama.
+export { nilaiEmail };
 
 // --- Mode selftest: uji logika penilaian tanpa jaringan --------------------
 if (SELFTEST) {
@@ -128,24 +94,8 @@ console.log("Gate go-live email (produksi)");
 console.log("=".repeat(72));
 console.log(`endpoint : ${BASE_URL}/api/health`);
 
-let payload = null;
-let err = null;
-const ac = new AbortController();
-const t = setTimeout(() => ac.abort(), TIMEOUT_MS);
-try {
-  const res = await fetch(`${BASE_URL}/api/health`, {
-    headers: { accept: "application/json", "cache-control": "no-cache" },
-    signal: ac.signal,
-  });
-  const teks = await res.text();
-  if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
-  payload = JSON.parse(teks);
-  console.log("respons  : HTTP 200, respons terbaca");
-} catch (e) {
-  err = e?.name === "AbortError" ? `timeout ${TIMEOUT_MS / 1000}s` : e.message;
-} finally {
-  clearTimeout(t);
-}
+const { payload, err } = await ambilHealth(BASE_URL, TIMEOUT_MS);
+if (payload) console.log("respons  : HTTP 200, respons terbaca");
 
 if (!payload) {
   console.log("=".repeat(72));
