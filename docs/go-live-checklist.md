@@ -23,7 +23,7 @@ Berkas terkait: [security.md](./security.md) · [google-oauth-setup.md](./google
 | Notifikasi produksi (`verify:notif-env`) | ✅ LULUS | service role, `CRON_SECRET`, FCM, VAPID terbaca; uji kirim FCM dijawab Google |
 | APK rilis (`apk-latest`) | ✅ v1.2.3 build 8, ber-tanda tangan | `verify:released-apk` 32/32 · `verify:apk-signin` LULUS |
 | Halaman unduh + manifest produksi | ✅ `/unduh` 200, `/api/apk-status` menyajikan v1.2.3 | SHA-256 cocok manifest |
-| **Email transaksional (`RESEND_API_KEY`)** | ❌ **belum aktif di produksi** | `/api/health` → `"RESEND_API_KEY": false` · `npm run verify:email-env` |
+| **Email transaksional** | ✅ **`verified` + pesan benar-benar sampai** | `/api/health` → `resendReady: true`, pengirim `Fixify <no-reply@fixify.id>` · `fixify.id` **`verified`** di Resend (DKIM TXT + `CNAME send` + `CNAME rsend`) · `npm run verify:email-tunggu` → [2a] LULUS, [2/3] LULUS, [3/3] LULUS (*exit 0*) · `npm run verify:email-send -- --to=<inbox> --wait=90` → id pesan `delivered` (bukan sekadar "Resend menerima") · **sisa pembersihan:** `MX mx1.hostinger.com` + `TXT v=spf1 …` masih menumpang di `send.fixify.id` — lihat catatan di bawah |
 
 **Artinya:** mesin produksi sudah sehat dan aman dari sisi kebijakan bisnis/keamanan.
 Yang tersisa untuk go-live hampir seluruhnya **langkah konfigurasi & keputusan** —
@@ -55,7 +55,7 @@ Isi dulu, karena banyak langkah teknis bergantung pada jawabannya.
 
 ### 2.1 Env produksi (Vercel → Settings → Environment Variables, scope **Production**)
 
-Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakhir = hasil live 12 Okt 2026.
+Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakhir = hasil live 13 Okt 2026.
 
 | Variabel | Wajib? | Status | Catatan |
 |---|---|---|---|
@@ -67,8 +67,8 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
 | `VAPID_PRIVATE_KEY` | ✅ (web-push) | ✅ terbaca | |
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | ✅ (web-push) | ✅ terbaca | |
 | `FCM_SERVICE_ACCOUNT_BASE64` | ✅ (APK) | ✅ terbaca | `fcmReady:true` — push Android benar-benar jalan |
-| **`RESEND_API_KEY`** | ⛔ **untuk email** | ❌ **kosong** | tanpa ini semua email **hanya disimulasikan ke log** — tidak sampai ke admin/pelanggan/teknisi. Buat kunci di https://resend.com/api-keys |
-| `EMAIL_FROM` | ⛔ untuk email | masih domain uji | `Servisin <onboarding@resend.dev>` **tidak bisa** mengirim ke penerima selain email pemilik akun Resend (403). Verifikasi domain sendiri di https://resend.com/domains lalu set mis. `Fixify <no-reply@domainmu.id>` |
+| **`RESEND_API_KEY`** | ⛔ **untuk email** | ✅ terbaca | tanpa ini semua email **hanya disimulasikan ke log** — tidak sampai ke admin/pelanggan/teknisi. Buat kunci di https://resend.com/api-keys |
+| `EMAIL_FROM` | ⛔ untuk email | ✅ `Fixify <no-reply@fixify.id>` | domain `fixify.id` **`verified`** di Resend (13 Okt 2026). Ingat: `onboarding@resend.dev` **tidak bisa** mengirim ke penerima selain email pemilik akun Resend (403) |
 | `MIDTRANS_SERVER_KEY` | opsional | kosong | tanpa ini bayar = mode simulasi (transfer/COD tetap jalan) |
 | `NEXT_PUBLIC_MIDTRANS_CLIENT_KEY` | opsional | kosong | |
 | `MIDTRANS_IS_PRODUCTION` | opsional | `false` | set `true` hanya bila live dengan Midtrans |
@@ -79,6 +79,21 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
 > ⚠️ **Terdaftar ≠ terbaca.** Variabel bisa muncul di daftar Vercel tetapi dibaca kosong oleh deployment (pernah terjadi: `RESEND_API_KEY` terdaftar 25 hari tetapi `/api/health` melaporkan `false`). Biasanya itu berarti **nilainya kosong/placeholder**; periksa/isi nilainya, bukan hanya keberadaan barisnya. `vercel env pull` tidak bisa mendekripsi tipe *Secret* (ditulis `[SENSITIVE]`) sehingga nilainya harus dicek di dashboard.
 >
 > ⚠️ **Terbaca ≠ terkirim.** SDK Resend (v4) **tidak melempar** untuk error API — ia mengembalikan `{ data, error }`. Jalur kirim ([src/lib/email.js](../src/lib/email.js)) kini memeriksa hasil itu (sebelumnya diabaikan, sehingga kegagalan dilaporkan "terkirim" dan baris antrean ikut dihapus). Buktinya lewat uji kirim nyata: `npm run verify:email-send`.
+>
+> **Cara memverifikasi domain pengirim (sekali saja, ±10 menit + tunggu DNS).** Sumber kebenarannya halaman domain di Resend, bukan pemeriksa mana pun.
+> 1. https://resend.com/domains → **Add Domain** → tulis **domain akar** (mis. `fixify.id`) → pilih **wilayah** terdekat penerima → biarkan return-path bawaan (`send.fixify.id`).
+> 2. Buka tab **Records** domain itu dan salin nilainya **apa adanya** (jangan diketik ulang) — atau tanyakan langsung ke Resend: `verify:email-doctor` membaca `GET /domains` + `GET /domains/:id` (read-only) bila `RESEND_API_KEY` tersedia, sehingga nilai yang dicetak `--panduan` datang dari Resend sendiri. Resend memakai salah satu dari dua bentuk setelan, dan **yang berlaku adalah yang ditampilkan untuk domainmu**:
+>    - **Klasik** — `MX` di `send.<domain>` → `feedback-smtp.<wilayah>.amazonses.com` (prioritas **10**) · `TXT` di `send.<domain>` → `v=spf1 include:amazonses.com ~all` · `TXT` di `resend._domainkey.<domain>` → nilai `p=…` (DKIM).
+>    - **Baru** (domain yang ditambahkan sejak Agustus 2026 — termasuk `fixify.id`, dibuat 13 Okt 2026) — `CNAME` di `send.<domain>` → `send.forge.rmta.net` **dan** `CNAME` di `rsend.<domain>` → `rsend-apne1.forge.rmta.net`; keduanya **menggantikan** MX+TXT. DKIM tetap `TXT` di `resend._domainkey.<domain>`.
+>    DKIM wajib di kedua bentuk. Bentuk setelannya **tidak bisa dipilih sendiri**: setelan klasik bukan pengganti CNAME bila domainmu ditampilkan dengan CNAME — Resend tetap menyebut domain `pending` dan menolak kiriman 403 (inilah yang terjadi pada `fixify.id` pada 13 Okt 2026: MX+TXT sudah benar, tetapi yang diminta CNAME). Pada bentuk baru, bila baru satu CNAME pengirim yang verified, domain bisa berstatus `partially_verified` — pengiriman tetap jalan, hanya tanpa server cadangan.
+> 3. Di panel DNS domain (untuk `fixify.id`: Hostinger → **Domains → DNS → DNS records**), tulis catatan itu memakai nama **pendek** (`send`, `rsend`, `resend._domainkey`), TTL dari dashboard (biasanya `3600`), dan prioritas `10` khusus MX (TXT/CNAME tidak punya isian prioritas). Jangan pakai `@` untuk catatan ini. ⚠️ **Satu nama tidak boleh punya CNAME sekaligus MX/TXT** (RFC 2181): sebelum memasang `CNAME send`, **hapus dulu** `MX` dan `TXT` di `send` — kalau dibiarkan, panel menyimpan keduanya, CNAME-nya diabaikan, dan domain tetap `pending`. **Bila catatan bernama sama sudah ada tetapi isinya milik layanan lain** (mis. `MX send` → `mx1.hostinger.com`), **ganti** nilainya — jangan dibiarkan menumpuk: pada setelan klasik MX *dan* TXT di `send` harus benar keduanya, kalau tidak SPF tidak terverifikasi dan domain tetap belum `verified`.
+> 4. Kembali ke Resend → **Verify DNS Records** → tunggu status `verified` (biasanya ≤15 menit; propagasi DNS bisa sampai 72 jam).
+> 5. Setelah menyimpan catatan, satu perintah cukup: `npm run verify:email-tunggu` — ia memantau status domain ke Resend sampai `verified` (memicu pemeriksaan ulang sendiri bila perlu), lalu otomatis menjalankan uji kirim. Untuk sekaligus membuktikan **kedatangan** ke inbox nyata: `npm run verify:email-tunggu -- --to=alamatmu@domainmu.id --wait=90` (baris `kedatangan: … delivered` hanya muncul bila pesannya benar-benar sampai). Setara manual: `npm run verify:email-doctor` (bagian [2/3] harus LULUS) lalu `npm run verify:email-send` — lulus bila Resend mengembalikan id pesan.
+> 6. **Bersihkan sisa setelan lama.** Pada domain yang Resend beri catatan CNAME, `MX`/`TXT` lama di host yang sama **tidak dihapus otomatis** oleh panel — dan itu luput dari mata karena Resend tetap melaporkan `verified`. Periksa dengan `npm run verify:email-doctor -- --panduan`: bila muncul `CNAME \`send.fixify.id\` sudah ada, tetapi nama itu masih memuat MX & TXT …`, hapus `MX` (mis. `mx1.hostinger.com` — ini di subdomain `send`, **bukan** MX email utama domain) dan `TXT v=spf1 include:amazonses.com ~all` di host `send`, sisakan CNAME-nya. Selama keduanya masih ada, jawaban DNS berbeda antar resolver dan SPF/DKIM bisa dinilai tidak konsisten oleh penerima. Untuk membuktikan **kedatangan**, bukan hanya penerimaan: kirim ke inbox sendiri — `npm run verify:email-send -- --to=alamatmu@domainmu.id --wait=60`. Dengan `--wait` skrip menanyakan status ke Resend dan hanya menyatakan "sampai" bila statusnya `delivered`; kalau masih `sent`/`delivery_delayed`, ia berkata apa adanya (Resend sudah menerima, kedatangan belum dipastikan).
+>
+> 🔁 **Langkah 1–4 di atas ikut hidup di dalam alat:** `npm run verify:email-panduan` (`verify:email-doctor --panduan`) mencetak, untuk tiap domain pengirim yang diperiksa, catatan mana yang **kurang**, nama host pendek yang dipakai, nilai yang diminta — **termasuk isi catatan yang sudah ada tetapi salah** sehingga tidak perlu menebak penyebabnya — panel DNS pemilik zona (dibaca dari nameserver domain itu), lalu langkah verifikasi di dashboard Resend. Jadi panduan tidak bisa lagi tertinggal dari alatnya; teks di atas hanya versi naratifnya.
+>
+> ⚠️ **Alamat pengirim berbentuk benar ≠ domainnya siap.** `verify:email-env` hanya memeriksa *bentuk* `EMAIL_FROM` (apakah masih `resend.dev`). Nilai seperti `Fixify <no-reply@fixify.id>` lolos gate itu **meski** `fixify.id` belum pernah disiapkan di Resend (tanpa MX `send.`, SPF, dan DKIM `resend._domainkey.`) — Resend lalu menolak **403 ke semua penerima**, jadi gate hijau sementara email tetap tidak sampai. Itu sebabnya ada `npm run verify:email-doctor`: satu perintah yang menggabungkan (1) kesiapan env produksi, (2) **catatan DNS domain pengirim** (sinyal pendukung — sumber kebenarannya tetap https://resend.com/domains), dan (3) uji kirim nyata, lalu menutup dengan **satu baris** masalah tersisa. Catatan DNS yang hilang bukan bukti mutlak, tetapi ketiganya hilang berarti domain itu memang belum disiapkan.
 
 ### 2.2 Supabase (proyek `sgxlnhzezknmdhefsvvu`)
 
@@ -87,7 +102,23 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
       Beberapa yang **khusus go-live** (kalau belum): `migrate-admin-email-outbox.sql`,
       `migrate-admin-notification-prefs.sql`, `migrate-push-scheduler.sql`, `migrate-history-retention.sql`,
       `fix-balance-proofs-owner-read.sql`, `enforce-nonnegative-balance.sql`.
+      Fitur pelanggan-teknis yang baru (harus dijalankan **berurutan**, keduanya idempoten):
+      `migrate-customer-self-service.sql` (pelanggan membatalkan/mengubah jadwal sendiri +
+      RPC jarak & kontak teknisi) lalu `migrate-warranty-claims.sql` (garansi pekerjaan:
+      `services.warranty_days` bawaan **7 hari** — isi `0` per layanan untuk mematikannya,
+      tabel `warranty_claims`, dan kunjungan ulang gratis saat klaim disetujui).
+      Tanpa keduanya, tab admin **Hari Ini**/**Garansi** tetap tampil dengan pesan yang
+      menyebut berkas mana yang belum dijalankan, dan tombol batal/ubah jadwal di aplikasi
+      menjawab "belum aktif di server".
       Bukti statusnya: `npm run verify:live` (probe akan **MERAH** pada langkah terkait bila migrasinya belum jalan).
+      Bukti khusus kedua migrasi ini: `npm run verify:self-service` — memanggil
+      `cancel_booking`, `reschedule_booking`, `booking_technician_info`,
+      `create_warranty_claim`, `booking_warranty_info`, dan `decide_warranty_claim`
+      lewat sesi pengguna sah (pelanggan lain, anon, teknisi, dan admin), jadi
+      penjaga-penjaganya ikut terbukti — bukan hanya jalur bahagianya. Skrip
+      membuat 2 pelanggan + 1 teknisi + 1 admin sementara dan 5 pesanan uji, lalu
+      **menghapus semuanya sendiri** dan mengembalikan `services.warranty_days`
+      seperti semula; `exit 0` = semua RPC di atas jalan, `exit 3` = tanpa kredensial.
 - [ ] **Database Webhooks** (Integrations → Database Webhooks) — mempercepat pengiriman:
       - tabel `push_outbox`, event **Insert** → `https://<domain>/api/push-worker`
       - tabel `admin_email_outbox`, event **Insert** → `https://<domain>/api/admin-email-worker`
@@ -97,6 +128,9 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
 - [ ] **Storage bucket & policy** — `node scripts/setup-storage.mjs` lalu policy di `supabase/setup-storage-buckets.sql`.
       Bucket harus **privat**: `payment-proofs`, `ktp-documents`, `attachments`, `balance-proofs`.
 - [ ] **Akun admin pertama** — daftar lewat `/register`, ubah `profiles.role` jadi `admin` di Table Editor, lalu login ulang.
+- [ ] **Nilai garansi per layanan** — tinjau `services.warranty_days`: nilai bawaan 7 hari
+      berlaku untuk semua layanan begitu migrasi dijalankan. Untuk layanan yang tidak boleh
+      diklaim ulang (mis. pembersihan sekali pakai), isi `0` di tab **Harga Layanan**.
 - [ ] **Hapus/verifikasi akun uji** — pastikan tidak ada akun teknis/uJi nyasar di produksi (probe membersihkan dirinya sendiri; cek manual di Table Editor → `profiles`).
 - [ ] **Backup** — aktifkan backup terjadwal Supabase (Plan → Backups / PITR) **sebelum** menjalankan migrasi baru.
 
@@ -182,6 +216,8 @@ Kalau gate `live-probe` gagal, build APK **tertahan** (mekanisme yang disengaja;
 
 ```bash
 npm run verify:live          # gate penuh (kebijakan + realtime + E2E + push)
+npm run verify:self-service   # batal/ubah jadwal, jarak & kontak teknisi, garansi (RPC asap)
+npm run verify:emulator       # uji UI di emulator Android: seed → dev server → adb → bersih
 npm run verify:notif-env     # notifikasi produksi benar-benar siap
 npm run verify:apk-release   # jalur unduh APK + manifest
 npm run verify:released-apk  # APK terbit utuh (checksum, font, kanal notifikasi)
@@ -192,9 +228,15 @@ npm run verify:apk-signin    # tanda tangan APK = sertifikat rilis
 
 - [ ] **Pelanggan**: register → booking → isi bukti bayar → lacak pesanan (`/track`) → terima notifikasi status → selesaikan → beri penilaian → voucher insentif masuk.
 - [ ] **Teknisi**: login → lihat pekerjaan tersedia → klaim → ubah status (mulai → selesai) → komisi terpotong dari saldo → setor saldo (unggah bukti).
-- [ ] **Admin**: konfirmasi bukti bayar → kelola layanan/varian → setujui pendaftar teknisi → tab **Notif Email Admin** (matriks penerima per peristiwa) → laporan bulanan/CSV.
+- [ ] **Admin**: tab **Hari Ini** (pesanan menunggu bayar, pekerjaan yang belum dapat teknisi,
+      tugas yang dilepas teknisi, jadwal hari ini) → konfirmasi bukti bayar → kelola layanan/varian
+      → setujui pendaftar teknisi → tab **Notif Email Admin** (matriks penerima per peristiwa)
+      → laporan bulanan/CSV.
+- [ ] **Garansi**: sebagai pelanggan, ajukan klaim dari pesanan yang baru selesai, lalu setujui
+      di tab **Garansi** admin — pastikan kunjungan ulang berharga Rp0 muncul di tugas teknisi asal
+      dan **tidak** memotong saldonya.
 - [ ] **Aplikasi Android**: pasang APK dari `/unduh` → **login Google** berhasil → notifikasi push masuk (pekerjaan baru/status).
-- [ ] **Email**: setelah `RESEND_API_KEY` diisi, jalankan `npm run verify:email-send` (kirim nyata ke alamat uji Resend — buktinya berupa id pesan dari Resend), lalu konfirmasi satu email benar-benar **sampai** ke admin & pelanggan.
+- [ ] **Email**: verifikasi domain pengirim di https://resend.com/domains (tambahkan MX `send.`, TXT SPF, dan TXT DKIM), set `EMAIL_FROM` ke domain itu, lalu jalankan `npm run verify:email-doctor` — kalau ada catatan yang kurang, `npm run verify:email-panduan` mencetak langkah persisnya — sampai **tidak ada masalah tersisa** — perintah itu sekaligus mengecek env produksi, catatan DNS domain pengirim, dan mengirim nyata ke alamat uji Resend (bukti = id pesan dari Resend). Setelah itu konfirmasi satu email benar-benar **sampai** ke admin & pelanggan.
 
 ---
 
@@ -256,6 +298,22 @@ npm run verify:email-env
 # Uji kirim email NYATA lewat Resend ke alamat uji (bukti = id pesan dari Resend)
 npm run verify:email-send
 
+# Dokter email: env produksi + status domain pengirim + uji kirim → satu baris simpulan
+# (juga: --no-dns, --no-api, --no-send, --url=, --to=, --wait=30, --selftest)
+# Status domain diambil dari API Resend bila RESEND_API_KEY tersedia (sumber kebenaran);
+# tanpa kunci, DNS hanya jadi perkiraan — dan itu dinyatakan apa adanya, bukan diklaim hijau.
+npm run verify:email-doctor
+
+# Panduan langkah demi langkah mengisi catatan DNS yang kurang (host, nilai, panel DNS, cara verifikasi)
+# Kombinasi yang sering dipakai: npm run verify:email-doctor -- --panduan --no-send
+npm run verify:email-panduan
+
+# Setelah mengubah catatan DNS: SATU perintah — pantau status domain ke Resend sampai
+# `verified` (≤15 menit, atau --tunggu=<menit>), lalu otomatis jalankan uji kirim.
+# Ia memicu pemeriksaan ulang di Resend, tetapi HANYA bila domain belum bisa mengirim
+# (memicu domain yang sudah verified membuatnya `pending` sesaat → kirim bisa 403).
+npm run verify:email-tunggu
+
 # Tautan Kebijakan Privasi & Syarat tetap ada di footer (statis; ikut CI Web Lint)
 npm run verify:legal-links
 
@@ -270,6 +328,12 @@ npm run verify:google             # provider Google = client Web, bukan Android
 verify:flutter-version            # Flutter = .fvmrc
 ```
 
-Perintah `verify:*` lain (per fitur) terdaftar di [`package.json`](../package.json) — 28 skrip,
+`npm run verify:emulator` menjalankan seluruh rangkaian uji aplikasi Android sekali jalan:
+menyiapkan akun + pesanan uji, menyalakan dev server pada port yang benar, membangun & memasang
+APK debug dengan `WEB_BASE_URL` menunjuk server itu, menggerakkan UI lewat adb, memeriksa
+hasilnya di database, lalu menghapus seluruh data uji dan mematikan dev server. Butuh emulator
+hidup (atau `--launch`) dan adb; tanpa itu keluar dengan kode **3** (prasyarat belum siap).
+
+Perintah `verify:*` lain (per fitur) terdaftar di [`package.json`](../package.json) — 37 perintah,
 masing-masing menjaga satu perilaku (saldo, voucher, retensi riwayat, penerima notifikasi admin, dsb.).
 Kode keluar: **0 = lulus · 1 = gagal · 3 = tidak konklusif** (bukan kegagalan; mis. kredensial/berkas lokal tidak ada).

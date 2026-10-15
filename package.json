@@ -31,6 +31,13 @@
     "verify:notif-env": "node scripts/verify-notif-env.mjs",
     "verify:email-env": "node scripts/verify-email-env.mjs",
     "verify:email-send": "node scripts/verify-email-send.mjs",
+    "verify:email-doctor": "node scripts/verify-email-doctor.mjs",
+    "verify:email-panduan": "node scripts/verify-email-doctor.mjs --panduan",
+    "verify:email-tunggu": "node scripts/verify-email-doctor.mjs --tunggu",
+    "verify:reset-email": "node scripts/verify-reset-email.mjs",
+    "verify:reset-endpoint": "node scripts/verify-reset-endpoint.mjs",
+    "verify:signup-endpoint": "node scripts/verify-signup-endpoint.mjs",
+    "verify:reset-flow": "node scripts/verify-reset-flow.mjs",
     "verify:legal-links": "node scripts/verify-legal-links.mjs",
     "verify:cron-auth": "node scripts/verify-cron-auth.mjs",
     "verify:booking-status": "node scripts/verify-booking-status-notify.mjs",
@@ -39,7 +46,9 @@
     "verify:job-target": "node scripts/verify-job-target-fallback.mjs",
     "verify:admin-email": "node scripts/verify-admin-email.mjs",
     "verify:admin-notify-prefs": "node scripts/verify-admin-notify-prefs.mjs",
-    "verify:order-voucher": "node scripts/verify-order-voucher-detail.mjs"
+    "verify:order-voucher": "node scripts/verify-order-voucher-detail.mjs",
+    "verify:self-service": "node scripts/verify-customer-self-service.mjs",
+    "verify:emulator": "node scripts/verify-emulator-ui.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
