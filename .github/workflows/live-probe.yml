@@ -117,8 +117,12 @@ jobs:
       # (anti-enumerasi) dan jeda per alamat — dua hal yang, kalau rusak,
       # merusak fitur ini secara diam-diam. Mode kirim nyatanya tetap opt-in
       # (--to=…) dan tidak pernah dijalankan di sini.
+      # `--selftest` WAJIB: tanpa itu langkah B2 opsional dihitung "dilewati"
+      # dan skrip keluar dengan kode 3 (non-konklusif) — CI memperlakukan kode
+      # non-nol sebagai gagal, sehingga gate ikut merah walau semua pemeriksaan
+      # hermetisnya lulus.
       - name: Selftest jalur reset kata sandi (kontrak + alur tiruan)
-        run: node scripts/verify-reset-endpoint.mjs
+        run: node scripts/verify-reset-endpoint.mjs --selftest
 
       - name: Pastikan provider Google memakai client Web, bukan Android
         run: node scripts/verify-google-provider.mjs
