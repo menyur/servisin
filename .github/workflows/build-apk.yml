@@ -32,6 +32,18 @@ on:
         type: boolean
         default: false
 
+# Gate di sini menulis lalu menghapus baris uji di tabel PRODUKSI, dan begitu juga
+# gate di live-probe.yml. Keduanya ikut terpicu oleh satu push yang menyentuh
+# flutter_app/** sekaligus scripts/** — dan saat berjalan bersamaan, keduanya
+# saling menghapus/menghitung baris uji lawannya sehingga salah satunya gagal
+# dengan exit 1 TANPA ada regresi nyata (probe yang sama lulus sendirian).
+# Grup `concurrency` bersifat repo-wide, jadi nama `live-probe` yang sama dengan
+# live-probe.yml menyerialkan keduanya: satu lane, tidak ada lagi tabrakan data
+# uji. Tidak ada job yang dibatalkan (cancel-in-progress: false).
+concurrency:
+  group: live-probe
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
