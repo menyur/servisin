@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
 import '../config.dart';
+import '../register_http.dart';
 import '../signup_handoff.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
@@ -11,7 +11,11 @@ import 'common.dart';
 import 'google_signin_button.dart';
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  const RegisterScreen({super.key, this.daftar});
+
+  /// Seam uji widget: ganti pengiriman pendaftaran. `null` (produksi) =
+  /// [Api.daftarAkun] ke server web (POST /api/auth/register).
+  final KirimPendaftaran? daftar;
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -52,31 +56,38 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (!_form.currentState!.validate()) return;
     setState(() => _loading = true);
     try {
-      final res = await Api.signUp(
-        _email.text.trim(),
-        _password.text,
+      // Pendaftaran dikirim ke server web (POST /api/auth/register) yang membuat
+      // akunnya lewat Admin API lalu MENGIRIM email verifikasinya lewat Resend —
+      // bukan `db.auth.signUp`, yang selalu meminta mailer bawaan Supabase
+      // mengirim email (hanya untuk anggota tim project, 2 pesan/jam) sehingga
+      // email verifikasi pelanggan biasa tidak pernah berangkat. Lihat
+      // src/lib/signup-verification.js.
+      final kirim = widget.daftar ?? Api.daftarAkun;
+      final hasil = await kirim(
+        email: _email.text.trim(),
+        password: _password.text,
         name: _name.text.trim(),
         phone: _phone.text.trim(),
         address: _address.text.trim(),
         // Android: tombol verifikasi di email balik ke app lewat deep link
         // fixify://confirm — sesi langsung aktif, pengguna mendarat di beranda.
-        emailRedirectTo: kIsWeb ? null : AppConfig.signupConfirmRedirect,
+        redirectTo: kIsWeb ? null : AppConfig.signupConfirmRedirect,
       );
       if (!mounted) return;
-      if (res.session == null) {
-        // "Confirm email" aktif: tunggu verifikasi. Di Android tautan email
-        // membuka app kembali (bukan browser) — catat email yang menunggu
-        // supaya app bisa menampilkan layar Selamat Datang setelah terverifikasi.
-        if (!kIsWeb) await SignupHandoff.remember(_email.text.trim());
-        if (!mounted) return;
-        showSnack(context,
-            'Akun dibuat! Buka tautan verifikasi di email — kamu akan kembali ke aplikasi.');
-        Navigator.pushReplacementNamed(context, '/login');
-      } else {
-        Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
+      if (!hasil.ok) {
+        showSnack(context, hasil.pesan ?? 'Gagal membuat akun. Coba lagi nanti.',
+            error: true);
+        return;
       }
-    } on AuthException catch (e) {
-      if (mounted) showSnack(context, e.message, error: true);
+      // Akun SELALU menunggu verifikasi email: dibuat lewat Admin API dalam
+      // keadaan belum terkonfirmasi. Di Android tautan emailnya membuka app
+      // kembali (bukan browser) — catat email yang menunggu supaya app bisa
+      // menampilkan layar Selamat Datang setelah terverifikasi.
+      if (!kIsWeb) await SignupHandoff.remember(_email.text.trim());
+      if (!mounted) return;
+      showSnack(context,
+          'Akun dibuat! Buka tautan verifikasi di email — kamu akan kembali ke aplikasi.');
+      Navigator.pushReplacementNamed(context, '/login');
     } catch (_) {
       if (mounted) showSnack(context, 'Gagal mendaftar. Periksa koneksi internet.', error: true);
     } finally {

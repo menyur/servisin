@@ -8,13 +8,27 @@ import 'package:fixify_app/ui/reset_password_screen.dart';
 Widget _wrapScreen({
   bool? sessionReady,
   Future<void> Function(String password)? save,
+  bool tautanGagal = false,
 }) {
   return MaterialApp(
     home: SetNewPasswordScreen(
       sessionReady: sessionReady,
       savePassword: save,
+      tautanGagal: tautanGagal,
     ),
   );
+}
+
+void _harapTautanKedaluwarsa() {
+  expect(find.text('Tautan tidak berlaku'), findsOneWidget);
+  expect(find.text('Minta Tautan Baru'), findsOneWidget);
+  expect(find.text('Simpan Kata Sandi Baru'), findsNothing);
+  expect(find.byType(TextField), findsNothing);
+  // Judul besar harus sejalan dengan isi kartu: dulu judulnya tetap "Kata
+  // Sandi Baru" sementara kartunya sudah berkata "Tautan tidak berlaku" —
+  // pengguna melihat dua pesan yang bertentangan di satu layar.
+  expect(find.text('Tautan Kedaluwarsa'), findsOneWidget);
+  expect(find.text('Kata Sandi Baru'), findsNothing);
 }
 
 void main() {
@@ -98,11 +112,46 @@ void main() {
     await tester.pumpWidget(_wrapScreen(sessionReady: false));
     await tester.pump();
 
-    expect(find.text('Tautan tidak berlaku'), findsOneWidget);
-    expect(find.text('Minta Tautan Baru'), findsOneWidget);
+    _harapTautanKedaluwarsa();
     expect(find.text('Kembali ke Masuk'), findsOneWidget);
-    // Form kata sandi tidak ditawarkan bila sesi pemulihan tidak ada.
-    expect(find.text('Simpan Kata Sandi Baru'), findsNothing);
-    expect(find.byType(TextField), findsNothing);
+  });
+
+  // Kasus yang dulu SENYAP: deep link gagal ditukar jadi sesi. Aplikasi hanya
+  // diam (logcat: "Unhandled Exception: AuthException(...)"), layar ini tak
+  // pernah terbuka. Sekarang kegagalan itu datang sebagai `tautanGagal: true`.
+  testWidgets('tautan gagal ditukar → "Tautan tidak berlaku", bukan form', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_wrapScreen(sessionReady: false, tautanGagal: true));
+    await tester.pump();
+
+    _harapTautanKedaluwarsa();
+  });
+
+  testWidgets(
+    'tautan gagal walau ada sesi login biasa → tetap "Tautan tidak berlaku"',
+    (tester) async {
+      // Pengguna yang kebetulan masih login jangan diberi form reset yang
+      // pasti salah: yang gagal adalah tautannya, bukan sesinya.
+      await tester.pumpWidget(_wrapScreen(sessionReady: true, tautanGagal: true));
+      await tester.pump();
+
+      _harapTautanKedaluwarsa();
+    },
+  );
+
+  group('tampilkanTautanKedaluwarsa', () {
+    test('tautan gagal menang atas sesi yang ada', () {
+      expect(tampilkanTautanKedaluwarsa(tautanGagal: true, adaSesi: true), isTrue);
+      expect(tampilkanTautanKedaluwarsa(tautanGagal: true, adaSesi: false), isTrue);
+    });
+
+    test('tanpa sesi pemulihan juga menampilkan tautan kedaluwarsa', () {
+      expect(tampilkanTautanKedaluwarsa(tautanGagal: false, adaSesi: false), isTrue);
+    });
+
+    test('hanya sesi yang sah & tautan sehat yang menampilkan form', () {
+      expect(tampilkanTautanKedaluwarsa(tautanGagal: false, adaSesi: true), isFalse);
+    });
   });
 }

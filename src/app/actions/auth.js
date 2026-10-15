@@ -6,6 +6,12 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { sendAdminNewApplicantEmail, sendAdminNewCustomerEmail } from "@/lib/email";
 import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
+import { kirimTautanReset } from "@/lib/password-reset";
+import {
+  kirimVerifikasiPendaftaran,
+  metadataPendaftaran,
+  ipDariHeader,
+} from "@/lib/signup-verification";
 
 export async function signUp(prevState, formData) {
   const name = formData.get("name");
@@ -37,29 +43,49 @@ export async function signUp(prevState, formData) {
   }
 
   const supabase = await createClient();
-  const { error } = await supabase.auth.signUp({
-    email,
-    password,
-    options: { data: { name, phone, role, skill, address, ktp_url: ktpUrl } },
+
+  // Tujuan balik setelah link verifikasi diklik — Supabase menuntut URL absolut.
+  // Prioritas: NEXT_PUBLIC_SITE_URL (produksi) → origin request saat ini (dev).
+  const h = await headers();
+  const origin =
+    process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ||
+    h.get("origin") ||
+    "http://localhost:3000";
+
+  // Akun dibuat lewat Admin API lalu emailnya dikirim Resend — BUKAN lewat
+  // `supabase.auth.signUp`, yang selalu meminta mailer bawaan Supabase mengirim
+  // email (hanya untuk anggota tim, 2 pesan/jam) sehingga pendaftaran pelanggan
+  // biasa gagal begitu kuota itu habis. Lihat src/lib/signup-verification.js.
+  const hasil = await kirimVerifikasiPendaftaran({
+    email: String(email),
+    password: String(password),
+    data: metadataPendaftaran({ name, phone, address, role, skill, ktpUrl }),
+    siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
+    origin,
+    ip: ipDariHeader(h),
   });
 
-  if (error) {
-    const msg = error.message || "";
-    let friendly = msg;
-    if (/rate limit/i.test(msg)) {
-      friendly =
-        "Terlalu banyak percobaan pendaftaran dalam waktu singkat — server menahan sementara pengiriman email verifikasi. Coba lagi sekitar 1 jam ke depan. Jika kamu merasa sudah pernah mendaftar dengan email ini, coba Masuk atau fitur lupa kata sandi.";
-    } else if (/signups are disabled|signup.*disabled/i.test(msg)) {
-      friendly =
-        "Pendaftaran akun baru sedang dinonaktifkan sementara di server. Silakan coba beberapa saat lagi, atau hubungi kami melalui halaman kontak.";
-    } else if (/already registered|already exists/i.test(msg)) {
-      friendly = "Email ini sudah terdaftar. Silakan Masuk dengan kata sandimu, atau gunakan email lain.";
-    } else if (/invalid email/i.test(msg)) {
-      friendly = "Format email tidak valid — periksa lagi penulisannya.";
-    } else if (/password.*least|short/i.test(msg)) {
-      friendly = "Kata sandi terlalu pendek — minimal 6 karakter.";
+  if (!hasil.ok) {
+    if (hasil.alasan === "email_tidak_valid") {
+      return { error: "Format email tidak valid — periksa lagi penulisannya." };
     }
-    return { error: friendly };
+    if (hasil.alasan === "password_tidak_valid") {
+      return { error: "Kata sandi terlalu pendek — minimal 6 karakter." };
+    }
+    if (hasil.alasan === "jeda") {
+      return {
+        error: `Email verifikasi baru saja dikirim ke alamat ini — tunggu ${hasil.sisaDetik} detik lagi.`,
+      };
+    }
+    if (hasil.alasan === "jeda_ip") {
+      return {
+        error: `Terlalu banyak pendaftaran dari jaringan ini — coba lagi dalam ${Math.ceil(hasil.sisaDetik / 60)} menit.`,
+      };
+    }
+    if (hasil.alasan === "env") {
+      return { error: "Pendaftaran sedang tidak bisa mengirim email. Hubungi admin." };
+    }
+    return { error: "Gagal membuat akun. Coba lagi nanti." };
   }
 
   // Akun baru (teknisi maupun pelanggan) → email ke semua admin.
@@ -126,28 +152,48 @@ export async function signIn(prevState, formData) {
   redirect(nextPath || "/dashboard");
 }
 
-/** Kirim email reset password. Selalu sukses dari sudut pandang user
- * (jangan bocorkan apakah email terdaftar). */
+/** Kirim email tautan reset kata sandi (jalur web).
+ *
+ * Memakai src/lib/password-reset.js — bukan lagi `resetPasswordForEmail`, yang
+ * bergantung pada mailer bawaan Supabase (hanya anggota tim project, 2 pesan/
+ * jam) sehingga email reset pelanggan biasa tidak pernah berangkat walau
+ * halaman ini berkata sukses. Tautannya kini dibuat server (service role) dan
+ * dikirim lewat Resend.
+ *
+ * Alamat TANPA akun menghasilkan `{success:true}` yang sama — jangan bedakan,
+ * itu jalan enumerasi akun. Yang boleh dibedakan cuma bentuk email salah, jeda
+ * per alamat, dan server email belum siap (ketiganya tidak bergantung pada
+ * ada/tidaknya akun). */
 export async function requestPasswordReset(prevState, formData) {
   const email = formData.get("email");
   if (!email) {
     return { error: "Email wajib diisi." };
   }
 
-  const supabase = await createClient();
-  // Redirect setelah link email diklik — Supabase menuntut URL absolut.
+  // Tujuan balik setelah link email diklik — Supabase menuntut URL absolut.
   // Prioritas: NEXT_PUBLIC_SITE_URL (produksi) → origin request saat ini (dev).
   const h = await headers();
   const origin = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "")
     || h.get("origin")
     || "http://localhost:3000";
 
-  const { error } = await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${origin}/reset-password`,
+  const hasil = await kirimTautanReset({
+    email: String(email),
+    siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
+    origin,
   });
 
-  if (error) {
-    return { error: "Gagal mengirim email reset: " + error.message };
+  if (!hasil.ok) {
+    if (hasil.alasan === "email_tidak_valid") {
+      return { error: "Masukkan alamat email yang benar." };
+    }
+    if (hasil.alasan === "jeda") {
+      return { error: `Permintaan tautan baru saja dikirim — tunggu ${hasil.sisaDetik} detik lagi.` };
+    }
+    if (hasil.alasan === "env") {
+      return { error: "Layanan email belum siap di server. Hubungi admin." };
+    }
+    return { error: "Gagal mengirim email reset. Coba lagi nanti." };
   }
 
   return { success: true, email };

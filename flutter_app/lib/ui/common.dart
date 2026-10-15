@@ -574,6 +574,11 @@ final ValueNotifier<int> mainTabIndex = ValueNotifier<int>(0);
 /// notifikasi foreground dari luar widget tree biasa.
 final navigatorKey = GlobalKey<NavigatorState>();
 
+/// GlobalKey ScaffoldMessenger — dipakai main.dart memberi tahu (lewat
+/// SnackBar) saat pengguna yang SUDAH masuk membuka tautan reset yang gagal,
+/// tanpa menyeretnya keluar dari layar yang sedang dibuka.
+final scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+
 /// Nama rute bernama yang sedang tampil (verbose terakhir dari [obsRoutes]).
 /// Dipakai handler deep link di main.dart agar tidak melakukan navigasi ganda
 /// saat pengguna sudah berada di beranda.
@@ -600,6 +605,28 @@ class AuthRouteObserver extends NavigatorObserver {
   void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) =>
       _remember(previousRoute);
 }
+
+/// Penanda bahwa deep link reset kata sandi (`fixify://reset-password`) sudah
+/// ditangani — entah berhasil (layar "Kata Sandi Baru") atau gagal (layar
+/// "Tautan tidak berlaku").
+///
+/// Dipakai splash: navigasi splash yang datang BELAKANGAN akan menimpa layar
+/// yang baru dibuka deep link, karena `pushReplacementNamed` mengganti rute
+/// teratas. Terbukti di emulator (13 Okt 2026): tautan dibuka saat app start,
+/// sesi pemulihan terbentuk, layar "Kata Sandi Baru" terbuka — lalu splash
+/// (yang rutenya dihitung SEBELUM sesi itu ada) menggantinya dengan beranda.
+/// Pengguna yang mengikuti tautan reset mendarat di beranda tanpa penjelasan.
+final ValueNotifier<bool> pemulihanKataSandiAktif = ValueNotifier<bool>(false);
+
+/// Boleh splash berpindah ke rute awalnya?
+///
+/// Tidak bila deep link reset sudah membawa pengguna ke layarnya sendiri, dan
+/// tidak saat splash ditahan sengaja (`?splash=hold`). Murni — diuji langsung.
+bool bolehSplashNavigasi({
+  required bool pemulihanAktif,
+  required bool hold,
+}) =>
+    !pemulihanAktif && !hold;
 
 /// Apakah sesi baru dari deep link (verifikasi email `fixify://confirm`)
 /// perlu memindahkan pengguna ke beranda/layar Selamat Datang?

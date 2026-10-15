@@ -121,6 +121,17 @@ Sisi app yang harus cocok dengan nilai di atas:
 | `AppConfig.resetPasswordRedirect` (`lib/config.dart`) | `fixify://reset-password` |
 | `AppConfig.signupConfirmRedirect` (`lib/config.dart`) | `fixify://confirm` |
 | Intent-filter `AndroidManifest.xml` | `<data android:scheme="fixify" android:host="login-callback" />`, `… host="reset-password" />`, dan `… host="confirm" />` |
+| Meta-data `AndroidManifest.xml` (dalam `<activity>`) | `<meta-data android:name="flutter_deeplinking_enabled" android:value="false" />` |
+
+Meta-data `flutter_deeplinking_enabled=false` **wajib** dan bukan pilihan
+gaya: sejak Flutter 3.24 nilai bawaannya `true`, dan dalam kondisi itu
+FlutterActivity memperlakukan URL masuk sebagai NAMA RUTE — bukan sebagai
+tautan yang diserahkan ke `app_links`. Gejalanya persis pada langkah 4 di
+bawah yang tak pernah terjadi: saat app tertutup, `initialRoute` yang
+dipakai adalah URL itu sendiri (bukan `/splash`), dan saat app hidup URL yang
+sama di-push sebagai rute `/?code=…` sehingga muncul
+`Could not find a generator for route`. Dijaga oleh
+`flutter_app/test/deeplink_manifest_test.dart` (ikut `flutter test`).
 
 Alur Android (fallback browser): tombol Google → browser OAuth → Supabase balik
 ke `fixify://login-callback?code=…` → intent-filter meneruskan ke app →
@@ -466,6 +477,8 @@ pesannya), dan pesan yang tampil di app. Ketiganya menunjuk tahap yang berbeda
 | `adb shell am start -d fixify://login-callback…` membuka browser (bukan app) | intent-filter deep link tidak terpasang / salah host → Langkah 4b tabel |
 | Login Google sukses tapi profil kosong | Trigger `handle_new_user` — cek log Supabase (Edge Function/Database) |
 | Klik tautan reset di email membuka browser, bukan app | `fixify://reset-password` belum ada di Redirect URLs, atau intent-filter hilang → Langkah 4b |
+| App terbuka dari tautan (reset/Google/verifikasi) tapi mendarat di beranda, **bukan** form Kata Sandi Baru | Deep linking bawaan Flutter belum dimatikan → meta-data `flutter_deeplinking_enabled=false` hilang → Langkah 4b tabel |
+| Log berisi `Could not find a generator for route /?code=…` (atau rute `fixify://…`) | Sama: URL deep link diperlakukan Flutter sebagai rute → meta-data `flutter_deeplinking_enabled=false` hilang → Langkah 4b |
 | App terbuka dari tautan reset tapi menampilkan "Tautan tidak berlaku" | Kode PKCE tidak ikut terkirim (redirect berpindah app/halaman) atau tautan kedaluwarsa/sudah dipakai → minta tautan baru dari app |
 | Klik tautan verifikasi email pendaftaran → tetap di browser / diminta login manual | `fixify://confirm` belum ada di Redirect URLs, atau `emailRedirectTo` tidak terkirim (build lama) → Langkah 4b |
 | Sesi verifikasi email terbentuk tapi app tidak pindah ke beranda | Rute saat itu sudah bernama `/` (dianggap sudah di beranda), atau intent-filter `fixify://confirm` tidak terpasang sehingga event `signedIn` tidak pernah terjadi |

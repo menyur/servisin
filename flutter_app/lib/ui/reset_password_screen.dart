@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
@@ -8,9 +10,57 @@ import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
 
+/// Jeda wajib antar-permintaan tautan reset ke alamat yang sama.
+///
+/// Selaras dengan jeda per-alamat Supabase untuk permintaan reset (60 detik —
+/// `smtp_max_frequency` bawaan juga 60 detik;
+/// https://supabase.com/docs/guides/auth/rate-limits): permintaan lebih cepat
+/// dari itu ditolak dan hanya menambah hitungan blokir tanpa menambah peluang
+/// email sampai. Angka ini juga yang ditampilkan ke pengguna, jadi tepuk-ulang
+/// tombol tidak lagi jadi cara mencari tahu (dan menambah blokir di Supabase).
+const int kJedaKirimResetDetik = 60;
+
+/// Kalimat yang ditampilkan ketika permintaan reset ditolak karena batas
+/// pengiriman email Supabase.
+///
+/// Terukur di produksi (13 Okt 2026) pada project ini:
+///   `POST /auth/v1/recover` → HTTP 429
+///   `{"code":429,"error_code":"over_email_send_rate_limit",
+///     "msg":"email rate limit exceeded"}`
+/// Dokumentasi kode error Supabase menautkan `over_email_send_rate_limit` ke
+/// batas per **alamat tujuan**, sedangkan batas **project** (mailer bawaan:
+/// 2 pesan/jam, dipakai bersama semua endpoint email Auth —
+/// https://supabase.com/docs/guides/auth/auth-smtp) tidak dijelaskan kode mana
+/// yang dikembalikan saat kena. Dua sebab itu butuh waktu tunggu berbeda, jadi
+/// pesan di bawah sengaja TIDAK menyebut angka jam: ia menuntun (tunggu,
+/// coba sekali lagi, periksa spam) alih-alih menjanjikan waktu yang bisa salah.
+/// Yang menekan tombol berkali-kali tetap dicegah oleh jeda di layar ini.
+/// Perbaikan sebenarnya di sisi server — SMTP kustom + naikkan batas, atau
+/// kirim di luar Auth: lihat docs/reset-password-email.md dan
+/// `npm run verify:reset-email`.
+String pesanBatasKirimEmail() =>
+    'Permintaan tautan reset ditolak karena batas pengiriman email di server '
+    '(biasanya karena permintaan berulang untuk alamat ini). Tunggu beberapa '
+    'menit, lalu coba sekali lagi — dan periksa folder spam untuk email yang '
+    'mungkin sudah terkirim.';
+
+/// Apakah kegagalan ini batas pengiriman email (bukan jaringan/kredensial)?
+/// Murni — dipakai jalur UI dan diuji langsung tanpa jaringan.
+bool gagalKarenaBatasEmail(AuthException e) {
+  final kode = (e.code ?? '').toLowerCase();
+  final pesan = e.message.toLowerCase();
+  return e.statusCode == '429' ||
+      kode.contains('rate_limit') ||
+      pesan.contains('rate limit');
+}
+
 /// Langkah 1 alur lupa kata sandi: minta tautan reset dikirim ke email.
 class ResetPasswordScreen extends StatefulWidget {
-  const ResetPasswordScreen({super.key});
+  const ResetPasswordScreen({super.key, this.sendReset});
+
+  /// Seam uji widget: ganti pengiriman permintaan. `null` (produksi) =
+  /// `Api.sendPasswordReset` dengan redirectTo deep link Android.
+  final Future<void> Function(String email)? sendReset;
 
   @override
   State<ResetPasswordScreen> createState() => _ResetPasswordScreenState();
@@ -20,11 +70,28 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
   final _email = TextEditingController();
   bool _sent = false;
   bool _loading = false;
+  int _jeda = 0;
+  Timer? _jedaTimer;
 
   @override
   void dispose() {
+    _jedaTimer?.cancel();
     _email.dispose();
     super.dispose();
+  }
+
+  /// Mulai jeda hitung-mundur setelah permintaan diterima Supabase.
+  void _mulaiJeda() {
+    _jedaTimer?.cancel();
+    setState(() => _jeda = kJedaKirimResetDetik);
+    _jedaTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() => _jeda -= 1);
+      if (_jeda <= 0) t.cancel();
+    });
   }
 
   Future<void> _submit() async {
@@ -35,14 +102,32 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
     }
     setState(() => _loading = true);
     try {
-      // Android: minta balik ke app lewat deep link fixify://reset-password
-      // supaya kode PKCE ditukar menjadi sesi pemulihan dan form kata sandi
-      // baru langsung terbuka. Web: biarkan ikut Site URL (halaman Next.js).
-      await Api.sendPasswordReset(
-        email,
-        redirectTo: kIsWeb ? null : AppConfig.resetPasswordRedirect,
-      );
-      if (mounted) setState(() => _sent = true);
+      final kirim = widget.sendReset;
+      if (kirim != null) {
+        await kirim(email);
+      } else {
+        // Android: minta balik ke app lewat deep link fixify://reset-password
+        // supaya kode PKCE ditukar menjadi sesi pemulihan dan form kata sandi
+        // baru langsung terbuka. Web: biarkan ikut Site URL (halaman Next.js).
+        await Api.sendPasswordReset(
+          email,
+          redirectTo: kIsWeb ? null : AppConfig.resetPasswordRedirect,
+        );
+      }
+      if (mounted) {
+        setState(() => _sent = true);
+        _mulaiJeda();
+      }
+    } on AuthException catch (e) {
+      if (mounted) {
+        // Kegagalan jaringan pun bisa sampai ke sini sebagai AuthException
+        // (gotrue membungkusnya) — utamakan terjemahan jaringan bila cocok,
+        // lalu pesan server apa adanya. Hanya 429 yang punya kalimat sendiri.
+        final pesan = gagalKarenaBatasEmail(e)
+            ? pesanBatasKirimEmail()
+            : (friendlyNetworkError(e) ?? e.message);
+        showSnack(context, pesan, error: true);
+      }
     } catch (e) {
       if (mounted) showSnackError(context, e, 'Gagal mengirim. Coba lagi nanti.');
     } finally {
@@ -122,10 +207,17 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
               fontWeight: FontWeight.w800,
               color: AppColors.navy)),
       const SizedBox(height: 10),
+      // Sengaja tidak berjanji "email sudah terkirim": Supabase selalu
+      // menjawab sukses walau alamatnya tidak punya akun (perlindungan
+      // enumerasi) — dibuktikan `npm run verify:reset-email`: alamat tak
+      // terdaftar → HTTP 200 `{}` tanpa satu email pun dikirim. Kalimat "kalau
+      // alamat ini terdaftar" menuntun pengguna memeriksa ejaan alamat dan
+      // folder spam alih-alih menunggu email yang tak akan datang.
       Text(
-        'Kami mengirim tautan reset ke\n${_email.text.trim()}.\n'
-        'Buka tautannya di perangkat ini — app akan terbuka otomatis\n'
-        'ke layar pengaturan kata sandi baru.',
+        'Kalau ${_email.text.trim()} terdaftar, tautan reset sudah dikirim ke\n'
+        'alamat itu. Buka tautannya di perangkat ini — app akan terbuka\n'
+        'otomatis ke layar pengaturan kata sandi baru.\n'
+        'Belum masuk juga? Periksa folder spam.',
         textAlign: TextAlign.center,
         style: const TextStyle(
             fontSize: 13, color: AppColors.inkSoft, height: 1.6),
@@ -139,15 +231,39 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
       ),
       const SizedBox(height: 10),
       TextButton(
-        onPressed: _loading
+        // Dikunci selama jeda: menekan lebih cepat hanya memicu 429
+        // (`over_email_send_rate_limit`) di Supabase tanpa menambah peluang
+        // email sampai — lihat [kJedaKirimResetDetik].
+        onPressed: (_loading || _jeda > 0)
             ? null
             : () => setState(() => _sent = false),
-        child: const Text('Email tidak sampai? Coba email lain',
-            style: TextStyle(fontWeight: FontWeight.w700)),
+        child: Text(
+          _jeda > 0
+              ? 'Coba email lain dalam ${_jeda}s'
+              : 'Email tidak sampai? Coba email lain',
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
       ),
     ]);
   }
 }
+
+/// Argumen rute `/set-password` yang berarti "tautan gagal dikenali".
+/// Dipakai main.dart saat deep link TIDAK bisa ditukar jadi sesi pemulihan.
+const String kArgTautanGagal = 'tautan-gagal';
+
+/// Layar harus menampilkan keadaan "Tautan tidak berlaku"?
+///
+/// Murni — diuji langsung tanpa Supabase. Ada dua sebab, dan yang pertama
+/// dulu pernah luput: tautan yang GAGAL ditukar (kedaluwarsa, sudah dipakai,
+/// atau kode PKCE-nya tak ada di perangkat ini) tidak pernah sampai ke layar
+/// ini sama sekali, sehingga pengguna hanya melihat layar diam. Sekarang
+/// kegagalan itu membawa pengguna ke sini dengan [tautanGagal] = true.
+bool tampilkanTautanKedaluwarsa({
+  required bool tautanGagal,
+  required bool adaSesi,
+}) =>
+    tautanGagal || !adaSesi;
 
 /// Langkah 2 alur lupa kata sandi (mobile): buat kata sandi baru.
 ///
@@ -156,7 +272,18 @@ class _ResetPasswordScreenState extends State<ResetPasswordScreen> {
 /// kode di tautan email menjadi sesi pemulihan dan memancarkan event
 /// `passwordRecovery`. Jadi di sini cukup memanggil updateUser.
 class SetNewPasswordScreen extends StatefulWidget {
-  const SetNewPasswordScreen({super.key, this.sessionReady, this.savePassword});
+  const SetNewPasswordScreen({
+    super.key,
+    this.sessionReady,
+    this.savePassword,
+    this.tautanGagal = false,
+  });
+
+  /// Tautan reset yang diklik GAGAL menjadi sesi pemulihan (kedaluwarsa /
+  /// sudah dipakai / kode PKCE-nya hilang). Dipaksa tampil sebagai “Tautan
+  /// tidak berlaku” — juga bila pengguna kebetulan masih punya sesi login
+  /// biasa, supaya kesalahan tautan tidak menyamar jadi form yang siap diisi.
+  final bool tautanGagal;
 
   /// Seam uji widget: paksa status sesi pemulihan. `null` (produksi) =
   /// periksa `Api.session` sungguhan.
@@ -222,23 +349,39 @@ class _SetNewPasswordScreenState extends State<SetNewPasswordScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Keadaan layar ditentukan sekali di sini supaya judul, subjudul, dan isi
+    // kartu tidak mungkin saling bertentangan (dulu judulnya tetap "Kata Sandi
+    // Baru" sementara kartunya sudah berkata "Tautan tidak berlaku").
+    final kedaluwarsa = tampilkanTautanKedaluwarsa(
+      tautanGagal: widget.tautanGagal,
+      adaSesi: _hasSession,
+    );
+    final judul = _done
+        ? 'Kata sandi diganti'
+        : kedaluwarsa
+            ? 'Tautan Kedaluwarsa'
+            : 'Kata Sandi Baru';
+    final subjudul = _done
+        ? 'Masuk kembali memakai kata sandi barumu'
+        : kedaluwarsa
+            ? 'Minta tautan baru untuk melanjutkan'
+            : 'Buat kata sandi baru untuk akunmu';
+
     return Scaffold(
       backgroundColor: AppColors.paper,
       body: SingleChildScrollView(
         child: Column(children: [
           AuthHero(
-            title: _done ? 'Kata sandi diganti' : 'Kata Sandi Baru',
-            subtitle: _done
-                ? 'Masuk kembali memakai kata sandi barumu'
-                : 'Buat kata sandi baru untuk akunmu',
+            title: judul,
+            subtitle: subjudul,
             showLogo: !_done,
           ),
           AuthCard(
             child: _done
                 ? _buildDone()
-                : _hasSession
-                    ? _buildForm()
-                    : _buildExpired(),
+                : kedaluwarsa
+                    ? _buildExpired()
+                    : _buildForm(),
           ),
           const TrustRow(),
         ]),

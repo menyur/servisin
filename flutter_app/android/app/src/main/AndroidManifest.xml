@@ -48,6 +48,27 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- WAJIB: matikan deep linking BAWAAN Flutter.
+                 Bila meta-data ini tidak ada, FlutterActivity menganggap
+                 dirinya pemilik URL masuk (bawaan = true) dan
+                 memperlakukannya sebagai NAMA RUTE:
+                   a. aplikasi tertutup → URL `fixify://reset-password?code=…`
+                      dipakai sebagai initial route, sehingga initialRoute
+                      '/splash' di lib/main.dart DIABAIKAN dan rute itu tak
+                      punya generator;
+                   b. aplikasi hidup → URL yang sama di-push sebagai rute
+                      `/?code=…` → tak ada generatornya, muncul error
+                      "Could not find a generator for route" dan form
+                      "Kata Sandi Baru" tidak terbuka.
+                 Pemilik deep link di app ini adalah plugin app_links (dipakai
+                 supabase_flutter dengan detectSessionInUri=true); sejak Flutter
+                 3.24 app_links mensyaratkan nilai false ini ditulis eksplisit
+                 (doc/README_android.md). Berlaku untuk KETIGA deep link:
+                 login-callback, reset-password, dan confirm.
+                 Dijaga oleh test/deeplink_manifest_test.dart. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>

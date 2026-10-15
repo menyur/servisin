@@ -2,10 +2,10 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
 import '../config.dart';
+import '../register_http.dart';
 import '../signup_handoff.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
@@ -19,7 +19,16 @@ import 'common.dart';
 /// (trigger DB) — teknisi bisa login tapi belum muncul di lowongan sampai
 /// admin menyetujui lewat tab "Pendaftar Teknisi".
 class TechnicianRegisterScreen extends StatefulWidget {
-  const TechnicianRegisterScreen({super.key});
+  const TechnicianRegisterScreen({super.key, this.daftar, this.ktpPathUji});
+
+  /// Seam uji widget: ganti pengiriman pendaftaran. `null` (produksi) =
+  /// [Api.daftarTeknisi] ke server web (POST /api/auth/register).
+  final KirimPendaftaranTeknisi? daftar;
+
+  /// Seam uji widget: isi path KTP tanpa mengunggah berkas — jalur unggah
+  /// butuh pemilih gambar asli, jadi tanpa ini langkah validasi KTP tidak
+  /// bisa dilewati di test.
+  final String? ktpPathUji;
 
   @override
   State<TechnicianRegisterScreen> createState() =>
@@ -48,6 +57,12 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
   bool _uploadingKtp = false;
   bool _loading = false;
   bool _obscure = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _ktpPath = widget.ktpPathUji;
+  }
 
   /// 0-4: panjang>=6, huruf kecil, huruf besar, angka — sama dengan RegisterScreen.
   int get _strength {
@@ -99,7 +114,12 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
     }
     setState(() => _loading = true);
     try {
-      final res = await Api.signUpTechnician(
+      // Sama seperti pendaftaran pelanggan: akunnya dibuat server lewat Admin API
+      // lalu email verifikasinya dikirim Resend — bukan mailer bawaan Supabase
+      // yang hanya melayani anggota tim project (2 pesan/jam). Lihat
+      // src/lib/signup-verification.js.
+      final kirim = widget.daftar ?? Api.daftarTeknisi;
+      final hasil = await kirim(
         email: _email.text.trim(),
         password: _password.text,
         name: _name.text.trim(),
@@ -109,48 +129,45 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
         ktpPath: _ktpPath!,
         // Android: tautan verifikasi balik ke app lewat deep link
         // fixify://confirm (sesi langsung aktif setelah diklik).
-        emailRedirectTo: kIsWeb ? null : AppConfig.signupConfirmRedirect,
+        redirectTo: kIsWeb ? null : AppConfig.signupConfirmRedirect,
       );
       if (!mounted) return;
-      if (res.session == null) {
-        // "Confirm email" aktif: verifikasi dulu. Catat email + peran teknisi
-        // agar setelah tautan di email diklik, app menampilkan layar Selamat
-        // Datang versi teknisi (ajakan melengkapi profil).
-        if (!kIsWeb) {
-          await SignupHandoff.remember(_email.text.trim(), role: 'technician');
-        }
-        if (!mounted) return;
-        showSnack(context,
-            'Pendaftaran terkirim! Buka tautan verifikasi di email — kamu akan kembali ke aplikasi untuk melengkapi profil.');
-        Navigator.pushReplacementNamed(context, '/login');
-      } else {
-        // Langsung login: tampilkan status pending, karena tab Pekerjaan
-        // baru terisi setelah admin menyetujui pendaftaran.
-        await showDialog<void>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            icon: const Icon(Icons.hourglass_top_rounded,
-                color: AppColors.amber, size: 40),
-            title: const Text('Pendaftaran terkirim!'),
-            content: const Text(
-              'Selamat datang, calon teknisi Fixify!\n\n'
-              'Akunmu sedang MENUNGGU PERSETUJUAN admin (1x24 jam kerja). '
-              'Kamu sudah bisa masuk dan melengkapi profil — daftar pekerjaan '
-              'akan terbuka otomatis setelah akunmu disetujui.',
-            ),
-            actions: [
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Mengerti'),
-              ),
-            ],
-          ),
-        );
-        if (!mounted) return;
-        Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
+      if (!hasil.ok) {
+        showSnack(context, hasil.pesan ?? 'Gagal mendaftar.', error: true);
+        return;
       }
-    } on AuthException catch (e) {
-      if (mounted) showSnack(context, friendlyAuthError(e.message), error: true);
+      // Verifikasi email dulu. Catat email + peran teknisi agar setelah tautan
+      // di email diklik, app menampilkan layar Selamat Datang versi teknisi
+      // (ajakan melengkapi profil).
+      if (!kIsWeb) {
+        await SignupHandoff.remember(_email.text.trim(), role: 'technician');
+      }
+      if (!mounted) return;
+      // Akun belum bisa dipakai sampai emailnya diverifikasi, dan tab Pekerjaan
+      // baru terisi setelah admin menyetujui — sampaikan keduanya sekaligus.
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.hourglass_top_rounded,
+              color: AppColors.amber, size: 40),
+          title: const Text('Pendaftaran terkirim!'),
+          content: const Text(
+            'Selamat datang, calon teknisi Fixify!\n\n'
+            'Buka tautan verifikasi di emailmu untuk mengaktifkan akun.\n\n'
+            'Setelah itu akunmu masih MENUNGGU PERSETUJUAN admin '
+            '(1x24 jam kerja). Kamu sudah bisa masuk dan melengkapi profil — '
+            'daftar pekerjaan akan terbuka otomatis setelah akunmu disetujui.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Mengerti'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, '/login');
     } catch (_) {
       if (mounted) {
         showSnack(context, 'Gagal mendaftar. Periksa koneksi internet.', error: true);
@@ -158,20 +175,6 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
-  }
-
-  /// Pesan error signup yang ramah — paritas dengan server action web.
-  String friendlyAuthError(String msg) {
-    final m = msg.toLowerCase();
-    if (m.contains('rate limit')) {
-      return 'Terlalu banyak percobaan pendaftaran dalam waktu singkat — coba lagi sekitar 1 jam ke depan.';
-    }
-    if (m.contains('already registered') || m.contains('already exists')) {
-      return 'Email ini sudah terdaftar. Silakan Masuk, atau gunakan email lain.';
-    }
-    if (m.contains('invalid email')) return 'Format email tidak valid — periksa lagi penulisannya.';
-    if (m.contains('least') || m.contains('short')) return 'Kata sandi terlalu pendek — minimal 6 karakter.';
-    return msg;
   }
 
   @override

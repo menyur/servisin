@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import 'common.dart';
 
 /// Splash screen beranimasi: latar gradien brand, logo Fixify membesar
 /// dengan efek pegas (easeOutBack) + fade, nama app muncul menyusul,
@@ -74,9 +75,19 @@ class _SplashScreenState extends State<SplashScreen>
 
     // Setelah animasi + jeda singkat (total ±1.9s), pindah ke rute tujuan.
     Future.delayed(const Duration(milliseconds: 1900), () {
-      if (mounted && !hold) {
-        Navigator.pushReplacementNamed(context, widget.nextRoute);
+      if (!mounted) return;
+      // Jangan menimpa layar yang baru dibuka deep link reset kata sandi: rute
+      // tujuan di atas dihitung saat splash DIBANGUN, sedangkan sesi pemulihan
+      // baru terbentuk saat tautan ditukar (bisa lebih lambat). Terbukti di
+      // emulator: tautan reset → layar "Kata Sandi Baru" → splash menggantinya
+      // dengan beranda. Lihat [pemulihanKataSandiAktif].
+      if (!bolehSplashNavigasi(
+        pemulihanAktif: pemulihanKataSandiAktif.value,
+        hold: hold,
+      )) {
+        return;
       }
+      Navigator.pushReplacementNamed(context, widget.nextRoute);
     });
   }
 

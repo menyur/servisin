@@ -9,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'config.dart';
 import 'models.dart';
+import 'register_http.dart';
+import 'reset_http.dart';
 
 /// Fungsi cleanup langganan realtime chat (dipanggil di dispose).
 typedef ChatUnsubscribe = Future<void> Function();
@@ -80,31 +82,52 @@ class Api {
   static Future<AuthResponse> signIn(String email, String password) =>
       db.auth.signInWithPassword(email: email, password: password);
 
-  /// Daftar akun pelanggan.
+  /// Daftar akun pelanggan — lewat server web, BUKAN `db.auth.signUp`.
   ///
-  /// [emailRedirectTo] menentukan ke mana email konfirmasi kembali setelah
-  /// diklik: Android → deep link `fixify://confirm`
+  /// `db.auth.signUp` sudah TIDAK dipakai: ia selalu meminta Supabase mengirim
+  /// email konfirmasi, sementara mailer bawaan hanya melayani alamat anggota
+  /// tim project (2 pesan/jam). Jadi pelanggan biasa tidak pernah menerima
+  /// email verifikasi — dan begitu kuota itu habis, PENDAFTARANNYA SENDIRI
+  /// gagal, sebab GoTrue mengirim email di dalam transaksi. Server
+  /// (POST /api/auth/register) membuat akunnya lewat Admin API (tanpa email)
+  /// lalu mengirim emailnya lewat Resend;
+  /// lihat src/lib/signup-verification.js.
+  ///
+  /// [redirectTo] menentukan ke mana tautan verifikasi kembali setelah diklik:
+  /// Android → deep link `fixify://confirm`
   /// (AppConfig.signupConfirmRedirect) agar app terbuka dengan sesi aktif;
-  /// null → ikut Site URL Supabase (jalur web).
-  static Future<AuthResponse> signUp(String email, String password,
-      {String? name, String? phone, String? address, String? emailRedirectTo}) {
-    return db.auth.signUp(
-      email: email,
-      password: password,
-      emailRedirectTo: emailRedirectTo,
-      data: {'name': name ?? email, 'phone': phone, 'address': address, 'role': 'customer'},
-    );
-  }
+  /// null → server memakai Site URL Supabase (jalur web).
+  ///
+  /// Mengembalikan [HasilDaftar] untuk SEMUA jawaban server (termasuk 429 dan
+  /// 503) supaya layar tidak pernah menyamakan "gagal" dengan "email sudah
+  /// dikirim". Kegagalan jaringan dilempar apa adanya oleh `http`.
+  static Future<HasilDaftar> daftarAkun({
+    required String email,
+    required String password,
+    String? name,
+    String? phone,
+    String? address,
+    String? redirectTo,
+  }) =>
+      _kirimPendaftaran(badanPermintaanDaftar(
+        email: email,
+        password: password,
+        name: name ?? email,
+        phone: phone,
+        address: address,
+        role: 'customer',
+        redirectTo: redirectTo,
+      ));
 
-  /// Daftar sebagai PENGRUSUS TEKNISI — paritas dengan /gabung di web:
+  /// Daftar sebagai PENDAFTAR TEKNISI — paritas dengan /gabung di web:
   /// metadata auth membawa role=technician + data kurasi (skill, address,
   /// ktp_url). Trigger handle_new_user menyimpan semuanya ke profiles dengan
   /// approval_status 'pending' (migrate-approval-status.sql) sampai admin
   /// menyetujui lewat tab "Pendaftar Teknisi".
   /// [ktpPath] = path file di bucket PRIVAT ktp-documents (folder pendaftaran/),
   /// WAJIB diisi — pendaftar tanpa KTP ditolak di sisi UI & web.
-  /// [emailRedirectTo] = deep link balik email konfirmasi (lihat [signUp]).
-  static Future<AuthResponse> signUpTechnician({
+  /// [redirectTo] = deep link balik email verifikasi (lihat [daftarAkun]).
+  static Future<HasilDaftar> daftarTeknisi({
     required String email,
     required String password,
     required String name,
@@ -112,21 +135,31 @@ class Api {
     required String address,
     required String skill,
     required String ktpPath,
-    String? emailRedirectTo,
-  }) {
-    return db.auth.signUp(
-      email: email,
-      password: password,
-      emailRedirectTo: emailRedirectTo,
-      data: {
-        'name': name,
-        'phone': phone,
-        'role': 'technician',
-        'skill': skill,
-        'address': address,
-        'ktp_url': ktpPath,
-      },
-    );
+    String? redirectTo,
+  }) =>
+      _kirimPendaftaran(badanPermintaanDaftar(
+        email: email,
+        password: password,
+        name: name,
+        phone: phone,
+        address: address,
+        role: 'technician',
+        skill: skill,
+        ktpUrl: ktpPath,
+        redirectTo: redirectTo,
+      ));
+
+  /// Kirim permintaan pendaftaran ke server web lalu tafsirkan jawabannya.
+  static Future<HasilDaftar> _kirimPendaftaran(String badan) async {
+    final origin = AppConfig.webBaseUrl.replaceAll(RegExp(r'/+$'), '');
+    final res = await http
+        .post(
+          Uri.parse('$origin/api/auth/register'),
+          headers: {'Content-Type': 'application/json'},
+          body: badan,
+        )
+        .timeout(const Duration(seconds: 20));
+    return tafsirResponsDaftar(res.statusCode, res.body);
   }
 
   /// Upload foto KTP pendaftar ke bucket PRIVAT `ktp-documents`, folder
@@ -141,14 +174,51 @@ class Api {
     return path;
   }
 
-  /// Kirim email tautan reset kata sandi.
+  /// Kirim email tautan reset kata sandi — lewat server web, BUKAN lewat
+  /// mailer Supabase.
+  ///
+  /// `db.auth.resetPasswordForEmail` sudah TIDAK dipakai lagi: mailer bawaan
+  /// Supabase hanya melayani alamat anggota tim project (2 pesan/jam) sehingga
+  /// akun pelanggan biasa tidak pernah menerima emailnya, walau layar berkata
+  /// "Tautan terkirim!" — kegagalan yang paling sulit terlihat justru di sini.
+  /// Server (POST /api/auth/reset) membuat tautannya sendiri lalu mengirimnya
+  /// lewat Resend; lihat src/lib/password-reset.js.
   ///
   /// [redirectTo] menentukan ke mana pengguna kembali setelah mengklik tautan:
   /// Android → deep link `fixify://reset-password` (AppConfig
   /// .resetPasswordRedirect) agar app terbuka dengan sesi pemulihan; null →
-  /// ikut Site URL Supabase (dipakai jalur web).
-  static Future<void> sendPasswordReset(String email, {String? redirectTo}) =>
-      db.auth.resetPasswordForEmail(email, redirectTo: redirectTo);
+  /// server memakai Site URL (dipakai jalur web).
+  ///
+  /// Melempar:
+  ///   - [AuthException] ber-`statusCode` 429 saat server menolak karena jeda
+  ///     per alamat — dibedakan supaya layar tidak bilang "terkirim";
+  ///   - [Exception] biasa untuk kegagalan lain (server mati, email belum siap).
+  ///     Kegagalan jaringan dilempar apa adanya oleh `http` supaya layar bisa
+  ///     memakai kalimat "Tidak ada koneksi internet…".
+  static Future<void> sendPasswordReset(String email, {String? redirectTo}) async {
+    final origin = AppConfig.webBaseUrl.replaceAll(RegExp(r'/+$'), '');
+    final res = await http
+        .post(
+          Uri.parse('$origin/api/auth/reset'),
+          headers: {'Content-Type': 'application/json'},
+          body: badanPermintaanReset(email, redirectTo),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    final hasil = tafsirResponsReset(res.statusCode, res.body);
+    if (hasil.ok) return;
+
+    if (hasil.jeda) {
+      // Diteruskan sebagai AuthException agar layar memakai jalur yang sama
+      // dengan batas pengiriman email versi lama (gagalKarenaBatasEmail).
+      throw AuthException(
+        hasil.pesan ?? 'Permintaan tautan baru saja dikirim.',
+        statusCode: '429',
+        code: 'jeda_per_alamat',
+      );
+    }
+    throw Exception(hasil.pesan ?? 'HTTP ${res.statusCode}');
+  }
 
   /// Simpan kata sandi baru untuk sesi pemulihan yang sedang aktif
   /// (hasil klik tautan email reset). Sesi ini bersifat sementara —
@@ -495,6 +565,16 @@ class Api {
     await _notifyWeb('/api/notify-booking-status', {'bookingId': bookingId, 'event': event});
   }
 
+  /// Beri tahu server web bahwa PELANGGAN membatalkan atau memindahkan
+  /// pesanan, supaya teknisi yang sudah ditugaskan menerima push
+  /// ([event] = 'order_cancelled' | 'order_rescheduled').
+  ///
+  /// Server memverifikasi pemanggil = pemilik pesanan DAN keadaan barisnya
+  /// memang sesuai, jadi notifikasi tidak bisa dipalsukan.
+  static Future<void> notifyBookingChange(String bookingId, String event) async {
+    await _notifyWeb('/api/notify-booking-change', {'bookingId': bookingId, 'event': event});
+  }
+
   /// Beri tahu server web (pemegang kunci email) bahwa satu peristiwa perlu
   /// dinotifikasikan ke semua ADMIN: [event] salah satu 'new_booking',
   /// 'new_report', 'new_deposit' dengan [refId] = id barisnya.
@@ -688,6 +768,122 @@ class Api {
       );
     } catch (e) {
       return (ok: false, error: 'Gagal mengubah metode bayar. Periksa koneksi lalu coba lagi.');
+    }
+  }
+
+  /// Samakan bentuk balikan RPC `returns jsonb` — bisa datang sebagai Map
+  /// atau List satu elemen, tergantung bentuk fungsinya.
+  static Map<String, dynamic> _asMap(dynamic res) {
+    final raw = res is List ? (res.isEmpty ? <String, dynamic>{} : res.first) : res;
+    return (raw as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+  }
+
+  /// Apakah kegagalan ini karena fungsi di server belum ada (migrasi belum
+  /// dijalankan)? Dibedakan agar pesannya tidak menyalahkan koneksi pengguna.
+  static bool _fungsiBelumAda(Object e) {
+    final s = e.toString();
+    return s.contains('Could not find the function') ||
+        s.contains('does not exist') ||
+        s.contains('schema cache');
+  }
+
+  static const _pesanMigrasiBelumJalan =
+      'Fitur ini belum aktif di server. Jalankan migrasi terbarunya dulu.';
+
+  /// Pelanggan membatalkan pesanannya sendiri (RPC security definer).
+  ///
+  /// Aturan ditegakkan SERVER, bukan di sini: hanya pemiliknya, hanya status
+  /// pending/paid, hanya sebelum jadwalnya mulai, dan hanya bila belum ada
+  /// bukti bayar yang menunggu konfirmasi admin (belum ada alur refund).
+  static Future<({bool ok, String? error})> cancelBooking(
+      String bookingId, String reason) async {
+    try {
+      final res = await db.rpc('cancel_booking', params: {
+        'p_booking': bookingId,
+        'p_reason': reason,
+      });
+      final m = _asMap(res);
+      if (m['ok'] != true) {
+        return (ok: false, error: (m['error'] as String?) ?? 'Pesanan gagal dibatalkan.');
+      }
+      // Teknisi yang sudah ditugaskan harus tahu SEBELUM berangkat ke lokasi.
+      unawaited(notifyBookingChange(bookingId, 'order_cancelled'));
+      return (ok: true, error: null);
+    } catch (e) {
+      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
+      return (ok: false, error: 'Gagal membatalkan pesanan. Periksa koneksi lalu coba lagi.');
+    }
+  }
+
+  /// Pelanggan mengubah jadwal pesanannya sendiri (RPC security definer).
+  /// Dibatasi 3 kali per pesanan — server yang menghitung.
+  static Future<({bool ok, String? error})> rescheduleBooking(
+      String bookingId, String bookingDate, String bookingTime) async {
+    try {
+      final res = await db.rpc('reschedule_booking', params: {
+        'p_booking': bookingId,
+        'p_date': bookingDate,
+        'p_time': bookingTime,
+      });
+      final m = _asMap(res);
+      if (m['ok'] != true) {
+        return (ok: false, error: (m['error'] as String?) ?? 'Jadwal gagal diubah.');
+      }
+      // Teknisi bisa saja sudah menyusun rute harinya — beri tahu perubahan ini.
+      unawaited(notifyBookingChange(bookingId, 'order_rescheduled'));
+      return (ok: true, error: null);
+    } catch (e) {
+      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
+      return (ok: false, error: 'Gagal mengubah jadwal. Periksa koneksi lalu coba lagi.');
+    }
+  }
+
+  /// Kontak + jarak teknisi untuk pesanan ini.
+  ///
+  /// Koordinat teknisi tidak pernah dikirim server (aturan privasi di
+  /// supabase/migrate-technician-gps.sql) — yang diterima hanya jarak & umur
+  /// posisinya. Gagal/belum ada migrasi → [BookingTechInfo.kosong], sehingga
+  /// layar detail tetap tampil tanpa kartu teknisi.
+  static Future<BookingTechInfo> bookingTechnicianInfo(String bookingId) async {
+    try {
+      final res = await db.rpc('booking_technician_info', params: {'p_booking': bookingId});
+      final m = _asMap(res);
+      if (m['ok'] != true) return BookingTechInfo.kosong;
+      return BookingTechInfo.fromRpc(m);
+    } catch (_) {
+      return BookingTechInfo.kosong;
+    }
+  }
+
+  /// Masa garansi + status klaim untuk satu pesanan.
+  /// Pesanan tanpa garansi/klaim mengembalikan objek kosong (kartu disembunyikan).
+  static Future<BookingWarrantyInfo> bookingWarrantyInfo(String bookingId) async {
+    try {
+      final res = await db.rpc('booking_warranty_info', params: {'p_booking': bookingId});
+      final m = _asMap(res);
+      if (m['ok'] != true) return const BookingWarrantyInfo();
+      return BookingWarrantyInfo.fromRpc(m);
+    } catch (_) {
+      return const BookingWarrantyInfo();
+    }
+  }
+
+  /// Ajukan klaim garansi untuk pesanan yang sudah selesai dan masih bergaransi.
+  static Future<({bool ok, String? error})> createWarrantyClaim(
+      String bookingId, String reason) async {
+    try {
+      final res = await db.rpc('create_warranty_claim', params: {
+        'p_booking': bookingId,
+        'p_reason': reason,
+      });
+      final m = _asMap(res);
+      if (m['ok'] != true) {
+        return (ok: false, error: (m['error'] as String?) ?? 'Klaim garansi gagal diajukan.');
+      }
+      return (ok: true, error: null);
+    } catch (e) {
+      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
+      return (ok: false, error: 'Gagal mengajukan klaim garansi. Periksa koneksi lalu coba lagi.');
     }
   }
 

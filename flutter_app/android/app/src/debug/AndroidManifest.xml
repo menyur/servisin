@@ -4,4 +4,15 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- HANYA build debug: izinkan HTTP polos ke server dev lokal (lihat
+         docs/prosedur-uji-lupa-password.md, bagian "menunjuk server dev lokal")
+         supaya alur yang bergantung pada server web (mis. endpoint reset kata
+         sandi /api/auth/reset) bisa diuji penuh dari emulator tanpa deploy.
+
+         Sejak Android 9, HTTP polos diblokir secara bawaan; tanpa baris ini
+         panggilan ke http://… gagal dengan CLEARTEXT_NOT_PERMITTED dan
+         penyebabnya tidak terlihat dari sisi aplikasi. Berkas ini TIDAK dipakai
+         build rilis, jadi aturan cleartext untuk APK yang dibagikan tetap utuh. -->
+    <application android:usesCleartextTraffic="true" />
 </manifest>

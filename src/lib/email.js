@@ -4,6 +4,9 @@
  * isinya hanya dicetak ke log server supaya alur booking tetap bisa diuji coba.
  */
 
+import { resetPasswordHtml } from "./email-templates/reset-password.js";
+import { confirmSignupHtml } from "./email-templates/confirm-signup.js";
+
 async function sendMail({ to, subject, html, attachments }) {
   if (!to || (Array.isArray(to) && to.length === 0)) {
     return { simulated: true, skipped: "no-recipient" };
@@ -383,6 +386,50 @@ export async function sendAdminJobReleaseEmail(adminEmails, release) {
   );
 
   return sendMail({ to: adminEmails, subject: `Tugas ${release.code} dilepas teknisi — Fixify`, html });
+}
+
+/**
+ * Ke pengguna: tautan reset kata sandi.
+ *
+ * Dipakai src/lib/password-reset.js — jalur yang MEMBUAT tautannya sendiri
+ * (`admin.generateLink`) lalu mengirimnya lewat Resend, bukan lewat mailer
+ * Supabase Auth yang menolak alamat non-anggota-tim dan dibatasi 2 pesan/jam.
+ *
+ * @param {object} o
+ * @param {string} o.to         alamat penerima
+ * @param {string} o.actionLink tautan verifikasi dari Supabase
+ * @param {string} [o.siteUrl]  Site URL untuk tautan footer
+ * @param {number} [o.berlakuJam] masa berlaku yang ditulis di email
+ */
+export async function sendPasswordResetEmail({ to, actionLink, siteUrl, berlakuJam = 1 }) {
+  const html = resetPasswordHtml({ actionLink, email: to, siteUrl, berlakuJam });
+  return sendMail({
+    to,
+    subject: "Reset kata sandi akun Fixify",
+    html,
+  });
+}
+
+/**
+ * Ke pendaftar baru: tautan verifikasi email.
+ *
+ * Dikirim lewat Resend, bukan mailer bawaan Supabase Auth yang menolak alamat
+ * non-anggota-tim dan dibatasi 2 pesan/jam. Tautannya dibuat server lewat
+ * `admin.generateLink` (lihat src/lib/signup-verification.js).
+ *
+ * @param {object} o
+ * @param {string} o.to         alamat penerima
+ * @param {string} o.actionLink tautan verifikasi dari Supabase
+ * @param {string} [o.siteUrl]  Site URL untuk tautan footer
+ * @param {number} [o.berlakuJam] masa berlaku yang ditulis di email
+ */
+export async function sendSignupVerificationEmail({ to, actionLink, siteUrl, berlakuJam = 1 }) {
+  const html = confirmSignupHtml({ actionLink, email: to, siteUrl, berlakuJam });
+  return sendMail({
+    to,
+    subject: "Verifikasi email akun Fixify",
+    html,
+  });
 }
 
 /**

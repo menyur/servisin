@@ -86,6 +86,10 @@ class _FixifyAppState extends State<FixifyApp> {
   StreamSubscription<AuthState>? _authSub;
   bool _pendingRecovery = false;
   int _recoveryAttempts = 0;
+  bool _pendingTautanGagal = false;
+  int _gagalAttempts = 0;
+  bool _pesanTautanGagalTertunda = false;
+  int _pesanAttempts = 0;
 
   @override
   void initState() {
@@ -96,21 +100,46 @@ class _FixifyAppState extends State<FixifyApp> {
     // app agar form "Kata Sandi Baru" terbuka dari mana pun pengguna berada.
     // Subscribe di sini juga menangani cold start: BehaviorSubject Supabase
     // memutar ulang event terakhir saat listener dipasang.
-    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
-      switch (data.event) {
-        case AuthChangeEvent.passwordRecovery:
-          // fixify://reset-password → buka form "Kata Sandi Baru".
-          _pendingRecovery = true;
-          _openSetPassword();
-        case AuthChangeEvent.signedIn:
-          // fixify://confirm (verifikasi email pendaftaran) → sesi aktif tanpa
-          // lewat layar login; arahkan pengguna ke beranda — atau ke layar
-          // Selamat Datang bila ini verifikasi email pendaftaran.
-          _routeAfterSignIn();
-        case _:
-          break;
-      }
-    });
+    _authSub = Supabase.instance.client.auth.onAuthStateChange.listen(
+      (data) {
+        switch (data.event) {
+          case AuthChangeEvent.passwordRecovery:
+            // fixify://reset-password → buka form "Kata Sandi Baru".
+            // Ditandai agar splash tidak menggantinya dengan rute lamanya
+            // (lihat [pemulihanKataSandiAktif]).
+            pemulihanKataSandiAktif.value = true;
+            _pendingRecovery = true;
+            _openSetPassword();
+          case AuthChangeEvent.signedIn:
+            // fixify://confirm (verifikasi email pendaftaran) → sesi aktif tanpa
+            // lewat layar login; arahkan pengguna ke beranda — atau ke layar
+            // Selamat Datang bila ini verifikasi email pendaftaran.
+            _routeAfterSignIn();
+          case _:
+            break;
+        }
+      },
+      // Deep link yang GAGAL ditukar menjadi sesi sebelumnya jatuh SENYAP:
+      // supabase_flutter melempar AuthException ke kanal error stream ini,
+      // tidak ada yang menanganinya, dan pengguna hanya melihat layar diam
+      // (di logcat: "Unhandled Exception: AuthException(...)"). Terbukti di
+      // emulator dengan tautan kedaluwarsa/dipakai ulang. Sekarang pengguna
+      // dibawa ke layar "Tautan tidak berlaku" beserta tombol minta tautan
+      // baru — bukan dibiarkan menebak.
+      onError: (Object error) {
+        if (error is! AuthException) return;
+        // Pengguna yang sedang login jangan diseret ke layar reset hanya
+        // karena kesalahan lain (mis. refresh token ditolak) — tetapi tautan
+        // reset yang gagal tetap HARUS terlihat: cukup beri tahu lewat
+        // SnackBar. Diam sama sekali (perilaku sebelum ini) membuat pengguna
+        // mengira tombol/tautannya tidak bereaksi.
+        if (Api.isLoggedIn) {
+          _beriTahuTautanGagal();
+          return;
+        }
+        _tandaiTautanGagal();
+      },
+    );
   }
 
   @override
@@ -154,6 +183,70 @@ class _FixifyAppState extends State<FixifyApp> {
     unawaited(_routeAfterSignInAsync());
   }
 
+  /// Deep link reset GAGAL → tampilkan "Tautan tidak berlaku".
+  ///
+  /// Dipisah dari [_openSetPassword] karena sebabnya berbeda (tidak ada sesi
+  /// pemulihan yang bisa dipakai) dan karena bisa datang saat navigator belum
+  /// terpasang — cold start dari tautan rusak adalah kasus yang paling sering.
+  void _tandaiTautanGagal() {
+    if (_pendingTautanGagal) return;
+    _pendingTautanGagal = true;
+    _bukaTautanKedaluwarsa();
+  }
+
+  /// Pengguna SUDAH masuk: jangan diseret ke layar reset, cukup beri tahu.
+  ///
+  /// Menunggu messenger terpasang (sama seperti navigator di atas) karena
+  /// kesalahan bisa datang saat app baru start, saat `ScaffoldMessenger` belum
+  /// ada — dan tanpa penantian itu pesannya hilang tanpa jejak.
+  void _beriTahuTautanGagal() {
+    if (_pesanTautanGagalTertunda) return;
+    _pesanTautanGagalTertunda = true;
+    _tampilkanPesanTautanGagal();
+  }
+
+  void _tampilkanPesanTautanGagal() {
+    if (!_pesanTautanGagalTertunda) return;
+    final messenger = scaffoldMessengerKey.currentState;
+    if (messenger == null) {
+      if (_pesanAttempts++ < 100) {
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (mounted) _tampilkanPesanTautanGagal();
+        });
+      }
+      return;
+    }
+    _pesanTautanGagalTertunda = false;
+    _pesanAttempts = 0;
+    messenger.showSnackBar(const SnackBar(
+      content: Text('Tautan reset tidak berlaku atau sudah dipakai.'),
+      backgroundColor: AppColors.coral,
+      duration: Duration(seconds: 5),
+    ));
+  }
+
+  void _bukaTautanKedaluwarsa() {
+    if (!_pendingTautanGagal) return;
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      // Navigator belum siap (cold start) — coba lagi sebentar, dibatasi agar
+      // tidak berputar tanpa henti.
+      if (_gagalAttempts++ < 100) {
+        Future.delayed(const Duration(milliseconds: 50), () {
+          if (mounted) _bukaTautanKedaluwarsa();
+        });
+      }
+      return;
+    }
+    _pendingTautanGagal = false;
+    _gagalAttempts = 0;
+    // Sama seperti jalur berhasil: tahan navigasi splash supaya layar
+    // "Tautan tidak berlaku" tidak langsung digantikan beranda.
+    pemulihanKataSandiAktif.value = true;
+    nav.pushNamedAndRemoveUntil('/set-password', (r) => false,
+        arguments: kArgTautanGagal);
+  }
+
   /// Tentukan tujuan setelah sesi baru: layar **Selamat Datang** bila penanda
   /// pendaftaran (SignupHandoff) cocok dengan email yang baru terverifikasi —
   /// supaya pengguna baru tidak mendarat di beranda tanpa arah — selain itu
@@ -187,6 +280,9 @@ class _FixifyAppState extends State<FixifyApp> {
       title: 'Fixify',
       debugShowCheckedModeBanner: false,
       navigatorKey: navigatorKey,
+      // Dipakai memberi tahu lewat SnackBar saat pengguna SUDAH masuk lalu
+      // membuka tautan reset yang gagal (lihat onError di initState).
+      scaffoldMessengerKey: scaffoldMessengerKey,
       // Melacak rute teratas (common.dart) — dipakai handler deep link agar
       // tidak navigasi ganda saat pengguna sudah di beranda.
       navigatorObservers: [AuthRouteObserver()],
@@ -205,9 +301,8 @@ class _FixifyAppState extends State<FixifyApp> {
         // tautan dari login/daftar mudah dibagikan & di-deep-link.
         '/register-technician': (_) => const TechnicianRegisterScreen(),
         '/reset-password': (_) => const ResetPasswordScreen(),
-        // Langkah 2 reset (mobile): dibuka otomatis dari deep link
-        // fixify://reset-password — lihat _FixifyAppState._openSetPassword.
-        '/set-password': (_) => const SetNewPasswordScreen(),
+        // '/set-password' (langkah 2 reset) sengaja TIDAK di sini: rutenya
+        // menerima argumen kArgTautanGagal, jadi dibangun di onGenerateRoute.
       },
       onGenerateRoute: (settings) {
         if (settings.name == '/booking') {
@@ -217,6 +312,22 @@ class _FixifyAppState extends State<FixifyApp> {
         if (settings.name == '/order-detail') {
           final booking = settings.arguments as Booking;
           return MaterialPageRoute(builder: (_) => OrderDetailScreen(booking: booking));
+        }
+        // Langkah 2 reset (mobile): dibuka otomatis dari deep link
+        // fixify://reset-password — lihat _FixifyAppState._openSetPassword.
+        // arguments == kArgTautanGagal berarti tautannya GAGAL ditukar jadi
+        // sesi (kedaluwarsa/sudah dipakai) — layarnya lalu menampilkan "Tautan
+        // tidak berlaku", bukan form yang pasti gagal.
+        if (settings.name == '/set-password') {
+          return MaterialPageRoute(
+            // `settings` ikut dipasang: nama rute dilacak AuthRouteObserver dan
+            // dipakai penjaga [shouldGoHomeAfterSignIn] — tanpa ini rute ini
+            // tak bernama (name=null) sehingga penjaga itu salah menilai tujuan.
+            settings: settings,
+            builder: (_) => SetNewPasswordScreen(
+              tautanGagal: settings.arguments == kArgTautanGagal,
+            ),
+          );
         }
         // Layar Selamat Datang pasca-verifikasi email; arguments = peran
         // ('technician' | 'customer') dari SignupHandoff.
