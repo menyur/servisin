@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
 import '../format.dart';
@@ -20,7 +21,20 @@ class OrderDetailScreen extends StatefulWidget {
   /// Dipakai memutuskan siapa PEMILIK pesanan — lihat [Booking.isOwnedBy].
   final String? Function()? currentUserId;
 
-  const OrderDetailScreen({super.key, required this.booking, this.currentUserId});
+  /// Seam uji: jarak/kontak teknisi dan masa garansi. Keduanya datang dari RPC
+  /// (bukan dari baris pesanan), jadi tanpa seam ini kartu teknisi & kartu
+  /// garansi tidak pernah bisa diuji tanpa jaringan. `null` (produksi) =
+  /// ambil dari server.
+  final BookingTechInfo? techInfoUji;
+  final BookingWarrantyInfo? warrantyInfoUji;
+
+  const OrderDetailScreen({
+    super.key,
+    required this.booking,
+    this.currentUserId,
+    this.techInfoUji,
+    this.warrantyInfoUji,
+  });
 
   @override
   State<OrderDetailScreen> createState() => _OrderDetailScreenState();
@@ -33,6 +47,16 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   // bukti bayar, teknisi mulai/selesai) → segarkan otomatis.
   StreamSubscription<BookingUpdate>? _tickSub;
 
+  /// Jarak + kontak teknisi, dan masa garansi. Keduanya RPC terpisah (bukan
+  /// ikut dalam baris pesanan) supaya daftar pesanan tetap ringan; keduanya
+  /// fail-soft — migrasi belum dijalankan berarti kartunya tidak tampil.
+  BookingTechInfo? _tech;
+  BookingWarrantyInfo? _garansi;
+
+  /// Sedang menjalankan aksi yang mengubah pesanan (batalkan / ubah jadwal /
+  /// klaim garansi) — mencegah dua ketukan cepat memicu dua permintaan.
+  bool _aksiSibuk = false;
+
   @override
   void initState() {
     super.initState();
@@ -40,6 +64,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     _tickSub = bookingUpdatesTick.stream.listen((u) {
       if (u.id == widget.booking.id) _reload();
     });
+    unawaited(_muatInfoTambahan());
     // Detail pesanan terbuka — perubahan item ini langsung tampak, reset badge.
     unseenBookingUpdates.value = 0;
   }
@@ -62,9 +87,258 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       }
       final f = fresh;
       if (f != null && mounted) setState(() => _b = f);
+      // Jarak teknisi berubah seiring waktu — disegarkan bersama pesanannya,
+      // karena sesudah dibatalkan/diubah jadwal kartunya juga ikut berubah.
+      unawaited(_muatInfoTambahan());
     } catch (_) {
       // diam: reload adalah best-effort
     }
+  }
+
+  /// Muat info yang TIDAK ikut dalam baris pesanan: jarak + kontak teknisi dan
+  /// masa garansi. Aman dipanggil kapan pun — [Api] mengembalikan objek kosong
+  /// bila migrasinya belum dijalankan atau jaringan gagal, sehingga layar ini
+  /// tidak pernah menampilkan galat hanya karena info tambahan tak tersedia.
+  Future<void> _muatInfoTambahan() async {
+    if (widget.techInfoUji != null || widget.warrantyInfoUji != null) {
+      // Seam uji: nilai sudah disuntikkan. Ditulis langsung, bukan lewat
+      // setState, karena jalur ini berjalan sinkron dari initState (sebelum
+      // build pertama) — setState di sana tidak ada gunanya dan berisiko.
+      _tech = widget.techInfoUji ?? _tech;
+      _garansi = widget.warrantyInfoUji ?? _garansi;
+      return;
+    }
+    final hasil = await Future.wait([
+      Api.bookingTechnicianInfo(_b.id),
+      Api.bookingWarrantyInfo(_b.id),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _tech = hasil[0] as BookingTechInfo;
+      _garansi = hasil[1] as BookingWarrantyInfo;
+    });
+  }
+
+  /// Syarat tombol "Batalkan"/"Ubah Jadwal" — CERMIN dari aturan RPC di server
+  /// (supabase/migrate-customer-self-service.sql). Menampilkan tombol yang pasti
+  /// ditolak server hanya membuang waktu pelanggan; server tetap memeriksa ulang.
+  bool get _bolehUbahJadwal => bolehBatalkanAtauUbahJadwal(
+        status: _b.status,
+        paymentProofUrl: _b.paymentProofUrl,
+        paymentRejected: _b.paymentRejected,
+        sekarang: DateTime.now(),
+        bookingDate: _b.bookingDate,
+        bookingTime: _b.bookingTime,
+      );
+
+  /// Dialog alasan bersama untuk pembatalan & klaim garansi.
+  Future<String?> _tanyaAlasan({
+    required String judul,
+    required String keterangan,
+    required String hint,
+    required String labelKirim,
+    Color? warnaKirim,
+  }) {
+    return showDialog<String>(
+      context: context,
+      builder: (_) => _AlasanDialog(
+        judul: judul,
+        keterangan: keterangan,
+        hint: hint,
+        labelKirim: labelKirim,
+        warnaKirim: warnaKirim,
+      ),
+    );
+  }
+
+  /// Pelanggan membatalkan pesanannya sendiri.
+  Future<void> _batalkanPesanan() async {
+    if (_aksiSibuk) return;
+    final alasan = await _tanyaAlasan(
+      judul: 'Batalkan pesanan?',
+      keterangan: 'Pesanan akan dibatalkan dan teknisi yang sudah ditugaskan '
+          'diberi tahu supaya tidak datang ke lokasi.',
+      hint: 'mis. rencana berubah, sudah pakai jasa lain',
+      labelKirim: 'Ya, batalkan',
+      warnaKirim: AppColors.coral,
+    );
+    if (alasan == null || !mounted) return;
+
+    setState(() => _aksiSibuk = true);
+    final r = await Api.cancelBooking(_b.id, alasan);
+    if (!mounted) return;
+    setState(() => _aksiSibuk = false);
+    if (!r.ok) {
+      showSnack(context, r.error ?? 'Pesanan gagal dibatalkan.', error: true);
+      return;
+    }
+    showSnack(context, 'Pesanan dibatalkan.');
+    await _reload();
+  }
+
+  /// Pelanggan mengubah jadwalnya sendiri (maks [maxReschedule] kali — server).
+  Future<void> _ubahJadwal() async {
+    if (_aksiSibuk) return;
+    final baru = await showModalBottomSheet<({String date, String time})>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => _RescheduleSheet(
+        currentDate: _b.bookingDate,
+        currentTime: _b.bookingTime,
+        sekarang: DateTime.now(),
+      ),
+    );
+    if (baru == null || !mounted) return;
+
+    setState(() => _aksiSibuk = true);
+    final r = await Api.rescheduleBooking(_b.id, baru.date, baru.time);
+    if (!mounted) return;
+    setState(() => _aksiSibuk = false);
+    if (!r.ok) {
+      showSnack(context, r.error ?? 'Jadwal gagal diubah.', error: true);
+      return;
+    }
+    showSnack(context, 'Jadwal diubah ke ${formatDateId(baru.date)} · ${baru.time}.');
+    await _reload();
+  }
+
+  /// Ajukan klaim garansi untuk pesanan yang sudah selesai dan masih bergaransi.
+  Future<void> _ajukanGaransi() async {
+    if (_aksiSibuk) return;
+    final alasan = await _tanyaAlasan(
+      judul: 'Ajukan klaim garansi',
+      keterangan: 'Ceritakan apa yang masih bermasalah. Admin meninjau dulu; bila '
+          'disetujui, teknisi yang sama datang lagi tanpa biaya.',
+      hint: 'mis. AC menetes lagi setelah dua hari',
+      labelKirim: 'Kirim klaim',
+    );
+    if (alasan == null || !mounted) return;
+
+    setState(() => _aksiSibuk = true);
+    final r = await Api.createWarrantyClaim(_b.id, alasan);
+    if (!mounted) return;
+    setState(() => _aksiSibuk = false);
+    if (!r.ok) {
+      showSnack(context, r.error ?? 'Klaim garansi gagal diajukan.', error: true);
+      return;
+    }
+    showSnack(context, 'Klaim garansi terkirim. Admin akan meninjau.');
+    await _muatInfoTambahan();
+  }
+
+  /// Buka aplikasi telepon / WhatsApp ke nomor teknisi.
+  ///
+  /// Nomor dinormalkan lebih dulu ([normalkanNomorId]): wa.me menolak awalan
+  /// '0', jadi '0812…' harus menjadi '62812…' atau tombolnya tampak rusak.
+  Future<void> _hubungi(String jenis, String nomor) async {
+    final n = normalkanNomorId(nomor);
+    if (n == null) {
+      showSnack(context, 'Nomor teknisi belum tersedia.', error: true);
+      return;
+    }
+    final url = jenis == 'wa' ? 'https://wa.me/$n' : 'tel:+$n';
+    try {
+      final ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        showSnack(context, 'Tidak ada aplikasi yang bisa membuka kontak ini.', error: true);
+      }
+    } catch (e) {
+      if (mounted) showSnackError(context, e, 'Gagal membuka kontak.');
+    }
+  }
+
+  /// Kartu teknisi: jarak + cara menghubungi.
+  ///
+  /// Sengaja TIDAK ada peta posisi teknisi: server tidak pernah mengirim
+  /// koordinat teknisi (lihat supabase/migrate-technician-gps.sql) — yang
+  /// tersedia hanya jarak dan umur posisinya, dan itulah yang ditampilkan.
+  Widget _kartuTeknisi(Booking b, BookingTechInfo t) {
+    final nama = t.name ?? b.technicianName ?? 'Teknisi';
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDeco(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          TechAvatarChip(url: t.avatarUrl ?? b.technicianAvatar, name: nama, size: 34),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(nama,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w800, color: AppColors.navy, fontSize: 14)),
+              Text(t.ringkasanJarak,
+                  style: const TextStyle(fontSize: 12.5, color: AppColors.inkSoft)),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        if (t.bolehDihubungi)
+          Row(children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _hubungi('tel', t.phone!),
+                icon: const Icon(Icons.call_rounded, size: 18),
+                label: const Text('Telepon'),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _hubungi('wa', t.phone!),
+                icon: const Icon(Icons.chat_rounded, size: 18),
+                label: const Text('WhatsApp'),
+              ),
+            ),
+          ])
+        else
+          // Kartu ini hanya muncul selama pesanan AKTIF, jadi cabang ini bukan
+          // "pesanan sudah selesai" melainkan teknisi yang memang belum mengisi
+          // nomor telepon di profilnya — jangan salah menyebut sebabnya.
+          const Text('Teknisi ini belum mencantumkan nomor telepon — pakai chat.',
+              style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+      ]),
+    );
+  }
+
+  /// Kartu garansi + tombol klaim (hanya untuk pelanggan pemilik pesanan).
+  Widget _kartuGaransi(BookingWarrantyInfo g) {
+    final warna = g.disetujui
+        ? AppColors.mint
+        : (g.ditolak || !g.eligible ? AppColors.inkSoft : AppColors.brandDeep);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDeco(),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Row(children: [
+          Icon(Icons.verified_user_outlined, size: 18, color: AppColors.brandDeep),
+          SizedBox(width: 8),
+          Text('Garansi pekerjaan', style: TextStyle(fontWeight: FontWeight.w800)),
+        ]),
+        const SizedBox(height: 6),
+        Text(g.ringkasan, style: TextStyle(fontSize: 13, color: warna)),
+        if (g.claimReason != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('Klaimmu: ${g.claimReason}',
+                style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+          ),
+        if (g.claimAdminNote != null)
+          Text('Catatan admin: ${g.claimAdminNote}',
+              style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+        if (g.eligible) ...[
+          const SizedBox(height: 10),
+          OutlinedButton.icon(
+            onPressed: _aksiSibuk ? null : _ajukanGaransi,
+            icon: const Icon(Icons.build_circle_outlined, size: 18),
+            label: Text(g.daysLeft > 0
+                ? 'Ajukan klaim garansi (sisa ${g.daysLeft} hari)'
+                : 'Ajukan klaim garansi'),
+          ),
+        ],
+      ]),
+    );
   }
 
   /// Teknisi memulai / menyelesaikan pekerjaan (RPC set_job_status).
@@ -409,6 +683,13 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           ),
           const SizedBox(height: 12),
 
+          // kartu teknisi (jarak + kontak) — HANYA pelanggan pemilik, dan hanya
+          // selama pesanan masih aktif: setelah selesai server menutup nomornya.
+          if (isOwner && _tech != null && _tech!.hasTechnician && _tech!.active) ...[
+            _kartuTeknisi(b, _tech!),
+            const SizedBox(height: 12),
+          ],
+
           // peringatan penolakan bukti — HANYA untuk pelanggan pemilik pesanan;
           // di aplikasi teknisi bagian ini tidak boleh tampil.
           if (b.paymentRejected && isOwner)
@@ -491,6 +772,12 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           ),
           const SizedBox(height: 12),
 
+          // garansi pekerjaan (masa garansi + status klaim) — pemilik saja.
+          if (isOwner && _garansi != null && _garansi!.perluTampil) ...[
+            _kartuGaransi(_garansi!),
+            const SizedBox(height: 12),
+          ],
+
           // Peta mini pratinjau titik lokasi: teknisi ditugaskan ATAU pemilik
           // pesanan (pin dikirim bersama pesanan — lihat RLS).
           // flutter_map sudah ada di pubspec (picker lokasi) → pratinjau
@@ -524,6 +811,37 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
                   ? 'Buka Rute ke Titik Lokasi'
                   : 'Buka Rute ke Alamat'),
             ),
+            const SizedBox(height: 10),
+          ],
+
+          // aksi pelanggan atas pesanannya sendiri: ubah jadwal / batalkan.
+          // Syarat yang sama dengan server supaya tidak ada tombol pasti-gagal.
+          if (isOwner && _bolehUbahJadwal) ...[
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _aksiSibuk ? null : _ubahJadwal,
+                  icon: const Icon(Icons.event_repeat_rounded, size: 18),
+                  label: const Text('Ubah Jadwal'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _aksiSibuk ? null : _batalkanPesanan,
+                  icon: const Icon(Icons.cancel_outlined, size: 18),
+                  label: const Text('Batalkan'),
+                  style: OutlinedButton.styleFrom(foregroundColor: AppColors.coral),
+                ),
+              ),
+            ]),
+            if (b.rescheduleCount > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                    'Jadwal sudah diubah ${b.rescheduleCount}× (maksimal $maxReschedule).',
+                    style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+              ),
             const SizedBox(height: 10),
           ],
 
@@ -662,6 +980,226 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         border: Border.all(color: AppColors.line),
       );
 
+}
+
+/// Sheet "Ubah jadwal": pilih tanggal (14 hari ke depan) + jam kedatangan.
+/// Mengembalikan (date: 'yyyy-MM-dd', time: slot) atau null bila ditutup.
+///
+/// Jam yang sudah lewat TIDAK ditawarkan — mis. memilih hari ini pukul 11.00
+/// menyisakan slot 13.00 ke atas saja. Server juga menolaknya, dan tombol yang
+/// pasti gagal hanya membuang waktu pelanggan. Perbandingannya memakai helper
+/// [slotStart] yang sama dengan pemeriksaan izin.
+class _RescheduleSheet extends StatefulWidget {
+  final String currentDate;
+  final String currentTime;
+  final DateTime sekarang;
+
+  const _RescheduleSheet({
+    required this.currentDate,
+    required this.currentTime,
+    required this.sekarang,
+  });
+
+  @override
+  State<_RescheduleSheet> createState() => _RescheduleSheetState();
+}
+
+class _RescheduleSheetState extends State<_RescheduleSheet> {
+  late DateTime _tanggal;
+  late String _slot;
+
+  @override
+  void initState() {
+    super.initState();
+    _tanggal = _tanggalPertamaTersedia();
+    _slot = _slotPertamaTersedia(_tanggal) ?? timeSlots.first;
+  }
+
+  /// 14 hari mulai hari ini (waktu perangkat).
+  List<DateTime> get _pilihanTanggal {
+    final hari =
+        DateTime(widget.sekarang.year, widget.sekarang.month, widget.sekarang.day);
+    return List.generate(14, (i) => hari.add(Duration(days: i)));
+  }
+
+  DateTime _tanggalPertamaTersedia() {
+    for (final d in _pilihanTanggal) {
+      if (_slotPertamaTersedia(d) != null) return d;
+    }
+    return _pilihanTanggal.first;
+  }
+
+  static String _ymd(DateTime d) => '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  /// Jam pertama yang masih di masa depan untuk [tanggal], atau null bila
+  /// seluruh slot hari itu sudah lewat.
+  String? _slotPertamaTersedia(DateTime tanggal) {
+    final ymd = _ymd(tanggal);
+    for (final s in timeSlots) {
+      if (slotStart(ymd, s).isAfter(widget.sekarang)) return s;
+    }
+    return null;
+  }
+
+  String _labelTanggal(DateTime d) {
+    final hari =
+        DateTime(widget.sekarang.year, widget.sekarang.month, widget.sekarang.day);
+    final selisih = d.difference(hari).inDays;
+    if (selisih == 0) return 'Hari ini';
+    if (selisih == 1) return 'Besok';
+    const nama = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+    return '${nama[d.weekday - 1]} ${d.day}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tanggalTerpilih = _ymd(_tanggal);
+    final slotTersedia = timeSlots
+        .where((s) => slotStart(tanggalTerpilih, s).isAfter(widget.sekarang))
+        .toList();
+    final tanggalTersedia =
+        _pilihanTanggal.where((d) => _slotPertamaTersedia(d) != null).toList();
+    final samaDenganSekarang =
+        tanggalTerpilih == widget.currentDate && _slot == widget.currentTime;
+
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Ubah jadwal', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 4),
+            Text('Sekarang: ${formatDateId(widget.currentDate)} · ${widget.currentTime}',
+                style: const TextStyle(fontSize: 12.5, color: AppColors.inkSoft)),
+            const SizedBox(height: 14),
+            const Text('Tanggal', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final d in tanggalTersedia)
+                ChoiceChip(
+                  label: Text(_labelTanggal(d)),
+                  selected: _ymd(d) == tanggalTerpilih,
+                  onSelected: (_) => setState(() {
+                    _tanggal = d;
+                    _slot = _slotPertamaTersedia(d) ?? timeSlots.first;
+                  }),
+                ),
+            ]),
+            const SizedBox(height: 16),
+            const Text('Jam kedatangan', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+            const SizedBox(height: 8),
+            Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final s in slotTersedia)
+                ChoiceChip(
+                  label: Text(s),
+                  selected: _slot == s,
+                  onSelected: (_) => setState(() => _slot = s),
+                ),
+            ]),
+            if (slotTersedia.isEmpty)
+              const Text('Tidak ada jam tersisa pada tanggal ini — pilih tanggal lain.',
+                  style: TextStyle(fontSize: 12.5, color: AppColors.coral)),
+            if (samaDenganSekarang)
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('Pilih tanggal atau jam yang berbeda dari jadwal sekarang.',
+                    style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+              ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: (slotTersedia.contains(_slot) && !samaDenganSekarang)
+                    ? () => Navigator.pop(context, (date: tanggalTerpilih, time: _slot))
+                    : null,
+                child: const Text('Simpan jadwal baru'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Dialog teks alasan (pembatalan & klaim garansi). Mengembalikan teks yang
+/// sudah di-trim, atau null bila dibatalkan.
+///
+/// Minimal 5 karakter — batas yang sama dengan RPC di server, jadi pelanggan
+/// tidak perlu menunggu perjalanan ke server hanya untuk ditolak.
+class _AlasanDialog extends StatefulWidget {
+  final String judul;
+  final String keterangan;
+  final String hint;
+  final String labelKirim;
+  final Color? warnaKirim;
+
+  const _AlasanDialog({
+    required this.judul,
+    required this.keterangan,
+    required this.hint,
+    required this.labelKirim,
+    this.warnaKirim,
+  });
+
+  @override
+  State<_AlasanDialog> createState() => _AlasanDialogState();
+}
+
+class _AlasanDialogState extends State<_AlasanDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  bool get _valid => _ctrl.text.trim().length >= 5;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.judul),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.keterangan,
+              style: const TextStyle(fontSize: 13, color: AppColors.inkSoft)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _ctrl,
+            autofocus: true,
+            maxLength: 500,
+            maxLines: 3,
+            onChanged: (_) => setState(() {}),
+            decoration: InputDecoration(
+              hintText: widget.hint,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          if (!_valid)
+            const Text('Tulis minimal 5 karakter.',
+                style: TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+        FilledButton(
+          onPressed: _valid ? () => Navigator.pop(context, _ctrl.text.trim()) : null,
+          style: widget.warnaKirim == null
+              ? null
+              : FilledButton.styleFrom(backgroundColor: widget.warnaKirim),
+          child: Text(widget.labelKirim),
+        ),
+      ],
+    );
+  }
 }
 
 /// Sheet konfirmasi pembayaran: jumlah transfer + info rekening tujuan.

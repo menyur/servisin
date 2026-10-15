@@ -229,6 +229,11 @@ class Booking {
   final String? userId;
   final bool hasReview;
 
+  /// Berapa kali jadwal pesanan ini sudah diubah pelanggan sendiri
+  /// (bookings.reschedule_count; batasnya [maxReschedule]). Kolom ini baru —
+  /// DB lama / RPC lama mengembalikan null dan dibaca sebagai 0.
+  final int rescheduleCount;
+
   /// Titik lokasi (pin) yang dipasang pelanggan — null bila tidak dipasang.
   /// Koordinat rumah: hanya terbaca pemilik pesanan, teknisi ter-assign, admin
   /// (RLS bookings tidak berubah karena lat/lng kolom di bookings).
@@ -283,6 +288,7 @@ class Booking {
     this.technicianAvatar,
     this.userId,
     this.hasReview = false,
+    this.rescheduleCount = 0,
     this.createdAt,
     this.paymentConfirmedAt,
     this.completedAt,
@@ -316,6 +322,7 @@ class Booking {
       paymentRejected: (m['payment_rejected'] as bool?) ?? false,
       paymentRejectionReason: m['payment_rejection_reason'] as String?,
       userId: m['user_id'] as String?,
+      rescheduleCount: (m['reschedule_count'] as num?)?.toInt() ?? 0,
       technicianId: m['technician_id'] as String?,
       technicianName: tech?['name'] as String?,
       technicianAvatar: tech?['avatar_url'] as String?,
@@ -681,4 +688,218 @@ String? paymentMethodLabel(String code) {
     'qris' || 'virtual_account' || 'e_wallet' => 'Transfer Bank',
     _ => null,
   };
+}
+
+/// "850 m" / "2,4 km" — satu tempat supaya layar dan tes memakai aturan yang
+/// sama persis. Mengembalikan kalimat yang bisa langsung ditampilkan bila
+/// jaraknya belum diketahui (jangan tampilkan "null km").
+String formatJarak(double? meter) {
+  if (meter == null || meter.isNaN || meter < 0) return 'jarak belum tersedia';
+  if (meter < 1000) return '${meter.round()} m';
+  return '${(meter / 1000).toStringAsFixed(1).replaceAll('.', ',')} km';
+}
+
+/// Umur posisi teknisi dalam kalimat: "baru saja" / "5 menit lalu".
+/// Dipakai bersama [formatJarak] supaya pelanggan tahu jarak itu diukur kapan.
+String formatUmurLokasi(int? menit) {
+  if (menit == null || menit < 0) return 'posisi belum tersedia';
+  if (menit < 2) return 'posisi baru saja';
+  if (menit < 60) return 'posisi $menit menit lalu';
+  final jam = menit ~/ 60;
+  return 'posisi $jam jam lalu';
+}
+
+/// Kontak + jarak teknisi untuk satu pesanan aktif — hasil RPC
+/// `booking_technician_info`.
+///
+/// Koordinat teknisi SENGAJA tidak ikut: server hanya mengirim jarak (angka)
+/// dan umur posisinya, sesuai aturan privasi di supabase/migrate-technician-gps.sql
+/// ("koordinat teknisi tidak pernah terekspos"). Aplikasi karena itu tidak bisa
+/// — dan tidak seharusnya — menggambar titik teknisi di peta.
+class BookingTechInfo {
+  final String? technicianId;
+  final String? name;
+  final String? avatarUrl;
+
+  /// Nomor telepon teknisi; hanya terisi selama pesanan masih aktif
+  /// (pending/paid/in_progress). Setelah selesai/dibatalkan server menutupnya.
+  final String? phone;
+
+  /// Pesanan masih berjalan → kontak boleh ditampilkan.
+  final bool active;
+
+  /// Jarak lurus teknisi → lokasi pesanan (meter). Null bila titik tidak ada
+  /// atau posisinya sudah basi (>2 jam).
+  final double? distanceM;
+
+  /// Umur posisi terakhir (menit). Null bila teknisi belum pernah mengirim posisi.
+  final int? locationAgeMin;
+
+  const BookingTechInfo({
+    this.technicianId,
+    this.name,
+    this.avatarUrl,
+    this.phone,
+    this.active = false,
+    this.distanceM,
+    this.locationAgeMin,
+  });
+
+  /// Belum ada teknisi ditugaskan (atau RPC belum dijalankan).
+  static const kosong = BookingTechInfo();
+
+  factory BookingTechInfo.fromRpc(Map<String, dynamic> m) {
+    final t = (m['technician'] as Map?)?.cast<String, dynamic>();
+    final telp = (t?['phone'] as String?)?.trim();
+    return BookingTechInfo(
+      technicianId: t?['id'] as String?,
+      name: t?['name'] as String?,
+      avatarUrl: t?['avatar_url'] as String?,
+      phone: (telp == null || telp.isEmpty) ? null : telp,
+      active: m['active'] == true,
+      distanceM: (m['distance_m'] as num?)?.toDouble(),
+      locationAgeMin: (m['location_age_min'] as num?)?.toInt(),
+    );
+  }
+
+  bool get hasTechnician => technicianId != null;
+
+  /// Kontak hanya berguna bila teknisi ada DAN pesanan masih aktif.
+  bool get bolehDihubungi => hasTechnician && active && phone != null;
+
+  /// Ringkasan siap tampil: "2,4 km · posisi 5 menit lalu".
+  String get ringkasanJarak {
+    if (!hasTechnician) return 'Teknisi belum ditugaskan.';
+    if (distanceM == null) {
+      return locationAgeMin == null
+          ? 'Posisi teknisi belum tersedia.'
+          : formatUmurLokasi(locationAgeMin);
+    }
+    return '${formatJarak(distanceM)} · ${formatUmurLokasi(locationAgeMin)}';
+  }
+}
+
+/// Masa garansi + klaim untuk satu pesanan — hasil RPC `booking_warranty_info`.
+///
+/// [eligible] true berarti pelanggan masih boleh mengajukan klaim BARU
+/// (belum lewat masa garansi dan belum pernah mengajukan).
+class BookingWarrantyInfo {
+  final int warrantyDays;
+  final bool eligible;
+  final int daysLeft;
+  final String? claimId;
+  final String? claimStatus; // open | approved | rejected
+  final String? claimReason;
+  final String? claimAdminNote;
+  final String? revisitBookingId;
+
+  const BookingWarrantyInfo({
+    this.warrantyDays = 0,
+    this.eligible = false,
+    this.daysLeft = 0,
+    this.claimId,
+    this.claimStatus,
+    this.claimReason,
+    this.claimAdminNote,
+    this.revisitBookingId,
+  });
+
+  factory BookingWarrantyInfo.fromRpc(Map<String, dynamic> m) {
+    final c = (m['claim'] as Map?)?.cast<String, dynamic>();
+    return BookingWarrantyInfo(
+      warrantyDays: (m['warranty_days'] as num?)?.toInt() ?? 0,
+      eligible: m['eligible'] == true,
+      daysLeft: (m['days_left'] as num?)?.toInt() ?? 0,
+      claimId: c?['id'] as String?,
+      claimStatus: c?['status'] as String?,
+      claimReason: c?['reason'] as String?,
+      claimAdminNote: c?['admin_note'] as String?,
+      revisitBookingId: c?['revisit_booking_id'] as String?,
+    );
+  }
+
+  bool get adaKlaim => claimStatus != null;
+
+  bool get ditolak => claimStatus == 'rejected';
+
+  bool get disetujui => claimStatus == 'approved';
+
+  bool get menunggu => claimStatus == 'open';
+
+  /// Apakah kartu garansi perlu ditampilkan sama sekali di detail pesanan?
+  /// Pesanan yang tidak bergaransi dan tidak punya klaim tidak menampilkan apa pun.
+  bool get perluTampil => warrantyDays > 0 && (eligible || adaKlaim);
+
+  String get ringkasan => switch (claimStatus) {
+        'open' => 'Klaim garansi sedang ditinjau admin.',
+        'approved' => 'Klaim garansi disetujui — kunjungan ulang gratis dijadwalkan.',
+        'rejected' => 'Klaim garansi ditolak',
+        _ => daysLeft > 0
+            ? 'Bergaransi $daysLeft hari lagi'
+            : 'Masa garansi $warrantyDays hari sudah berakhir',
+      };
+}
+
+/// Normalkan nomor telepon Indonesia ke bentuk yang diterima wa.me/tel:
+/// digit saja, berawalan kode negara tanpa '+'.
+///
+/// Nomor di profil teknisi bisa ditulis bermacam cara — '0812-3456-7890',
+/// '+62 812 3456 7890', '62812...'. wa.me MENOLAK awalan '0', jadi nomor yang
+/// tidak dinormalkan akan tampak seperti tombol yang tidak bekerja.
+/// Mengembalikan null bila tidak ada digit yang cukup untuk dihubungi.
+String? normalkanNomorId(String? nomor) {
+  if (nomor == null) return null;
+  var digit = nomor.replaceAll(RegExp(r'[^0-9]'), '');
+  if (digit.isEmpty) return null;
+  if (digit.startsWith('0')) {
+    digit = '62${digit.substring(1)}';
+  } else if (digit.startsWith('8')) {
+    digit = '62$digit';
+  }
+  if (digit.length < 8) return null;
+  return digit;
+}
+
+/// Apakah pelanggan boleh membatalkan / mengubah jadwal pesanan ini sendiri?
+///
+/// Aturan ini CERMIN dari RPC `cancel_booking`/`reschedule_booking`
+/// (supabase/migrate-customer-self-service.sql) — tombol yang tampil harus
+/// sama dengan yang akan diterima server, supaya pelanggan tidak melihat
+/// pilihan yang selalu gagal. Server tetap memeriksa ulang semuanya.
+///
+/// [belumBayarBukti] = belum ada bukti bayar yang menunggu/menghuni konfirmasi
+/// admin; pembatalan setelah transfer diblokir karena belum ada alur refund.
+bool bolehBatalkanAtauUbahJadwal({
+  required BookingStatus status,
+  required String? paymentProofUrl,
+  required bool paymentRejected,
+  required DateTime sekarang,
+  required String bookingDate,
+  required String bookingTime,
+  int rescheduleCount = 0,
+}) {
+  if (status != BookingStatus.pending && status != BookingStatus.paid) return false;
+  // Bukti bayar sudah diunggah dan belum ditolak → uang mungkin sudah dikirim;
+  // pembatalan harus lewat admin (belum ada alur refund).
+  final buktiBelumAda = paymentProofUrl == null || paymentRejected;
+  if (!buktiBelumAda) return false;
+  return slotStart(bookingDate, bookingTime).isAfter(sekarang);
+}
+
+/// Batas jumlah perubahan jadwal per pesanan — sama dengan v_max_reschedule
+/// di RPC reschedule_booking.
+const maxReschedule = 3;
+
+/// Awal slot ('2026-10-14', '08:00-10:00') sebagai waktu lokal.
+/// Bentuk jam yang tak dikenal → awal hari, sama seperti booking_slot_start()
+/// di database, supaya perbandingan klien & server tidak berbeda pendapat
+/// pada data lama.
+DateTime slotStart(String bookingDate, String bookingTime) {
+  final tanggal = DateTime.tryParse(bookingDate.trim());
+  if (tanggal == null) return DateTime(1970);
+  final m = RegExp(r'^\s*(\d{1,2}):(\d{2})').firstMatch(bookingTime);
+  if (m == null) return DateTime(tanggal.year, tanggal.month, tanggal.day);
+  final jam = int.tryParse(m.group(1)!) ?? 0;
+  final menit = int.tryParse(m.group(2)!) ?? 0;
+  return DateTime(tanggal.year, tanggal.month, tanggal.day, jam.clamp(0, 23), menit.clamp(0, 59));
 }

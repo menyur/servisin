@@ -21,5 +21,14 @@ create policy "user can add payment proof"
 -- 2. teknisi: update booking yang ditugaskan
 -- 3. pelanggan: pending -> paid      (konfirmasi pembayaran)
 -- 4. pelanggan: pending -> pending   (isi bukti pembayaran)
--- Pelanggan TIDAK bisa menandai selesai/membatalkan sendiri.
+--
+-- Pelanggan TIDAK bisa menembak kolom/status apa pun secara bebas lewat RLS —
+-- termasuk menandai selesai. Ini disengaja dan TIDAK diubah.
+--
+-- CATATAN (diperbarui): "membatalkan sendiri" kini MUNGKIN lewat RPC khusus,
+-- bukan lewat RLS. supabase/migrate-customer-self-service.sql menambahkan
+-- cancel_booking()/reschedule_booking() (security definer) yang memeriksa
+-- pemilik + status (pending/paid) + jadwal belum mulai + belum ada bukti bayar
+-- yang menunggu konfirmasi admin. Jadi jalur resminya satu pintu dan tetap
+-- tidak memperluas RLS di atas.
 -- =========================================================

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronLeft, Paperclip, Landmark, Banknote, Ticket } from "lucide-react";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { calculateTotal, formatRupiah } from "@/lib/pricing";
+import { TIME_SLOTS } from "@/lib/booking-slots";
 import { createBooking, getTransferAccount } from "@/app/actions/bookings";
 import { getMyVouchers } from "@/app/actions/reviews";
 import { createClient } from "@/lib/supabase/client";
@@ -381,7 +382,7 @@ function StepDetails({ form, update, errors, onBack, onNext }) {
           <label className="label">Jam kedatangan</label>
           <select className="input" value={form.time} onChange={(e) => update("time", e.target.value)}>
             <option value="">Pilih jam</option>
-            {["08:00-10:00", "10:00-12:00", "13:00-15:00", "15:00-17:00"].map((t) => (
+            {TIME_SLOTS.map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
