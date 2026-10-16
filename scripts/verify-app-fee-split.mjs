@@ -106,9 +106,27 @@ if (env) {
       : { data: [] };
     const feeById = new Map((bks || []).map((b) => [b.id, Number(b.app_fee) || 0]));
 
+    // Invarian di bawah hanya bisa dinilai untuk baris yang pesanannya MASIH ADA.
+    // `balance_transactions.booking_id` memakai `on delete set null`, jadi setelah
+    // pesanan lama dihapus (pembersihan data uji) barisnya tetap ada tanpa tautan —
+    // di situ tidak ada lagi `bookings.app_fee` yang bisa dibandingkan. Baris yatim
+    // itu dihitung dan DICETAK, bukan dianggap lulus diam-diam.
+    const tertaut = list.filter((r) => r.booking_id && feeById.has(r.booking_id));
+    const yatim = list.length - tertaut.length;
+    if (yatim) {
+      console.log(
+        `   ℹ️  ${yatim} baris yatim (pesanannya sudah tidak ada) — invarian di bawah dinilai untuk ${tertaut.length} baris yang tertaut.`
+      );
+    }
+    if (!tertaut.length) {
+      console.log(
+        "   ⚠️  tidak ada baris tertaut yang bisa dinilai — bagian B belum membuktikan apa pun tentang ledger nyata."
+      );
+    }
+
     // Potongan PENUH (|amount| mencakup biaya app penuh) → porsi biaya app HARUS
     // sama dengan bookings.app_fee yang benar-benar ditagihkan.
-    const full = list.filter((r) => Number(r.amount) < 0 && Math.abs(Number(r.amount) || 0) >= ledgerCommission(r) + (feeById.get(r.booking_id) ?? 0));
+    const full = tertaut.filter((r) => Number(r.amount) < 0 && Math.abs(Number(r.amount) || 0) >= ledgerCommission(r) + (feeById.get(r.booking_id) ?? 0));
     const mismatched = full.filter((r) => ledgerAppFee(r) !== (feeById.get(r.booking_id) ?? 0));
     check(
       `potongan penuh: porsi biaya app = bookings.app_fee (${full.length} baris)`,
@@ -117,7 +135,7 @@ if (env) {
     );
     check(
       "porsi biaya app terpotong tidak melebihi biaya aplikasi pesanan",
-      list.every((r) => ledgerAppFee(r) <= Math.max(feeById.get(r.booking_id) ?? 0, 0))
+      tertaut.every((r) => ledgerAppFee(r) <= Math.max(feeById.get(r.booking_id) ?? 0, 0))
     );
     const total = list.reduce((s, r) => s + ledgerAppFee(r), 0);
     console.log(`   ℹ️  total biaya aplikasi terpotong dari saldo teknisi: ${total} (biaya normal ${APP_FEE}/pesanan).`);

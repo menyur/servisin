@@ -1,15 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { getDailyOpsBoardAdmin } from "@/app/actions/admin";
+import { getDailyOpsBoardAdmin, remindTechnicianBalanceAdmin } from "@/app/actions/admin";
 import { StatusPill } from "@/components/StatusPipeline";
 import { formatRupiah } from "@/lib/pricing";
 import {
   AlertTriangle,
+  Bell,
   CalendarDays,
   ClipboardList,
+  Clock,
   Loader2,
   RefreshCw,
+  ShieldAlert,
+  TrendingDown,
   UserRound,
   UserX,
   Wallet,
@@ -105,11 +109,34 @@ function BarisPesanan({ b, aksi }) {
  * Tugas yang dilepas teknisi ikut ditampilkan di sini. Sebelumnya pelepasan
  * hanya dikabarkan lewat email; email tidak membentuk antrean, sehingga
  * pekerjaan yang sudah dilepas mudah terlupakan sampai pelanggan menelepon.
+ *
+ * Piutang teknisi yang sudah melewati ambang umur (mis. teknisi berhenti dan
+ * tak akan pernah menyetor) juga menjadi TUGAS di sini: ingatkan setor langsung
+ * dari papan, atau lanjut ke tab Saldo Aktif untuk mengajukan penghapusan.
  */
-export default function DailyOpsBoardTab({ board: boardAwal = null, error: errorAwal = null, onOpenBookings }) {
+export default function DailyOpsBoardTab({
+  board: boardAwal = null,
+  error: errorAwal = null,
+  onOpenBookings,
+  onOpenBalances,
+}) {
   const [board, setBoard] = useState(boardAwal);
   const [error, setError] = useState(errorAwal);
   const [loading, setLoading] = useState(false);
+  const [remindingId, setRemindingId] = useState(null);
+  const [toast, setToast] = useState("");
+
+  /** Kirim pengingat setor ke satu teknisi — tanpa pindah tab. */
+  async function ingatkan(row) {
+    setRemindingId(row.id);
+    setToast("");
+    try {
+      const res = await remindTechnicianBalanceAdmin(row.id);
+      setToast(res?.error ? `Gagal mengirim pengingat: ${res.error}` : `Pengingat setor terkirim ke ${row.nama}.`);
+    } finally {
+      setRemindingId(null);
+    }
+  }
 
   async function muatUlang() {
     setLoading(true);
@@ -141,10 +168,14 @@ export default function DailyOpsBoardTab({ board: boardAwal = null, error: error
 
   const c = board.counts || {};
   const rilisPerluTindak = (board.rilis || []).filter((r) => r.perluTeknisiBaru);
+  const piutangJatuhTempo = board.piutang?.jatuhTempo || [];
+  const piutangAmbang = board.piutang?.ambangHari ?? 30;
+  const piutangNominal = piutangJatuhTempo.reduce((s, r) => s + Number(r.total || 0), 0);
   const tidakAdaYangPerluTindak =
     (board.perluTeknisi || []).length === 0 &&
     (board.menungguBayar || []).length === 0 &&
-    rilisPerluTindak.length === 0;
+    rilisPerluTindak.length === 0 &&
+    piutangJatuhTempo.length === 0;
 
   return (
     <div className="space-y-6">
@@ -163,7 +194,7 @@ export default function DailyOpsBoardTab({ board: boardAwal = null, error: error
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <Kartu label="Perlu teknisi" nilai={c.perluTeknisi ?? 0} icon={UserX} tone={c.perluTeknisi ? "coral" : "navy"} />
         <Kartu label="Menunggu konfirmasi bayar" nilai={c.menungguBayar ?? 0} icon={Wallet} tone={c.menungguBayar ? "amber" : "navy"} />
         <Kartu
@@ -180,7 +211,20 @@ export default function DailyOpsBoardTab({ board: boardAwal = null, error: error
           tone={c.rilisPerluTindak ? "coral" : "navy"}
           catatan={`dari ${(board.rilis || []).length} catatan terakhir`}
         />
+        <Kartu
+          label="Piutang jatuh tempo"
+          nilai={c.piutangJatuhTempo ?? piutangJatuhTempo.length}
+          icon={TrendingDown}
+          tone={piutangJatuhTempo.length ? "coral" : "navy"}
+          catatan={`${formatRupiah(piutangNominal)} belum tertutup · > ${piutangAmbang} hari`}
+        />
       </div>
+
+      {toast && (
+        <div className="rounded-xl bg-brand-tint/60 border border-brand/30 text-navy text-sm px-4 py-2.5">
+          {toast}
+        </div>
+      )}
 
       {tidakAdaYangPerluTindak ? (
         <div className="card text-center py-8">
@@ -245,6 +289,65 @@ export default function DailyOpsBoardTab({ board: boardAwal = null, error: error
           </div>
         </div>
       )}
+
+      {/* ===== Piutang teknisi yang menua ===== */}
+      <div className={`card ${piutangJatuhTempo.length ? "border-coral/50" : ""}`}>
+        <p className="text-sm font-semibold text-navy flex items-center gap-2 mb-2">
+          <Clock size={15} className={piutangJatuhTempo.length ? "text-coral" : "text-ink-soft"} /> Piutang teknisi perlu tindak
+          {piutangJatuhTempo.length > 0 && (
+            <span className="pill bg-coral-tint text-coral text-xs font-bold">{piutangJatuhTempo.length}</span>
+          )}
+        </p>
+        {board.piutangError ? (
+          <p className="text-xs text-coral">{board.piutangError}</p>
+        ) : piutangJatuhTempo.length === 0 ? (
+          <p className="text-xs text-ink-soft py-2">
+            Tidak ada piutang lewat {piutangAmbang} hari. Saldo minus yang belum jatuh tempo tetap terlihat di tab Saldo Aktif.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-ink-soft">
+              Teknisi ini tidak akan melunasi sendiri (mis. sudah berhenti). Ingatkan setor, atau lanjut ke tab Saldo Aktif
+              untuk mengajukan penghapusan — penghapusan berlaku setelah diputuskan admin.
+            </p>
+            {piutangJatuhTempo.slice(0, 10).map((r) => (
+              <div key={r.id} className="rounded-xl border border-coral/40 bg-coral-tint/30 p-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-navy flex items-center gap-1.5">
+                    <ShieldAlert size={13} className="text-coral" /> {r.nama}
+                  </span>
+                  <span className="pill bg-coral-tint text-coral text-xs font-bold">
+                    {formatRupiah(r.jatuhTempo?.total ?? r.total)} terlewat
+                  </span>
+                  {!r.masihAktif && <span className="pill bg-white text-ink-soft text-xs">tidak aktif</span>}
+                </div>
+                <p className="text-xs text-ink-soft mt-1">
+                  Piutang terbuka {formatRupiah(r.total)} · tertua {r.tertua} hari · {r.baris} baris pesanan
+                  {r.reminder_terakhir ? ` · diingatkan ${waktuSingkat(r.reminder_terakhir)}` : " · belum pernah diingatkan"}
+                </p>
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => ingatkan(r)}
+                    disabled={remindingId === r.id}
+                    className="btn-outline !py-1.5 !px-2.5 text-xs flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {remindingId === r.id ? <Loader2 size={12} className="animate-spin" /> : <Bell size={12} />} Ingatkan setor
+                  </button>
+                  {onOpenBalances && (
+                    <button type="button" onClick={onOpenBalances} className="btn-outline !py-1.5 !px-2.5 text-xs flex items-center gap-1.5">
+                      <TrendingDown size={12} /> Kelola / hapuskan
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+            {piutangJatuhTempo.length > 10 && (
+              <p className="text-[11px] text-ink-soft">+{piutangJatuhTempo.length - 10} teknisi lain — lihat tab Saldo Aktif.</p>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* ===== Pelepasan tugas ===== */}
       <div className="card">

@@ -7,12 +7,19 @@ import '../api.dart';
 import '../format.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../trip_share.dart';
 import 'chat_screen.dart';
 import 'common.dart';
 import 'mini_pin_map.dart';
 import 'receipt_screen.dart';
 import 'report_screen.dart';
 import 'review_sheet.dart';
+
+/// Teks privasi yang WAJIB menemani posisi teknisi di layar pelanggan: ini
+/// bukan riwayat dan tidak berlangsung selamanya. Ditulis sekali supaya kedua
+/// keadaan (terlihat / tidak terlihat) menyebut aturan yang sama persis.
+const _catatanPrivasi = 'Posisi hanya tampil selama teknisi dalam perjalanan, '
+    'tidak disimpan sebagai riwayat, dan berhenti sendiri setelah 90 menit.';
 
 class OrderDetailScreen extends StatefulWidget {
   final Booking booking;
@@ -28,12 +35,21 @@ class OrderDetailScreen extends StatefulWidget {
   final BookingTechInfo? techInfoUji;
   final BookingWarrantyInfo? warrantyInfoUji;
 
+  /// Seam uji sisi PELANGGAN: pembacaan posisi teknisi untuk pesanan ini.
+  final Future<BookingTechPosition> Function()? positionUji;
+
+  /// Seam uji sisi TEKNISI: alur berbagi posisi (Api + GPS + notifikasi).
+  /// Diteruskan ke [TripShareSession] saat perjalanan dimulai.
+  final TripShareHooks? tripShareUji;
+
   const OrderDetailScreen({
     super.key,
     required this.booking,
     this.currentUserId,
     this.techInfoUji,
     this.warrantyInfoUji,
+    this.positionUji,
+    this.tripShareUji,
   });
 
   @override
@@ -57,6 +73,25 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   /// klaim garansi) — mencegah dua ketukan cepat memicu dua permintaan.
   bool _aksiSibuk = false;
 
+  /// Posisi teknisi untuk pelanggan pemilik pesanan ("teknisi menuju lokasi").
+  BookingTechPosition _posisi = BookingTechPosition.kosong;
+  Timer? _posisiTimer;
+
+  /// Sesi berbagi milik APLIKASI (bukan layar ini) — itulah sebabnya posisi
+  /// tetap diperbarui setelah teknisi menutup layar detail. Di sini kita hanya
+  /// memantau keadaannya untuk menggambar tombol & jarak.
+  final _sesi = TripShareSession.instance;
+
+  /// Sedang memproses tombol berbagi (mulai/hentikan) — mencegah dua ketukan.
+  bool _bagikanSibuk = false;
+
+  /// Jeda penyegaran posisi teknisi di layar pelanggan. 15 detik: rapat untuk
+  /// terasa "live" saat teknisi mengendarai motor (≈200 m antar pembaruan),
+  /// tetapi tetap satu RPC kecil per layar.
+  static const _intervalPosisi = Duration(seconds: 15);
+
+  String? get _uidSaya => (widget.currentUserId ?? () => Api.currentUserId)();
+
   @override
   void initState() {
     super.initState();
@@ -65,6 +100,19 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       if (u.id == widget.booking.id) _reload();
     });
     unawaited(_muatInfoTambahan());
+    // Sesi berbagi bisa berhenti SENDIRI (tiba / ditolak server) walau layar ini
+    // tidak sedang ditekan — teknisi harus tahu, jadi sebabnya ditampilkan.
+    _sesi.aktif.addListener(_segarkan);
+    _sesi.jarakTerakhir.addListener(_segarkan);
+    _sesi.berhentiSebab.addListener(_tampilkanSebabBerhenti);
+    // Pelacakan "teknisi menuju lokasi": hanya untuk PEMILIK pesanan. Teknisi
+    // tidak melacak dirinya sendiri, dan server menolak permintaan dari bukan
+    // pemilik — jadi jangan buang kuota jaringan untuk itu.
+    if (_b.isOwnedBy(_uidSaya)) {
+      unawaited(_muatPosisi());
+      _posisiTimer =
+          Timer.periodic(_intervalPosisi, (_) => unawaited(_muatPosisi()));
+    }
     // Detail pesanan terbuka — perubahan item ini langsung tampak, reset badge.
     unseenBookingUpdates.value = 0;
   }
@@ -72,7 +120,28 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   @override
   void dispose() {
     unawaited(_tickSub?.cancel());
+    // Timer pelacakan pelanggan: tanpa ini, layar yang ditutup tetap memanggil
+    // server setiap 15 detik dan test pelacakan kebocoran akan menangkapnya.
+    _posisiTimer?.cancel();
+    // Pendengar sesi WAJIB dilepas: sesinya sendiri hidup lebih lama daripada
+    // layar ini (itu tujuannya), jadi ia tidak boleh memegang layar yang sudah mati.
+    _sesi.aktif.removeListener(_segarkan);
+    _sesi.jarakTerakhir.removeListener(_segarkan);
+    _sesi.berhentiSebab.removeListener(_tampilkanSebabBerhenti);
     super.dispose();
+  }
+
+  void _segarkan() {
+    if (mounted) setState(() {});
+  }
+
+  /// Tampilkan sekali sebab sesi berhenti sendiri, lalu bersihkan supaya tidak
+  /// terulang setiap rebuild.
+  void _tampilkanSebabBerhenti() {
+    final sebab = _sesi.sebabBerhenti;
+    if (sebab == null || !mounted) return;
+    _sesi.berhentiSebab.value = '';
+    showSnack(context, sebab, error: true);
   }
 
   /// Segarkan data pesanan setelah kembali dari chat (mis. ada status baru).
@@ -93,6 +162,56 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     } catch (_) {
       // diam: reload adalah best-effort
     }
+  }
+
+  /// Ambil posisi teknisi (sisi pelanggan). Server yang memutuskan `visible` —
+  /// lihat supabase/migrate-technician-trip-share.sql.
+  Future<void> _muatPosisi() async {
+    final uji = widget.positionUji;
+    final hasil = uji != null
+        ? await uji()
+        : await Api.bookingTechnicianPosition(_b.id);
+    if (!mounted) return;
+    setState(() => _posisi = hasil);
+  }
+
+  /// Teknisi menekan "Berangkat".
+  ///
+  /// Pengiriman berkala diserahkan ke [TripShareSession] (singleton APLIKASI),
+  /// bukan ke layar ini — supaya perjalanan tetap dibagikan walau teknisi
+  /// langsung menutup layar detail dan menyetir. Layar tinggal mendengarkan
+  /// keadaannya untuk menggambar tombol, jarak, dan sebab berhentinya.
+  Future<void> _mulaiBerbagi() async {
+    if (_bagikanSibuk) return;
+    setState(() => _bagikanSibuk = true);
+    final r = await _sesi.mulai(_b.id, hooks: widget.tripShareUji);
+    if (!mounted) return;
+    setState(() => _bagikanSibuk = false);
+    if (!r.ok) {
+      showSnack(context, r.error ?? 'Gagal memulai berbagi lokasi.', error: true);
+      return;
+    }
+    showSnack(
+      context,
+      'Pelanggan bisa melihat posisimu sampai kamu tiba atau menekan berhenti.',
+    );
+  }
+
+  /// Teknisi menekan "Saya sudah tiba": hentikan berbagi — server MENGHAPUS
+  /// barisnya, jadi tidak ada riwayat posisi yang tertinggal.
+  Future<void> _hentikanBerbagi() async {
+    if (_bagikanSibuk) return;
+    setState(() => _bagikanSibuk = true);
+    final r = await _sesi.berhenti();
+    if (!mounted) return;
+    setState(() => _bagikanSibuk = false);
+    showSnack(
+      context,
+      r.ok
+          ? 'Berbagi lokasi dihentikan — posisimu tidak lagi terlihat pelanggan.'
+          : (r.error ?? 'Gagal menghentikan berbagi lokasi.'),
+      error: !r.ok,
+    );
   }
 
   /// Muat info yang TIDAK ikut dalam baris pesanan: jarak + kontak teknisi dan
@@ -636,6 +755,154 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         lat: _b.lat, lng: _b.lng, // jaga pin: hilang → peta pratinjau ikut lenyap
       );
 
+  /// Kartu pelacakan untuk PEMILIK pesanan — posisi teknisi yang sedang menuju
+  /// lokasi. Saat server menjawab "tidak terlihat", yang muncul adalah ALASAN
+  /// dari server (mis. "Teknisi belum berangkat"), bukan peta kosong tanpa sebab;
+  /// saat server belum menjawab sama sekali (migrasi belum jalan / jaringan),
+  /// kartunya tidak tampil — sama fail-soft-nya dengan kartu teknisi & garansi.
+  Widget _kartuLacak(Booking b) {
+    final p = _posisi;
+
+    if (!p.visible) {
+      final sebab = p.reason;
+      if (!p.ok || sebab == null) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: _cardDeco(),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.location_searching_rounded,
+                size: 18, color: AppColors.inkSoft),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(sebab,
+                        style: const TextStyle(
+                            fontSize: 13, color: AppColors.inkSoft, height: 1.4)),
+                    const SizedBox(height: 6),
+                    const Text(_catatanPrivasi,
+                        style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.inkSoft,
+                            height: 1.35)),
+                  ]),
+            ),
+          ]),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: _cardDeco(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Row(children: [
+            Icon(Icons.navigation_rounded, size: 18, color: AppColors.brandDeep),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text('Teknisi sedang menuju lokasimu',
+                  style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 14,
+                      color: AppColors.navy)),
+            ),
+          ]),
+          const SizedBox(height: 2),
+          Text(
+            [
+              if (p.ringkasanJarak != null) p.ringkasanJarak!,
+              p.ringkasanUmur,
+            ].join(' · '),
+            style: const TextStyle(fontSize: 12, color: AppColors.inkSoft),
+          ),
+          const SizedBox(height: 10),
+          // Tanpa `hint`: pelanggan tidak perlu rute ke teknisi — hanya perlu
+          // tahu di mana dia. Badge "Ketuk untuk rute" di sini akan berbohong.
+          MiniPinMap(lat: p.lat!, lng: p.lng!, height: 170, hint: null),
+          const SizedBox(height: 8),
+          const Text(_catatanPrivasi,
+              style: TextStyle(
+                  fontSize: 11, color: AppColors.inkSoft, height: 1.35)),
+        ]),
+      ),
+    );
+  }
+
+  /// Kartu sisi TEKNISI: satu tombol untuk mulai/berhenti berbagi posisi.
+  /// Sebelum ditekan, tidak ada apa pun yang terkirim — itulah gerbang
+  /// privasinya; teksnya menjelaskan akibatnya lebih dulu, bukan sesudahnya.
+  Widget _kartuBerbagiLokasi(Booking b) {
+    final aktif = _sesi.aktifUntuk(b.id);
+    final jarak = aktif ? _sesi.jarak : null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: _cardDeco(),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(
+              aktif
+                  ? Icons.share_location_rounded
+                  : Icons.share_location_outlined,
+              size: 18,
+              color: aktif ? AppColors.mint : AppColors.inkSoft,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                aktif
+                    ? 'Posisimu sedang dibagikan ke pelanggan'
+                    : 'Bagikan posisimu saat berangkat',
+                style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13.5,
+                    color: AppColors.navy),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text(
+            aktif
+                ? 'Berbagi berhenti sendiri begitu kamu sampai (≤150 m dari titik '
+                    'pelanggan), saat pesanan selesai, atau paling lambat 90 menit.'
+                : 'Pelanggan hanya melihat posisimu SETELAH kamu menekan tombol '
+                    'ini — bukan posisi on-dutymu terus-menerus, dan tidak ada '
+                    'riwayat yang disimpan.',
+            style: const TextStyle(
+                fontSize: 12, color: AppColors.inkSoft, height: 1.4),
+          ),
+          if (jarak != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Sekitar ${formatJarak(jarak.toDouble())} dari titik pelanggan.',
+              style: const TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.brandDeep),
+            ),
+          ],
+          const SizedBox(height: 10),
+          if (aktif)
+            OutlinedButton.icon(
+              onPressed: _bagikanSibuk ? null : _hentikanBerbagi,
+              icon: const Icon(Icons.flag_rounded, size: 18),
+              label: const Text('Saya sudah tiba — berhenti berbagi'),
+            )
+          else
+            FilledButton.icon(
+              onPressed: _bagikanSibuk ? null : _mulaiBerbagi,
+              icon: const Icon(Icons.navigation_rounded, size: 18),
+              label: const Text('Berangkat — bagikan lokasiku'),
+            ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final b = _b;
@@ -688,6 +955,20 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
           if (isOwner && _tech != null && _tech!.hasTechnician && _tech!.active) ...[
             _kartuTeknisi(b, _tech!),
             const SizedBox(height: 12),
+          ],
+
+          // "Teknisi menuju lokasi" — kartu pelacakan untuk PELANGGAN pemilik.
+          // Gerbangnya ada di server (migrate-technician-trip-share.sql); di
+          // sini hanya menampilkan apa yang diizinkan server.
+          if (isOwner) _kartuLacak(b),
+
+          // Sisi TEKNISI yang ditugaskan: tombol berbagi posisi, hanya selama
+          // pesanan aktif — setelah selesai/dibatalkan tidak ada lagi yang
+          // perlu dibagikan (dan trigger server sudah menghapus barisnya).
+          if (isAssignedTech &&
+              (b.status == BookingStatus.paid ||
+                  b.status == BookingStatus.inProgress)) ...[
+            _kartuBerbagiLokasi(b),
           ],
 
           // peringatan penolakan bukti — HANYA untuk pelanggan pemilik pesanan;

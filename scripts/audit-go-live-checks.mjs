@@ -165,10 +165,13 @@ async function checkF4F5(admin, env, fixtures) {
       return { customer, technician };
     }
 
-    // Teknisi uji: skill = kategori serviceA, approved (syarat is_active_technician).
+    // Teknisi uji: skill = kategori serviceA, approved (syarat is_active_technician),
+    // dan saldo > 0 — sejak supabase/migrate-claim-min-balance.sql klaim juga
+    // ditolak saat saldo 0, dan penolakan itu akan terbaca sebagai "guard keahlian
+    // TERBUKA" padahal bukan.
     const { error: updErr } = await admin
       .from("profiles")
-      .update({ skill: serviceA.category_id, approval_status: "approved" })
+      .update({ skill: serviceA.category_id, approval_status: "approved", balance: 20000 })
       .eq("id", technician.id);
     if (updErr) throw new Error(`gagal menyiapkan teknisi uji: ${updErr.message}`);
 

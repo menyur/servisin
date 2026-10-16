@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:fixify_app/models.dart';
+import 'package:fixify_app/ui/common.dart';
 import 'package:fixify_app/ui/reports_screen.dart';
 
 Report _r({
@@ -146,5 +147,64 @@ void main() {
 
     expect(find.text('Status laporan'), findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  group('angka notifikasi tab Laporan', () {
+    testWidgets('daftar yang tampil ditandai sudah dilihat & badge dinolkan',
+        (tester) async {
+      // Badge berisi tanggapan admin yang belum dibuka.
+      unseenReportUpdates.value = 2;
+      List<Report>? ditandai;
+
+      await tester.pumpWidget(MaterialApp(
+        home: ReportsScreen(
+          loadReports: () async => [
+            _r(id: 'a', code: 'SV-1', day: 1, status: 'reviewed'),
+            _r(id: 'b', code: 'SV-1', day: 2, status: 'resolved'),
+          ],
+          markSeen: (list) async => ditandai = list,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(ditandai?.length, 2, reason: 'semua laporan yang tampil ditandai');
+      expect(unseenReportUpdates.value, 0);
+      expect(find.text('Selesai'), findsOneWidget);
+    });
+
+    testWidgets('tanggapan admin datang selagi tab terbuka → daftar disegarkan '
+        'tanpa kedip ke spinner', (tester) async {
+      var panggilan = 0;
+      var status = 'open';
+
+      await tester.pumpWidget(MaterialApp(
+        home: ReportsScreen(
+          loadReports: () async {
+            panggilan++;
+            return [_r(id: 'a', code: 'SV-9', day: 1, status: status)];
+          },
+          markSeen: (_) async {},
+        ),
+      ));
+      await tester.pumpAndSettle();
+      expect(panggilan, 1);
+      expect(find.text('Baru Masuk'), findsWidgets);
+
+      status = 'resolved';
+      reportUpdatesTick.add(const ReportUpdate(
+        id: 'a',
+        title: 'AC bocor',
+        status: 'resolved',
+        prevStatus: 'open',
+      ));
+      // Setelah satu frame: daftar lama masih tampil (tidak dikosongkan).
+      await tester.pump();
+      expect(find.text('Baru Masuk'), findsWidgets);
+
+      await tester.pumpAndSettle();
+      expect(panggilan, 2, reason: 'tick memicu muat ulang');
+      expect(find.text('Selesai'), findsWidgets);
+      expect(tester.takeException(), isNull);
+    });
   });
 }

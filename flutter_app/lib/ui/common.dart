@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
+import '../job_filter.dart';
 import '../models.dart';
+import '../report_seen.dart';
 import '../theme.dart';
 import 'home_screen.dart';
 import 'jobs_screen.dart';
@@ -649,6 +652,22 @@ final StreamController<BookingUpdate> bookingUpdatesTick =
 /// Posisi tab "Pesanan" pada bar navigasi — sama untuk pelanggan dan teknisi.
 const int kOrdersTabIndex = 1;
 
+/// Posisi tab "Pekerjaan" pada bar navigasi — hanya ada untuk teknisi.
+const int kJobsTabIndex = 2;
+
+/// Posisi tab "Laporan" pada bar navigasi — **berbeda per peran**: pelanggan
+/// 2 (Beranda · Pesanan · Laporan · Voucher · Profil), teknisi 3 (Beranda ·
+/// Pesanan · Pekerjaan · Laporan · Profil). Dipakai MainNav memasang badge
+/// dan MainShell saat notifikasi laporan meminta tab ini.
+int reportsTabIndex(bool isTechnician) => isTechnician ? 3 : 2;
+
+/// Selang penyegaran angka badge tab Pekerjaan (jumlah pekerjaan tersedia).
+/// Daftar pekerjaan baru tidak bisa diandalkan lewat realtime — barisnya milik
+/// pelanggan lain dan hanya terbaca lewat RPC security definer — jadi angka
+/// segment ini dihitung ulang berkala selagi app aktif (plus saat app kembali
+/// ke depan layar dan saat tab Pekerjaan ditinggalkan).
+const Duration kJobCountRefreshInterval = Duration(seconds: 60);
+
 /// Permintaan membuka tab **Laporan** dari luar widget tree (mis. pengguna
 /// mengetuk notifikasi status laporan). Indeks tab Laporan BERBEDA per peran
 /// — 2 untuk pelanggan, 3 untuk teknisi — jadi shell yang menerjemahkannya.
@@ -661,6 +680,28 @@ final ValueNotifier<int> openReportsRequest = ValueNotifier<int>(0);
 /// Dipakai MainNav untuk badge kecil di ikon tab Pesanan.
 final ValueNotifier<int> unseenBookingUpdates = ValueNotifier<int>(0);
 
+/// Jumlah laporan milik pengguna yang sudah ditanggapi admin tetapi statusnya
+/// belum pernah dilihat (badge kecil di ikon tab Laporan, kedua peran).
+/// Naik dari event realtime laporan & dihitung ulang dari server saat app
+/// dibuka/kembali aktif; kembali 0 begitu daftar Laporan dilihat.
+/// Aturan hitungnya: `countUnseenReports` di lib/report_seen.dart.
+final ValueNotifier<int> unseenReportUpdates = ValueNotifier<int>(0);
+
+/// Jumlah pekerjaan tersedia SAAT INI untuk teknisi (badge di ikon tab
+/// Pekerjaan). Berbeda dengan dua badge di atas yang menghitung *kejadian
+/// belum dilihat*, angka ini adalah total yang sedang menunggu diambil —
+/// itulah yang berguna saat memutuskan mengambil pekerjaan. Karena itu ia
+/// disembunyikan selagi teknisi berada di tab Pekerjaan (bukan di-reset).
+/// Isinya selalu berasal dari [filterAvailableJobs] yang sama dengan daftar
+/// kartu di layar Pekerjaan.
+final ValueNotifier<int> availableJobCount = ValueNotifier<int>(0);
+
+/// Tick event realtime laporan (admin menanggapi). Layar Laporan mendengarkan
+/// stream ini untuk memuat ulang daftarnya; MainShell menyiarkannya sekaligus
+/// menghitung ulang [unseenReportUpdates].
+final StreamController<ReportUpdate> reportUpdatesTick =
+    StreamController<ReportUpdate>.broadcast();
+
 /// Kode pesanan yang notifikasi realtime-nya ditahan sementara (event
 /// pantulan aksi sendiri — layar pelaku sudah menampilkan snack dari hasil
 /// RPC). MainShell memeriksa set ini sebelum menampilkan snack.
@@ -671,6 +712,31 @@ void suppressBookingNotify(String code) {
   if (code.isEmpty) return;
   suppressedBookingNotify.add(code);
   Timer(const Duration(seconds: 3), () => suppressedBookingNotify.remove(code));
+}
+
+/// Reaksi SATU event tanggapan admin atas laporan pengguna.
+///
+/// Satu tempat untuk seluruh alur, dipanggil `MainShell` pada setiap event
+/// realtime — dan dipanggil langsung oleh `test/report_update_snack_test.dart`
+/// sehingga notifikasinya bisa dibuktikan DETERMINISTIK (tanpa websocket dan
+/// tanpa menunggu snack sesaat yang cuma tampil ±4 detik di perangkat).
+///
+/// Urutannya sengaja tetap seperti ini:
+///   1. siarkan tick — layar Laporan memuat ulang daftarnya;
+///   2. beri tahu pengguna lewat SnackBar, HANYA bila statusnya benar-benar
+///      berubah ([reportUpdateSnack] mengembalikan null bila tidak berubah);
+///   3. hitung ulang angka badge dari server.
+void handleReportUpdate(
+  BuildContext context,
+  ReportUpdate u, {
+  required void Function() refreshBadge,
+}) {
+  reportUpdatesTick.add(u);
+  final pesan = reportUpdateSnack(u);
+  // context.mounted: event bisa tiba tepat setelah layar dilepas (app ditutup
+  // di tengah event) — jangan menempel SnackBar ke context yang sudah mati.
+  if (pesan != null && context.mounted) showSnack(context, pesan);
+  refreshBadge();
 }
 
 /// Shell tab utama: kelima layar tinggal di dalam satu scaffold dengan
@@ -687,7 +753,7 @@ class MainShell extends StatefulWidget {
   State<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   late int _index = widget.initialIndex;
   late int _prevIndex = widget.initialIndex;
   bool _isTechnician = false;
@@ -695,6 +761,21 @@ class _MainShellState extends State<MainShell> {
   // Realtime status pesanan (satu channel untuk seluruh aplikasi).
   ChatUnsubscribe? _realtimeCleanup;
   String? _realtimeUid;
+
+  // Realtime tanggapan admin atas laporan pengguna (badge tab Laporan).
+  ChatUnsubscribe? _reportCleanup;
+  String? _reportUid;
+
+  /// Profil pengguna yang login — dipakai filter area/keahlian untuk angka
+  /// badge tab Pekerjaan (dan hasil `_detectRole` sudah memuatnya).
+  Profile? _myProfile;
+
+  /// Timer penyegaran angka pekerjaan tersedia (teknisi saja).
+  Timer? _jobCountTimer;
+
+  /// Sedang menghitung angka pekerjaan? — cegah permintaan bertumpuk saat
+  /// timer & event realtime tiba bersamaan.
+  bool _refreshingJobCount = false;
 
   /// Tab sesuai peran: teknisi mendapat tab **Pekerjaan**
   /// (ambil pekerjaan) di posisi tengah, menggantikan Voucher.
@@ -716,18 +797,27 @@ class _MainShellState extends State<MainShell> {
 
   void _select(int i) {
     if (i == _index) return;
+    final sebelumnya = _index;
     setState(() {
       _prevIndex = _index;
       _index = i;
     });
     // Membuka tab Pesanan = semua event realtime dinyatakan sudah dilihat.
     if (i == kOrdersTabIndex) unseenBookingUpdates.value = 0;
+    // Meninggalkan tab Pekerjaan: angka pekerjaan tersedia dihitung ulang
+    // (mengambil/menyelesaikan pekerjaan mengubahnya tanpa event realtime).
+    if (_isTechnician && sebelumnya == kJobsTabIndex && i != kJobsTabIndex) {
+      unawaited(_refreshJobCount());
+    }
     mainTabIndex.value = i;
   }
 
   @override
   void initState() {
     super.initState();
+    // Angka badge disegarkan saat app kembali ke depan layar: notifikasi yang
+    // tiba selagi app tidak aktif tidak melewati websocket.
+    WidgetsBinding.instance.addObserver(this);
     // Sinkron saat layar lain meminta pindah tab (mainTabIndex.value = X).
     mainTabIndex.addListener(_onExternalTabRequest);
     // Notifikasi laporan meminta tab Laporan (indeks tergantung peran).
@@ -735,18 +825,106 @@ class _MainShellState extends State<MainShell> {
     if (widget.initialIndex == kOrdersTabIndex) unseenBookingUpdates.value = 0;
     _detectRole();
     _initBookingRealtime();
+    _initReportRealtime();
   }
 
   Future<void> _detectRole() async {
     try {
       final p = await Api.myProfile();
       if (!mounted || p == null) return;
+      _myProfile = p;
       if (p.role == 'technician' && !_isTechnician) {
         setState(() => _isTechnician = true);
       }
+      if (p.role == 'technician') _startJobCountRefresh();
     } catch (_) {
       // gagal muat profil → tetap tab pelanggan
     }
+  }
+
+  /// Mulai pemantauan jumlah pekerjaan tersedia (teknisi): sekali sekarang,
+  /// lalu tiap [kJobCountRefreshInterval] selagi shell hidup.
+  void _startJobCountRefresh() {
+    if (_jobCountTimer != null) return;
+    unawaited(_refreshJobCount());
+    _jobCountTimer = Timer.periodic(kJobCountRefreshInterval, (_) {
+      unawaited(_refreshJobCount());
+    });
+  }
+
+  /// Hitung pekerjaan tersedia yang RELEVAN bagi teknisi ini — memakai filter
+  /// yang sama dengan daftar di layar Pekerjaan, sehingga angka badge tidak
+  /// pernah berbeda dari jumlah kartu yang dilihat (lib/job_filter.dart).
+  /// Gagal mengambil data → angka terakhir dipertahankan (jangan nolkan
+  /// diam-diam; badge yang hilang lebih membingungkan daripada angka basi).
+  Future<void> _refreshJobCount() async {
+    if (!_isTechnician || _refreshingJobCount) return;
+    _refreshingJobCount = true;
+    try {
+      final jobs = await Api.fetchAvailableJobs();
+      var profil = _myProfile;
+      if (profil == null) {
+        try {
+          profil = await Api.myProfile();
+          _myProfile = profil;
+        } catch (_) {
+          // tanpa profil: filter dilewati (fail-open) — angka tetap berarti
+        }
+      }
+      final filtered = filterAvailableJobs(
+        jobs: jobs,
+        serviceArea: profil?.serviceArea,
+        skill: profil?.skill,
+      );
+      if (!mounted) return;
+      availableJobCount.value = filtered.count;
+    } catch (_) {
+      // jaringan/RPC gagal → biarkan angka terakhir
+    } finally {
+      _refreshingJobCount = false;
+    }
+  }
+
+  /// Pasang langganan realtime laporan pengguna + hitung angka badge-nya dari
+  /// server. Dipanggil dari initState; tanpa sesi (mis. login belum ada) tidak
+  /// ada yang perlu dipasang.
+  void _initReportRealtime() {
+    final uid = Api.session?.user.id;
+    if (uid == null) return;
+    if (_reportUid == uid) return;
+    _reportUid = uid;
+    _reportCleanup = Api.subscribeReportUpdates(uid, (u) => _onReportUpdate(uid, u));
+    unawaited(_refreshReportBadge(uid));
+  }
+
+  /// Hitung ulang angka badge tab Laporan: status laporan sekarang vs snapshot
+  /// "sudah dilihat" milik perangkat ini (lib/report_seen.dart).
+  Future<void> _refreshReportBadge(String uid) async {
+    try {
+      final current = await Api.fetchMyReportStatuses();
+      final seen = await ReportSeenStore.read(uid);
+      if (!mounted) return;
+      unseenReportUpdates.value = countUnseenReports(seen: seen, current: current);
+    } catch (_) {
+      // gagal baca server → pertahankan angka terakhir
+    }
+  }
+
+  /// Event realtime laporan: siarkan tick (layar Laporan memuat ulang), beri
+  /// tahu pengguna, lalu hitung ulang angka badge dari server — seluruh alurnya
+  /// ada di [handleReportUpdate] supaya bisa diuji deterministik.
+  void _onReportUpdate(String uid, ReportUpdate u) {
+    handleReportUpdate(context, u, refreshBadge: () => unawaited(_refreshReportBadge(uid)));
+  }
+
+  /// Kembali dari background/layar mati: websocket tidak menerima apa pun
+  /// selagi app tidak aktif, jadi kedua angka dihitung ulang dari server.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final uid = Api.session?.user.id;
+    if (uid != null) unawaited(_refreshReportBadge(uid));
+    if (_isTechnician) unawaited(_refreshJobCount());
   }
 
   /// Pasang langganan realtime bila user sudah login, atau bongkar bila
@@ -800,6 +978,12 @@ class _MainShellState extends State<MainShell> {
   @override
   void dispose() {
     _teardownRealtime();
+    _jobCountTimer?.cancel();
+    _jobCountTimer = null;
+    _reportUid = null;
+    _reportCleanup?.call();
+    _reportCleanup = null;
+    WidgetsBinding.instance.removeObserver(this);
     mainTabIndex.removeListener(_onExternalTabRequest);
     openReportsRequest.removeListener(_onOpenReportsRequest);
     super.dispose();
@@ -813,7 +997,7 @@ class _MainShellState extends State<MainShell> {
   /// Notifikasi laporan meminta tab Laporan — indeks berbeda per peran.
   void _onOpenReportsRequest() {
     if (!mounted) return;
-    _select(_isTechnician ? 3 : 2);
+    _select(reportsTabIndex(_isTechnician));
   }
 
   @override
@@ -888,6 +1072,55 @@ class MainNav extends StatelessWidget {
   List<(IconData, IconData, String)> get _items =>
       isTechnician ? _technicianItems : _customerItems;
 
+  /// Sumber angka badge untuk tab ke-[i], atau `null` bila tab itu tanpa badge.
+  ///
+  /// Aturan yang berlaku:
+  ///   * **Pesanan** (kedua peran) — event realtime yang belum dilihat;
+  ///   * **Laporan** (kedua peran, indeks beda per peran) — laporan yang sudah
+  ///     ditanggapi admin & belum dilihat;
+  ///   * **Pekerjaan** (teknisi) — jumlah pekerjaan yang sedang menunggu
+  ///     diambil.
+  ValueListenable<int>? _badgeSource(int i) {
+    if (i == kOrdersTabIndex) return unseenBookingUpdates;
+    if (i == reportsTabIndex(isTechnician)) return unseenReportUpdates;
+    if (isTechnician && i == kJobsTabIndex) return availableJobCount;
+    return null;
+  }
+
+  /// Label aksesibilitas badge: sebut satuannya, bukan hanya angkanya —
+  /// pembaca layar harus tahu angka itu tentang apa.
+  String _badgeSemantics(int i, int n) {
+    if (i == kOrdersTabIndex) return '$n pembaruan pesanan belum dibaca';
+    if (i == reportsTabIndex(isTechnician)) return '$n laporan belum dibaca';
+    return '$n pekerjaan tersedia'; // tab Pekerjaan (teknisi)
+  }
+
+  /// Tempelkan badge angka di pojok kanan-atas ikon tab.
+  ///
+  /// Badge tidak ditampilkan selagi tab itu SEDANG dibuka: Pesanan & Laporan
+  /// di-reset saat dibuka (angkanya sudah tidak relevan), sedangkan Pekerjaan
+  /// memang menampilkan total yang sedang tampil di layar.
+  Widget _denganBadge(Widget icon, int i) {
+    final sumber = _badgeSource(i);
+    if (sumber == null || i == currentIndex) return icon;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        icon,
+        Positioned(
+          top: -5,
+          right: -8,
+          child: ValueListenableBuilder<int>(
+            valueListenable: sumber,
+            builder: (context, n, _) => n <= 0
+                ? const SizedBox.shrink()
+                : _UnseenBadge(count: n, semanticsLabel: _badgeSemantics(i, n)),
+          ),
+        ),
+      ],
+    );
+  }
+
   void _go(BuildContext context, int i) {
     if (onTabSelected != null) {
       onTabSelected!(i);
@@ -926,25 +1159,9 @@ class MainNav extends StatelessWidget {
               size: 22,
               color: active ? Colors.white : AppColors.inkSoft,
             );
-            // Ikon tab "Pesanan" dibungkus Stack agar badge jumlah event
-            // realtime yang belum dilihat dapat menempel di pojoknya.
-            if (i == kOrdersTabIndex) {
-              icon = Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  icon,
-                  Positioned(
-                    top: -5,
-                    right: -8,
-                    child: ValueListenableBuilder<int>(
-                      valueListenable: unseenBookingUpdates,
-                      builder: (context, n, _) =>
-                          n <= 0 ? const SizedBox.shrink() : _UnseenBadge(count: n),
-                    ),
-                  ),
-                ],
-              );
-            }
+            // Ikon tab dibungkus Stack bila punya badge angka (jumlah notifikasi
+            // belum dibaca / pekerjaan tersedia) supaya lencananya menempel.
+            icon = _denganBadge(icon, i);
             return Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -999,17 +1216,21 @@ class MainNav extends StatelessWidget {
   }
 }
 
-/// Badge angka kecil (merah) di pojok ikon tab Pesanan pada MainNav —
-/// menampilkan jumlah event realtime pesanan yang belum dilihat (9+ bila
-/// lebih dari sembilan). Border putih agar kontras di atas ikon aktif.
+/// Badge angka kecil (merah) di pojok ikon tab MainNav — menampilkan jumlah
+/// notifikasi belum dibaca / pekerjaan tersedia (9+ bila lebih dari sembilan).
+/// Border putih agar kontras di atas ikon aktif.
 class _UnseenBadge extends StatelessWidget {
   final int count;
-  const _UnseenBadge({required this.count});
+
+  /// Kalimat untuk pembaca layar, mis. '3 laporan belum dibaca'.
+  final String semanticsLabel;
+
+  const _UnseenBadge({required this.count, required this.semanticsLabel});
 
   @override
   Widget build(BuildContext context) {
     return Semantics(
-      label: '$count pembaruan pesanan belum dibaca',
+      label: semanticsLabel,
       excludeSemantics: true,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 3),

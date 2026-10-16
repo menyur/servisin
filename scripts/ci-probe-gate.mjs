@@ -10,7 +10,7 @@
 //   node scripts/ci-probe-gate.mjs --only=realtime-rls,audit-f3-f6
 //   node scripts/ci-probe-gate.mjs --list   # daftar langkah tanpa menjalankan
 //
-// Dua belas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
+// Tiga belas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
 // kredensial), E2E pengingat setor admin sampai ke aplikasi (penanda terbaca
 // sesi teknisi), RLS bucket bukti setor (pemilik saja, tidak bocor ke teknisi
 // lain / anon), retensi riwayat 30 hari (chat & laporan dihapus, pesanan
@@ -18,9 +18,11 @@
 // (client Web vs Android — read-only), kesiapan notifikasi produksi
 // (service role + FCM + VAPID terbaca & init FCM siap — read-only),
 // publikasi realtime, realtime ber-RLS, audit F3–F6, E2E transaksional F7
-// (komisi/voucher), E2E klaim teknisi (keahlian+area), dan E2E pengiriman push
-// "pekerjaan baru" ke perangkat teknisi yang cocok.
-// Total ±2 menit di jaringan normal.
+// (komisi/voucher), E2E klaim teknisi (keahlian+area), E2E pengiriman push
+// "pekerjaan baru" ke perangkat teknisi yang cocok, dan gerbang privasi
+// "teknisi menuju lokasi" (anon ditolak, pelanggan lain tidak bisa membaca,
+// posisi basi/kedaluwarsa tidak tampil).
+// Total ±3 menit di jaringan normal.
 //
 // PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`
 // dan `notif-env` — keduanya murni baca).
@@ -42,10 +44,22 @@ const STEP_TIMEOUT_MS = 240_000;
 
 const STEPS = [
   {
-    id: "balance-nonnegative",
-    label: "Kebijakan saldo: potongan komisi tidak boleh membuat saldo teknisi negatif (offline)",
-    args: ["scripts/verify-balance-nonnegative.mjs"],
-    guards: "saldo teknisi tidak pernah minus (clamp di server web & SQL set_job_status) + ledger tetap = saldo",
+    id: "balance-debt",
+    label: "Kebijakan saldo: potongan PENUH (komisi + biaya app); saldo boleh minus = piutang teknisi (offline)",
+    args: ["scripts/verify-balance-debt.mjs"],
+    guards: "potongan tidak dibatasi saldo (server web & SQL set_job_status sama) + piutang tercatat di ledger + laporan tiga kolom (ditagihkan = tertagih + piutang)",
+  },
+  {
+    id: "balance-negative",
+    label: "Bukti HIDUP kebijakan piutang: pesanan selesai dipotong penuh, saldo jadi minus, dan piutang menagih sendiri lewat gerbang klaim",
+    args: ["scripts/verify-debt-negative-balance.mjs"],
+    guards: "teknisi bersaldo Rp 1.000 bisa klaim (syarat hanya saldo > 0), lalu set_job_status(completed) memotong PENUH: ledger = −(komisi + biaya app), uncovered_amount = kekurangan, saldo profil minus, minus TIDAK dijepit trigger lama, dan klaim berikutnya ditolak 'saldo_habis' (jalankan supabase/enforce-full-charge-balance.sql bila langkah ini keluar kode 2)",
+  },
+  {
+    id: "piutang-umur-writeoff",
+    label: "Umur piutang + penghapusan eksplisit + pengingat otomatis (offline)",
+    args: ["scripts/verify-piutang-writeoff.mjs"],
+    guards: "keranjang umur 0-30/31-60/61-90/>90 hari (batas inklusif) + piutang terbuka = uncovered − pelunasan (setoran MAUPUN penghapusan) + pengingat idempoten (hanya yang lewat ambang, diingatkan ulang setelah 7 hari) + penghapusan berjejak: alasan wajib, satu pending per teknisi, RPC atomik mencatat kind='penghapusan' + baris adjustment + saldo naik",
   },
   {
     id: "balance-reminder",
@@ -106,6 +120,12 @@ const STEPS = [
     label: "E2E klaim teknisi dari nol (daftar lowongan + klaim sesuai keahlian & area)",
     args: ["scripts/verify-e2e-technician-claim.mjs"],
     guards: "teknisi menemukan & mengklaim pekerjaan tanpa admin; skill LABEL tetap cocok (F10); keahlian beda ditolak; satu pekerjaan satu teknisi",
+  },
+  {
+    id: "trip-share-privacy",
+    label: "Gerbang privasi \"teknisi menuju lokasi\": anon ditolak, pelanggan lain tidak bisa membaca posisi, posisi basi/kedaluwarsa tidak tampil",
+    args: ["scripts/verify-trip-share-privacy-live.mjs"],
+    guards: "kode posisi teknisi hanya terbaca pemilik pesanan selama perjalanan aktif & segar; berbagi berakhir sendiri saat tiba (jalankan ULANG supabase/migrate-technician-trip-share.sql bila langkah ini keluar kode 2)",
   },
   {
     id: "e2e-push-notify",
@@ -208,7 +228,7 @@ async function main() {
     console.log("Perbaiki penyebabnya (jangan melemahkan probe) sebelum rilis.");
     process.exit(1);
   }
-  console.log(`GATE LULUS — ${results.length}/${results.length} probe hijau. Rilis aman dari sisi kebijakan saldo, pengingat setor, bukti setor, retensi riwayat, F3–F6, realtime, alur teknisi, dan pengiriman notifikasi.`);
+  console.log(`GATE LULUS — ${results.length}/${results.length} probe hijau. Rilis aman dari sisi kebijakan saldo, pengingat setor, bukti setor, retensi riwayat, F3–F6, realtime, alur teknisi, pengiriman notifikasi, dan privasi berbagi posisi perjalanan.`);
   process.exit(0);
 }
 

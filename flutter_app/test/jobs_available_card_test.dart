@@ -104,4 +104,66 @@ void main() {
     expect(routed, isFalse);
     expect(find.text('Mengambil…'), findsOneWidget);
   });
+
+  // Aturan saldo (supabase/migrate-claim-min-balance.sql): saldo 0/minus =
+  // pekerjaan baru terkunci. Tombolnya dimatikan DI SINI juga, supaya teknisi
+  // tidak menekan tombol yang pasti ditolak server tanpa penjelasan.
+  testWidgets('saldo 0/minus: tombol Ambil mati, alasan tampil, "Isi Saldo" bisa ditekan',
+      (tester) async {
+    var claimed = false;
+    var topUp = false;
+    await tester.pumpWidget(_host(AvailableCard(
+      job: _job(),
+      claiming: false,
+      onClaim: () => claimed = true,
+      onRoute: () {},
+      blockedReason: 'Saldo kamu belum terisi — isi saldo dulu untuk bisa ambil pekerjaan baru.',
+      onTopUp: () => topUp = true,
+    )));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('isi saldo dulu'), findsOneWidget);
+
+    await tester.tap(find.text('Ambil Pekerjaan'), warnIfMissed: false);
+    await tester.pump();
+    expect(claimed, isFalse, reason: 'tombol Ambil harus MATI saat saldo 0');
+
+    await tester.tap(find.text('Isi Saldo'));
+    await tester.pump();
+    expect(topUp, isTrue, reason: 'terkunci harus disertai jalan keluar');
+
+    // Rute tetap bisa dipakai walau saldo kosong — hanya klaim yang terkunci.
+    var routed = false;
+    await tester.pumpWidget(_host(AvailableCard(
+      job: _job(),
+      claiming: false,
+      onClaim: () {},
+      onRoute: () => routed = true,
+      blockedReason: 'Saldo kamu belum terisi — isi saldo dulu untuk bisa ambil pekerjaan baru.',
+      onTopUp: () {},
+    )));
+    await tester.pump();
+    await tester.tap(find.text('Rute'));
+    await tester.pump();
+    expect(routed, isTrue);
+  });
+
+  testWidgets('saldo terisi: tombol Ambil hidup & tanpa baris alasan', (tester) async {
+    var claimed = false;
+    await tester.pumpWidget(_host(AvailableCard(
+      job: _job(),
+      claiming: false,
+      onClaim: () => claimed = true,
+      onRoute: () {},
+    )));
+    await tester.pump();
+
+    expect(find.textContaining('isi saldo dulu'), findsNothing);
+    expect(find.text('Isi Saldo'), findsNothing);
+
+    await tester.tap(find.text('Ambil Pekerjaan'));
+    await tester.pump();
+    expect(claimed, isTrue);
+  });
 }

@@ -116,10 +116,14 @@ async function main() {
     techs.wrongArea = await createTempUser(admin, "technician", "e2e-claim-area");
     tempUsers.push(customer, ...Object.values(techs));
 
+    // Saldo awal SEMUA kandidat diisi: sejak supabase/migrate-claim-min-balance.sql
+    // syarat saldo wajib > 0, jadi tanpa ini langkah klaim akan ditolak karena
+    // saldo (bukan karena alas an yang sedang diuji). Saldo 0 diuji khusus di
+    // bagian 10 dengan pesanan kedua.
     async function prepare(user, { skill, serviceArea }) {
       const { error } = await admin
         .from("profiles")
-        .update({ approval_status: "approved", skill, service_area: serviceArea })
+        .update({ approval_status: "approved", skill, service_area: serviceArea, balance: 20000 })
         .eq("id", user.id);
       if (error) throw new Error(`gagal menyiapkan ${user.label}: ${error.message}`);
     }
@@ -240,6 +244,59 @@ async function main() {
     check("klaim kedua DITOLAK", second.data?.ok === false, second.error?.message ?? second.data?.error ?? "ok=true (regresi atomik!)");
     const { data: afterSecond } = await admin.from("bookings").select("technician_id").eq("id", booking.id).single();
     check("pemilik tetap teknisi pertama", afterSecond?.technician_id === techs.ok.id);
+
+    // ---------------- 10. Syarat saldo (saldo wajib > 0) ----------------
+    // Aturan: supabase/migrate-claim-min-balance.sql. Dibuktikan pada pesanan
+    // KEDUA karena pesanan pertama sudah diklaim di bagian 8, dan yang penting:
+    // terkunci harus bisa DIBUKA LAGI dengan mengisi saldo (bukan mati permanen).
+    step("10. Saldo 0/minus tidak boleh ambil pekerjaan; saldo > 0 boleh lagi");
+    const created2 = await custClient.rpc("create_booking_security_definer", {
+      p_service_id: service.id,
+      p_date: new Date().toISOString().slice(0, 10),
+      p_time: "00:00-00:00",
+      p_address: address,
+      p_option_id: option?.id ?? null,
+      p_notes: "probe saldo scripts/verify-e2e-technician-claim.mjs",
+      p_attachment: null,
+      p_payment: "transfer",
+      p_voucher_id: null,
+    });
+    const booking2 = created2.data?.booking;
+    check("pesanan uji kedua terbuat", !created2.error && Boolean(booking2?.id), created2.error?.message ?? created2.data?.error ?? "?");
+
+    if (booking2?.id) {
+      bookingIds.push(booking2.id);
+      await admin.from("bookings").update({ status: "paid" }).eq("id", booking2.id);
+
+      await admin.from("profiles").update({ balance: 0 }).eq("id", techs.ok.id);
+      const nol = await clients.ok.rpc("claim_job", { p_booking: booking2.id });
+      check(
+        "saldo 0 → klaim DITOLAK (jalankan supabase/migrate-claim-min-balance.sql bila lolos)",
+        nol.data?.ok === false,
+        nol.error?.message ?? `kode ${nol.data?.code ?? "?"}`
+      );
+      check(
+        "alasan terstruktur 'saldo_habis' sehingga aplikasi bisa menawarkan isi saldo",
+        nol.data?.kode === "saldo_habis",
+        JSON.stringify(nol.data)
+      );
+      const { data: b2 } = await admin.from("bookings").select("technician_id").eq("id", booking2.id).single();
+      check("technician_id tetap NULL saat saldo 0", b2?.technician_id === null, `technician_id=${b2?.technician_id}`);
+
+      // Saldo 1 rupiah sudah cukup — aturannya "di atas nol", bukan nominal tertentu.
+      await admin.from("profiles").update({ balance: 1 }).eq("id", techs.ok.id);
+      const cukup = await clients.ok.rpc("claim_job", { p_booking: booking2.id });
+      check(
+        "saldo > 0 → klaim BERHASIL (kunci terbuka dengan mengisi saldo)",
+        cukup.data?.ok === true,
+        cukup.error?.message ?? cukup.data?.error ?? `kode ${cukup.data?.code ?? "?"}`
+      );
+      const { data: b2b } = await admin.from("bookings").select("technician_id").eq("id", booking2.id).single();
+      check("technician_id terisi setelah saldo diisi", b2b?.technician_id === techs.ok.id);
+
+      // Kembalikan ke 0 (akunnya dihapus di pembersihan; ini menjaga data uji rapi).
+      await admin.from("profiles").update({ balance: 0 }).eq("id", techs.ok.id);
+    }
 
     for (const c of Object.values(clients)) await c.auth.signOut();
     await custClient.auth.signOut();

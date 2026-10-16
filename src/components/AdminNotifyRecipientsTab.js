@@ -4,11 +4,40 @@ import { useEffect, useState } from "react";
 import {
   getAdminNotificationSettingsAdmin,
   saveAdminNotificationSettingsAdmin,
+  getAdminEmailFailuresAdmin,
+  retryAdminEmailAdmin,
+  discardAdminEmailAdmin,
 } from "@/app/actions/admin";
-import { Mail, Loader2, Save, AlertTriangle } from "lucide-react";
+import { adminNotifyEventLabel } from "@/lib/admin-notify-events";
+import {
+  Mail,
+  MailWarning,
+  Loader2,
+  Save,
+  AlertTriangle,
+  RefreshCw,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 
 /** Kunci unik satu sel matriks: satu admin × satu peristiwa. */
 const cellKey = (adminId, event) => `${adminId}::${event}`;
+
+/** Waktu ringkas (WIB) untuk jejak kegagalan. */
+function waktuSingkat(iso) {
+  if (!iso) return "-";
+  try {
+    return new Date(iso).toLocaleString("id-ID", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "-";
+  }
+}
 
 /**
  * Tab "Notif Email Admin" panel admin: matriks peristiwa × admin untuk memilih
@@ -31,11 +60,22 @@ export default function AdminNotifyRecipientsTab() {
   const [muted, setMuted] = useState(() => new Set()); // pasangan yang dimatikan
   const [warning, setWarning] = useState(null);
   const [msg, setMsg] = useState(null); // { type: "ok" | "error", text }
+  // Jejak email yang gagal dikirim: { rows, antrean } dari server action.
+  const [failures, setFailures] = useState([]);
+  const [antrean, setAntrean] = useState(null);
+  const [failureWarning, setFailureWarning] = useState(null);
+  const [failureError, setFailureError] = useState(null);
+  const [failureLoading, setFailureLoading] = useState(true);
+  const [failureBusy, setFailureBusy] = useState(null);
+  const [failureMsg, setFailureMsg] = useState(null);
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      const res = await getAdminNotificationSettingsAdmin();
+      const [res, jejak] = await Promise.all([
+        getAdminNotificationSettingsAdmin(),
+        getAdminEmailFailuresAdmin(),
+      ]);
       if (!alive) return;
       if (res.error) {
         setMsg({ type: "error", text: res.error });
@@ -45,12 +85,56 @@ export default function AdminNotifyRecipientsTab() {
         setMuted(new Set((res.optouts || []).map((o) => cellKey(o.adminId, o.event))));
         setWarning(res.warning || null);
       }
+      if (jejak.error) {
+        setFailureError(jejak.error);
+      } else {
+        setFailures(jejak.rows || []);
+        setAntrean(jejak.antrean ?? null);
+        setFailureWarning(jejak.warning || null);
+      }
       setLoading(false);
+      setFailureLoading(false);
     })();
     return () => {
       alive = false;
     };
   }, []);
+
+  /** Muat ulang daftar jejak saja (tombol "Muat ulang" & setelah aksi). */
+  async function muatJejak() {
+    setFailureLoading(true);
+    const jejak = await getAdminEmailFailuresAdmin();
+    setFailureLoading(false);
+    if (jejak.error) {
+      setFailureError(jejak.error);
+      return;
+    }
+    setFailureError(null);
+    setFailures(jejak.rows || []);
+    setAntrean(jejak.antrean ?? null);
+    setFailureWarning(jejak.warning || null);
+  }
+
+  /** "Coba lagi" = kembalikan baris ke antrean; "Buang" = hapus barisnya. */
+  async function tanganiJejak(row, aksi) {
+    setFailureBusy(row.id);
+    setFailureMsg(null);
+    const res =
+      aksi === "retry" ? await retryAdminEmailAdmin(row.id) : await discardAdminEmailAdmin(row.id);
+    setFailureBusy(null);
+    if (res.error) {
+      setFailureMsg({ type: "error", text: res.error });
+      return;
+    }
+    setFailureMsg({
+      type: "ok",
+      text:
+        aksi === "retry"
+          ? `Email "${adminNotifyEventLabel(row.event)}" dikembalikan ke antrean — worker berikutnya akan mencoba mengirimnya lagi.`
+          : `Jejak email "${adminNotifyEventLabel(row.event)}" dibuang.`,
+    });
+    muatJejak();
+  }
 
   function setCell(adminId, event, enabled) {
     setMuted((prev) => {
@@ -240,12 +324,126 @@ export default function AdminNotifyRecipientsTab() {
         )}
       </div>
 
+      {/* --- Jejak email yang gagal: alasan + waktu, tidak hilang sendiri --- */}
+      <div className="card !p-5">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <h4 className="font-display font-semibold text-navy text-sm flex items-center gap-2">
+              <MailWarning size={16} /> Email yang gagal terkirim
+            </h4>
+            <p className="text-xs text-ink-soft mt-1 max-w-2xl">
+              Notifikasi yang tidak berhasil dikirim disimpan di sini bersama alasan dari penyedia email — mis.
+              kunci Resend tidak sah atau domain pengirim belum terverifikasi. Sebelum ini, kegagalan hanya tercatat
+              di log server dan barisnya hilang setelah lima percobaan, sehingga &ldquo;email tidak sampai&rdquo; tidak bisa
+              ditelusuri dari panel. Jejak disimpan 30 hari.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={muatJejak}
+            disabled={failureLoading}
+            className="btn-outline !py-2 !px-3 text-xs flex items-center gap-1.5 shrink-0"
+          >
+            {failureLoading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            Muat ulang
+          </button>
+        </div>
+
+        {failureWarning && (
+          <p className="mt-3 text-xs font-medium text-amber bg-amber-tint border border-amber/30 rounded-xl px-3 py-2 flex items-start gap-2">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            <span>{failureWarning}</span>
+          </p>
+        )}
+
+        {failureError && <p className="mt-3 text-sm text-coral">{failureError}</p>}
+
+        {!failureWarning && (
+          <>
+            <p className="mt-3 text-xs text-ink-soft">
+              {antrean === null
+                ? ""
+                : antrean === 0
+                  ? "Antrean pengiriman sedang kosong."
+                  : `${antrean} email sedang menunggu dikirim (bukan kegagalan).`}
+            </p>
+
+            {failures.length === 0 ? (
+              <p className="mt-2 text-sm text-ink-soft">
+                Tidak ada email admin yang gagal dikirim.
+              </p>
+            ) : (
+              <div className="mt-3 space-y-3">
+                {failures.map((r) => {
+                  const menyerah = Boolean(r.failed_at);
+                  return (
+                    <div key={r.id} className="rounded-xl border border-line p-3">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="min-w-0">
+                          <span
+                            className={`pill text-[11px] font-bold ${
+                              menyerah ? "bg-coral-tint text-coral" : "bg-amber-tint text-amber"
+                            }`}
+                          >
+                            {menyerah ? "Menyerah" : "Sedang dicoba lagi"}
+                          </span>
+                          <span className="ml-2 text-sm font-semibold text-navy">
+                            {adminNotifyEventLabel(r.event)}
+                          </span>
+                          <p className="text-[11px] text-ink-soft mt-1">
+                            Percobaan {r.attempts}/{r.max_attempts} · percobaan terakhir {waktuSingkat(r.last_attempt_at)}
+                            {menyerah ? ` · menyerah ${waktuSingkat(r.failed_at)}` : ""} · masuk antrean {waktuSingkat(r.created_at)}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => tanganiJejak(r, "retry")}
+                            disabled={failureBusy === r.id}
+                            className="btn-outline !py-1.5 !px-3 text-[11px] flex items-center gap-1.5"
+                          >
+                            {failureBusy === r.id ? (
+                              <Loader2 size={12} className="animate-spin" />
+                            ) : (
+                              <RotateCcw size={12} />
+                            )}
+                            Coba lagi
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => tanganiJejak(r, "discard")}
+                            disabled={failureBusy === r.id}
+                            className="btn-outline !py-1.5 !px-3 text-[11px] flex items-center gap-1.5 !border-coral !text-coral"
+                          >
+                            <Trash2 size={12} /> Buang
+                          </button>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-xs text-coral bg-coral-tint/40 rounded-lg px-3 py-2 break-words">
+                        {r.last_error || "Sebab kegagalan tidak tercatat."}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        {failureMsg && (
+          <p className={`mt-3 text-xs font-medium ${failureMsg.type === "ok" ? "text-mint" : "text-coral"}`}>
+            {failureMsg.text}
+          </p>
+        )}
+      </div>
+
       <div className="card !p-5">
         <h4 className="font-display font-semibold text-navy text-sm mb-2">Catatan</h4>
         <ul className="text-xs text-ink-soft space-y-1 list-disc pl-4">
           <li>
             Email yang benar-benar terkirim hanya bisa diverifikasi bila <code>RESEND_API_KEY</code> terisi di
-            deployment web; tanpa itu isi email dicetak ke log server.
+            deployment web; tanpa itu isi email dicetak ke log server. <code>/api/health</code> melaporkan jumlah
+            email yang gagal, jadi kegagalan kunci bisa terlihat tanpa membuka log.
           </li>
           <li>
             Laporan bulanan otomatis dan email ke pelanggan/teknisi tidak terpengaruh pengaturan ini — yang diatur di

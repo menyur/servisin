@@ -100,18 +100,58 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
 - [ ] **Migrasi SQL** — jalankan lewat SQL Editor, **idempoten** (aman diulang). Urutan aman:
       `schema.sql` → `seed.sql` → seluruh `supabase/migrate-*.sql` → seluruh `supabase/fix-*.sql`.
       Beberapa yang **khusus go-live** (kalau belum): `migrate-admin-email-outbox.sql`,
+      `migrate-admin-email-failures.sql` (**wajib dijalankan SESUDAH** outbox — ia mengganti
+      `take_admin_email_batch` supaya email yang gagal **meninggalkan jejak**: alasan dari Resend +
+      waktu percobaan terakhir, dan barisnya tidak lagi dihapus saat kehabisan percobaan.
+      Tanpa ini, email yang gagal hilang diam-diam dan antrean tampak kosong),
       `migrate-admin-notification-prefs.sql`, `migrate-push-scheduler.sql`, `migrate-history-retention.sql`,
-      `fix-balance-proofs-owner-read.sql`, `enforce-nonnegative-balance.sql`.
-      Fitur pelanggan-teknis yang baru (harus dijalankan **berurutan**, keduanya idempoten):
+      `fix-balance-proofs-owner-read.sql`, `enforce-full-charge-balance.sql`
+      (kebijakan uang yang berlaku: potongan **PENUH** = komisi + biaya app; saldo
+      teknisi boleh minus dan nilai minus itu **piutang** teknisi — menambah kolom
+      `balance_transactions.uncovered_amount` untuk laporan tiga kolom, dan
+      **melepas** trigger clamp lama. Jalankan **TERAKHIR** setelah migrasi saldo lain.
+      `enforce-nonnegative-balance.sql` sekarang **USANG**, jangan dijalankan),
+      `migrate-claim-min-balance.sql` (teknisi hanya boleh mengambil pekerjaan baru bila
+      **saldo > 0**; tombol di aplikasi ikut mati dengan alasan + pintasan isi saldo —
+      bukti hidupnya `npm run verify:claim`, bagian 10),
+      `migrate-piutang-recovery.sql` (**penutupan piutang**: tabel `balance_recoveries`
+      mencatat setoran mana yang melunasi piutang pesanan mana, tertua dulu; inilah yang
+      membuat "pemulihan piutang" bisa dilaporkan per periode di ringkasan keuangan admin
+      dan CSV bulanan. Jalankan **SESUDAH** `enforce-full-charge-balance.sql`; tanpa
+      berkas ini setoran tetap menambah saldo, hanya pelunasannya belum tercatat —
+      bukti hidupnya `npm run verify:balance-negative`, gate `balance-negative`),
+      `migrate-piutang-writeoff.sql` (**piutang menua & penghapusan eksplisit**: kolom
+      `balance_recoveries.kind` (`setoran` | `penghapusan`), tabel `piutang_writeoffs`
+      (alasan wajib + **satu pengajuan pending per teknisi**), dan RPC atomik
+      `approve_piutang_writeoff` yang menutup piutang tertua dulu + menulis baris
+      `adjustment` + menaikkan saldo. Jalankan **SESUDAH** `migrate-piutang-recovery.sql`.
+      Tanpa berkas ini penghapusan tidak bisa diputuskan (pengajuan ditolak dengan pesan
+      yang menyebut berkasnya), dan umur piutang tetap terbaca hanya bila kolom pelunasan
+      sudah ada — bukti offline & wiring-nya `npm run verify:piutang`, gate
+      `piutang-umur-writeoff`).
+      **Pengingat piutang otomatis** ikut menyala setelah migrasi di atas: cron harian
+      `/api/cron/piutang-reminder` (jadwal di `vercel.json`) mengingatkan teknisi yang
+      piutangnya lewat ambang **30 hari** (bisa diubah lewat `PIUTANG_JATUH_TEMPO_HARI`),
+      idempoten (ulang tiap 7 hari) lewat penanda `profiles.balance_reminder_at` yang sama
+      dengan tombol "Ingatkan setor", lalu mengirim push + email. Coba aman dulu:
+      `curl ".../api/cron/piutang-reminder?dry=1" -H "x-cron-secret: $CRON_SECRET"`
+      (      hitung saja, tidak menulis/mengirim apa pun).
+      Migrasi penghapusan **sudah diterapkan 16 Okt 2026**; untuk membuktikan ulang
+      perilakunya di database nyata jalankan `npm run verify:piutang-live` (membuat akun
+      & piutang berumur, membuktikan pengingat idempoten + persetujuan penghapusan, lalu
+      menghapus semua data uji — sisa harus 0).
+      Fitur pelanggan-teknis yang baru (harus dijalankan **berurutan**, ketiganya idempoten):
       `migrate-customer-self-service.sql` (pelanggan membatalkan/mengubah jadwal sendiri +
-      RPC jarak & kontak teknisi) lalu `migrate-warranty-claims.sql` (garansi pekerjaan:
-      `services.warranty_days` bawaan **7 hari** — isi `0` per layanan untuk mematikannya,
-      tabel `warranty_claims`, dan kunjungan ulang gratis saat klaim disetujui).
-      Tanpa keduanya, tab admin **Hari Ini**/**Garansi** tetap tampil dengan pesan yang
+      RPC jarak & kontak teknisi), `migrate-warranty-claims.sql` (garansi pekerjaan:
+      tabel `warranty_claims`, kunjungan ulang gratis saat klaim disetujui), lalu
+      `migrate-warranty-settings.sql` (**pengaturan garansi platform**:
+      `app_settings.warranty_enabled` + `app_settings.warranty_days` bawaan **7 hari**,
+      dan fungsi `warranty_days_efektif()` yang dipakai kedua RPC garansi).
+      Tanpa ketiganya, tab admin **Hari Ini**/**Garansi** tetap tampil dengan pesan yang
       menyebut berkas mana yang belum dijalankan, dan tombol batal/ubah jadwal di aplikasi
       menjawab "belum aktif di server".
       Bukti statusnya: `npm run verify:live` (probe akan **MERAH** pada langkah terkait bila migrasinya belum jalan).
-      Bukti khusus kedua migrasi ini: `npm run verify:self-service` — memanggil
+      Bukti khusus ketiga migrasi ini: `npm run verify:self-service` — memanggil
       `cancel_booking`, `reschedule_booking`, `booking_technician_info`,
       `create_warranty_claim`, `booking_warranty_info`, dan `decide_warranty_claim`
       lewat sesi pengguna sah (pelanggan lain, anon, teknisi, dan admin), jadi
@@ -128,9 +168,13 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
 - [ ] **Storage bucket & policy** — `node scripts/setup-storage.mjs` lalu policy di `supabase/setup-storage-buckets.sql`.
       Bucket harus **privat**: `payment-proofs`, `ktp-documents`, `attachments`, `balance-proofs`.
 - [ ] **Akun admin pertama** — daftar lewat `/register`, ubah `profiles.role` jadi `admin` di Table Editor, lalu login ulang.
-- [ ] **Nilai garansi per layanan** — tinjau `services.warranty_days`: nilai bawaan 7 hari
-      berlaku untuk semua layanan begitu migrasi dijalankan. Untuk layanan yang tidak boleh
-      diklaim ulang (mis. pembersihan sekali pakai), isi `0` di tab **Harga Layanan**.
+- [ ] **Pengaturan garansi** — buka tab **Garansi** di panel admin: tentukan **durasi standar**
+      (1–365 hari) dan nyalakan/matikan **saklar garansi**. Satu setelan ini berlaku untuk seluruh
+      katalog — perhitungannya di database (`warranty_days_efektif`), jadi aplikasi pelanggan tidak
+      bisa menjanjikan durasi lain. `services.warranty_days` kini hanya **penanda pengecualian**:
+      isi `0` untuk layanan yang tidak boleh diklaim ulang (mis. pembersihan sekali pakai).
+      Mematikan garansi hanya menolak klaim **baru** — klaim yang sudah masuk dan kunjungan ulang
+      yang sudah terjadwal tetap bisa diselesaikan admin.
 - [ ] **Hapus/verifikasi akun uji** — pastikan tidak ada akun teknis/uJi nyasar di produksi (probe membersihkan dirinya sendiri; cek manual di Table Editor → `profiles`).
 - [ ] **Backup** — aktifkan backup terjadwal Supabase (Plan → Backups / PITR) **sebelum** menjalankan migrasi baru.
 
@@ -174,6 +218,13 @@ Kalau gate `live-probe` gagal, build APK **tertahan** (mekanisme yang disengaja;
 - [ ] **Uptime check** ke `https://<domain>/api/health` (mis. UptimeRobot/BetterStack) — endpoint ini `ok:true` + melaporkan kesiapan env/FCM.
 - [ ] **Error tracking** (opsional tapi disarankan): Sentry/dll, atau minimal pantau **Vercel → Logs**.
 - [ ] Pantau **antrean** `push_outbox` & `admin_email_outbox` (harus tersapu; lihat Action `push-sweeper`).
+- [ ] Perhatikan **email admin yang gagal**: tab **Notif Email Admin** menampilkan daftar jejaknya
+      (jenis peristiwa, alasan dari Resend, percobaan terakhir, status menyerah) dengan tombol
+      *Coba lagi* / *Buang*; `/api/health` melaporkan `email.failedCount` + `email.lastFailedAt`
+      (tanpa mempublikasikan teks alasannya). Angka naik sementara `resendReady` tetap `true`
+      berarti kuncinya **terisi tetapi tidak sah** — ganti kuncinya, lalu tekan *Coba lagi*.
+      Daftar ini kosong juga bila kolomnya belum ada (dulu email gagal hilang tanpa jejak setelah
+      lima percobaan dan sebabnya hanya ada di log Vercel).
 - [ ] Catat kontak/kanal dukungan untuk pengguna awal.
 
 ---
@@ -217,6 +268,7 @@ Kalau gate `live-probe` gagal, build APK **tertahan** (mekanisme yang disengaja;
 ```bash
 npm run verify:live          # gate penuh (kebijakan + realtime + E2E + push)
 npm run verify:self-service   # batal/ubah jadwal, jarak & kontak teknisi, garansi (RPC asap)
+npm run verify:garansi        # setelan garansi: saklar + durasi standar (statis + live hitung)
 npm run verify:emulator       # uji UI di emulator Android: seed → dev server → adb → bersih
 npm run verify:notif-env     # notifikasi produksi benar-benar siap
 npm run verify:apk-release   # jalur unduh APK + manifest

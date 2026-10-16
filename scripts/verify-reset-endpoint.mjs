@@ -287,6 +287,44 @@ function mailerTiruan(hasil = { simulated: false, id: "id-pesan-uji" }) {
   cek("kegagalan server tidak mengirim email", mailer.surat.length === 0);
 }
 
+// Kasus 3b: kegagalan server TIDAK boleh mengunci pengguna selama 60 detik.
+//
+// Dulu jeda tetap tercatat padahal emailnya tidak pernah dibuat/dikirim: percobaan
+// berikutnya dijawab 429 "permintaan tautan baru saja dikirim" — kalimat yang
+// salah, dan pengguna tidak bisa mencoba lagi justru saat penyebabnya baru
+// diperbaiki. Kasus akun-tidak-ada SENGAJA tetap kena jeda (Kasus 5), karena
+// jeda yang sama untuk alamat ada maupun tidak itulah penjaga anti-enumerasi.
+{
+  lupakanRiwayatJeda();
+  const mailer = mailerTiruan();
+  const dasarGalat = {
+    email: "galat-jeda@example.com",
+    redirectTo: "fixify://reset-password",
+    kirimEmail: mailer.kirim,
+  };
+  const galat = await kirimTautanReset({
+    ...dasarGalat,
+    admin: adminTiruan({ data: null, error: { status: 500, message: "boom" } }),
+    sekarangMs: 5_000_000,
+  });
+  cek(
+    "kegagalan generateLink → alasan tautan_gagal_dibuat, tanpa email",
+    galat.ok === true && galat.alasan === "tautan_gagal_dibuat" && mailer.surat.length === 0,
+    JSON.stringify(galat)
+  );
+
+  const lagi = await kirimTautanReset({
+    ...dasarGalat,
+    admin: adminTiruan({ data: { properties: { action_link: LINK_BAIK } }, error: null }),
+    sekarangMs: 5_000_000 + 1_000,
+  });
+  cek(
+    "setelah kegagalan server, pengguna bisa LANGSUNG mencoba lagi (tidak disuruh menunggu)",
+    lagi.ok === true && lagi.terkirim === true && mailer.surat.length === 1,
+    JSON.stringify(lagi)
+  );
+}
+
 // Kasus 4: jeda per alamat.
 {
   lupakanRiwayatJeda();

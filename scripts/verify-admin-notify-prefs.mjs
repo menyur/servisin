@@ -148,10 +148,31 @@ check(
   "id admin divalidasi terhadap profiles role=admin",
   /validIds\.has\(adminId\)/.test(adminActions)
 );
-const probeBlock = adminActions.slice(adminActions.indexOf('"admin_notification_optouts"'));
+// Potong HANYA fungsi pembaca setelan, bukan sampai ujung berkas.
+//
+// Kenapa: dulu potongannya dimulai dari kemunculan pertama string
+// "admin_notification_optouts" (yang kebetulan ada di komentar) sampai akhir
+// berkas, sehingga `head: true` milik fungsi LAIN (penghitung garansi & jumlah
+// permintaan hapus akun) ikut terbaca dan pemeriksaan ini selalu ❌ walau kode
+// yang diperiksa sudah benar. Batas potongan = fungsi berikutnya.
+const awalProbe = adminActions.indexOf("export async function getAdminNotificationSettingsAdmin");
+const sisaProbe = awalProbe >= 0 ? adminActions.slice(awalProbe) : "";
+const akhirProbe = sisaProbe.indexOf("\nexport async function", 1);
+const probeBlock = akhirProbe > 0 ? sisaProbe.slice(0, akhirProbe) : sisaProbe;
+
+// Komentar dibuang lebih dulu. Kode di berkas ini MEMUAT komentar penjelas
+// "// select GET (bukan { head: true }) supaya tabel-tidak-ada benar-benar error."
+// — dan versi lama pemeriksaan ini mencocokkan `head: true` di dalam komentar
+// itu, sehingga selalu ❌ padahal kodenya justru yang dikehendaki. Komentar tidak
+// boleh menentukan lulus/gagal; hanya kode yang dinilai.
+const probeKode = probeBlock
+  .replace(/\/\*[\s\S]*?\*\//g, "")
+  .split(/\r?\n/)
+  .filter((l) => !/^\s*\/\//.test(l))
+  .join("\n");
 check(
   'deteksi "tabel belum ada" memakai select GET (bukan HEAD yang senyap)',
-  /\.select\("admin_id/.test(probeBlock) && !/head:\s*true/.test(probeBlock)
+  /\.select\("admin_id/.test(probeKode) && !/head:\s*true/.test(probeKode)
 );
 check(
   "mengembalikan warning (bukan error) saat migrasi belum jalan, agar tab tetap terbuka",

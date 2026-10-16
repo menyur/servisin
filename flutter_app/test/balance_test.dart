@@ -216,6 +216,25 @@ void main() {
     });
   });
 
+  group('Syarat saldo untuk mengambil pekerjaan (aturan baru)', () {
+    test('saldo 0 atau minus → TIDAK boleh ambil pekerjaan, dengan alasan tertulis', () {
+      for (final saldo in [0.0, -1.0, -8751.0]) {
+        final s = Api.summarizeBalance(_profile(balance: saldo), const []);
+        expect(s.bolehAmbilPekerjaan, isFalse, reason: 'saldo $saldo harus terkunci');
+        expect(s.sebabTidakBolehAmbil, isNotNull);
+        expect(s.sebabTidakBolehAmbil, contains('isi saldo dulu'));
+      }
+    });
+
+    test('saldo > 0 → boleh ambil pekerjaan tanpa alasan penghalang', () {
+      for (final saldo in [1.0, 5000.0, 42000.0]) {
+        final s = Api.summarizeBalance(_profile(balance: saldo), const []);
+        expect(s.bolehAmbilPekerjaan, isTrue, reason: 'saldo $saldo harus boleh');
+        expect(s.sebabTidakBolehAmbil, isNull);
+      }
+    });
+  });
+
   group('BalanceTransaction label & arah', () {
     test('typeLabel sesuai jenis mutasi', () {
       expect(_tx(type: 'earning').typeLabel, 'Pesanan Selesai');

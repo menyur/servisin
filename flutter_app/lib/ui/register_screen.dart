@@ -9,6 +9,7 @@ import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
 import 'google_signin_button.dart';
+import 'legal_consent.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key, this.daftar});
@@ -225,31 +226,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     // sama seperti tombol di layar Login.
                     const GoogleSignInButton(),
                     const SizedBox(height: 16),
-                    // Syarat ringkas
-                    const Text.rich(
-                      TextSpan(
-                        style: TextStyle(
-                            fontSize: 11.5,
-                            color: AppColors.inkSoft,
-                            height: 1.5),
-                        children: [
-                          TextSpan(text: 'Dengan mendaftar, kamu menyetujui '),
-                          TextSpan(
-                              text: 'syarat layanan',
-                              style: TextStyle(
-                                  color: AppColors.brand,
-                                  fontWeight: FontWeight.w700)),
-                          TextSpan(text: ' dan '),
-                          TextSpan(
-                              text: 'kebijakan privasi',
-                              style: TextStyle(
-                                  color: AppColors.brand,
-                                  fontWeight: FontWeight.w700)),
-                          TextSpan(text: ' Fixify.'),
-                        ],
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
+                    // Syarat ringkas — dua tautannya benar-benar bisa diketuk
+                    // dan membuka halaman legal di situs web (lihat
+                    // LegalConsentText; sebelumnya tautan ini mati sama sekali).
+                    const LegalConsentText(),
                     const SizedBox(height: 8),
                     // Pintasan pendaftaran teknisi (paritas /gabung di web).
                     TextButton.icon(

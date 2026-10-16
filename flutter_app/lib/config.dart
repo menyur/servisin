@@ -47,6 +47,16 @@ class AppConfig {
     return 'https://servisin-six.vercel.app';
   }
 
+  /// Origin web tanpa garis miring di ujung — `--dart-define=WEB_BASE_URL` bisa
+  /// datang dengan atau tanpa '/' dan penggabungan jalur harus tetap benar.
+  static String get webOrigin => webBaseUrl.replaceAll(RegExp(r'/+$'), '');
+
+  /// Halaman legal di situs web. Jalurnya HARUS sama dengan yang ditautkan
+  /// footer web dan dijaga `scripts/verify-legal-links.mjs` (/syarat,
+  /// /privasi, /hapus-akun) — halaman inilah yang dibuka tautan di layar Daftar.
+  static String get syaratUrl => '$webOrigin/syarat';
+  static String get privasiUrl => '$webOrigin/privasi';
+
   /// URL balik OAuth Google untuk Android — deep link skema kustom
   /// `fixify://login-callback` (bukan URL http dari browser).
   ///

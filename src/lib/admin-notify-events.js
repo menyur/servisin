@@ -53,6 +53,11 @@ export const ADMIN_NOTIFY_EVENTS = [
     label: "Teknisi melepas tugas",
     hint: "Teknisi melepas pekerjaan beserta alasannya.",
   },
+  {
+    key: "account_deletion",
+    label: "Permintaan hapus akun",
+    hint: "Pengguna meminta akunnya dihapus (aplikasi atau halaman web) — harus dijalankan agar syarat Google Play dan janji 7 hari terpenuhi.",
+  },
 ];
 
 /** Semua kunci peristiwa yang valid (dipakai validasi server). */

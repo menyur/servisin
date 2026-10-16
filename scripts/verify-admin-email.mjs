@@ -208,6 +208,101 @@ check(
     /export async function sendAdminEventEmail/.test(lib)
 );
 
+step("B5. Email yang gagal MENINGGALKAN JEJAK yang bisa dibaca admin");
+// Kejadian 16 Okt 2026: kunci Resend tidak sah → semua email admin gagal,
+// tetapi antrean tampak kosong karena `take_admin_email_batch` menghapus baris
+// yang kehabisan percobaan dan sebabnya hanya ada di log Vercel. Bagian ini
+// menjaga supaya kegagalan tidak bisa lagi hilang diam-diam.
+const jejakMigrasi = read("supabase/migrate-admin-email-failures.sql");
+check(
+  "migrasi menyediakan tiga kolom jejak (alasan + waktu percobaan + waktu menyerah)",
+  /add column if not exists last_error text/.test(jejakMigrasi) &&
+    /last_attempt_at timestamptz/.test(jejakMigrasi) &&
+    /failed_at timestamptz/.test(jejakMigrasi)
+);
+check(
+  "pengambilan batch TIDAK lagi menghapus baris yang kehabisan percobaan",
+  !/delete from public\.admin_email_outbox o where o\.attempts >= o\.max_attempts;/.test(jejakMigrasi) &&
+    /failed_at is null/.test(jejakMigrasi)
+);
+check(
+  "RPC fail_admin_email + retry_admin_email tersedia & hanya untuk server",
+  /function public\.fail_admin_email\(p_id uuid, p_error text\)/.test(jejakMigrasi) &&
+    /function public\.retry_admin_email\(p_id uuid\)/.test(jejakMigrasi) &&
+    /grant execute on function public\.fail_admin_email\(uuid, text\) to service_role/.test(jejakMigrasi) &&
+    /revoke all on function public\.retry_admin_email\(uuid\) from public, anon, authenticated/.test(jejakMigrasi)
+);
+check(
+  "baris gagal tetap bisa bertahan lama untuk ditelusuri (bersih otomatis)",
+  /interval '30 days'/.test(jejakMigrasi)
+);
+check(
+  "worker mencatat alasan kegagalan pada baris antrean (bukan cuma console.warn)",
+  /rpc\("fail_admin_email"/.test(lib) && /async function catatKegagalan/.test(lib)
+);
+check(
+  "pencatatan jejak aman saat migrasi belum dijalankan (alur kirim tidak ikut gagal)",
+  /function\|does not exist\|schema cache/.test(lib)
+);
+check(
+  "'tidak ada penerima' juga dicatat sebagai kegagalan (setelan admin salah terlihat)",
+  /no-recipient/.test(lib) && /Tidak ada admin yang menerima peristiwa ini/.test(lib)
+);
+check(
+  "alasan yang dicatat dipotong 500 huruf (tidak membanjiri tabel)",
+  /left\(coalesce\(nullif\(btrim\(p_error\), ''\), 'Sebab kegagalan tidak dilaporkan\.'\), 500\)/.test(
+    jejakMigrasi
+  )
+);
+
+const aksiAdmin = read("src/app/actions/admin.js");
+check(
+  "server action mengembalikan jejak ke panel (alasan + waktu + status menyerah)",
+  /getAdminEmailFailuresAdmin/.test(aksiAdmin) &&
+    /last_error,last_attempt_at,failed_at/.test(aksiAdmin) &&
+    /or\("failed_at\.not\.is\.null,last_error\.not\.is\.null"\)/.test(aksiAdmin)
+);
+check(
+  "jejak dibaca dengan kunci service role, bukan dari klien (RLS tabel antrean tertutup)",
+  /function klienAntreanEmail/.test(aksiAdmin) &&
+    /createAdminClient/.test(aksiAdmin) &&
+    /Kunci service role tidak terbaca/.test(aksiAdmin)
+);
+check(
+  'admin bisa "coba lagi" (baris kembali ke antrean) dan "buang" (hapus baris)',
+  /retryAdminEmailAdmin/.test(aksiAdmin) && /discardAdminEmailAdmin/.test(aksiAdmin) &&
+    /rpc\("retry_admin_email"/.test(aksiAdmin)
+);
+check(
+  "pesan jelas saat migrasi jejak belum dijalankan",
+  /migrate-admin-email-failures\.sql/.test(aksiAdmin)
+);
+
+const tabNotif = read("src/components/AdminNotifyRecipientsTab.js");
+check(
+  "panel admin menampilkan daftar email gagal beserta alasannya",
+  /Email yang gagal terkirim/.test(tabNotif) &&
+    /last_error/.test(tabNotif) &&
+    /Sebab kegagalan tidak tercatat/.test(tabNotif)
+);
+check(
+  "panel membedakan \"menyerah\" dari \"sedang dicoba lagi\" (dan bukan dari \"menunggu antrean\")",
+  /failed_at/.test(tabNotif) &&
+    /Menyerah/.test(tabNotif) &&
+    /Sedang dicoba lagi/.test(tabNotif) &&
+    /bukan kegagalan/i.test(tabNotif)
+);
+
+const sehat = read("src/app/api/health/route.js");
+check(
+  "/api/health melaporkan JUMLAH email gagal + waktu kegagalan terakhir",
+  /failedCount/.test(sehat) && /lastFailedAt/.test(sehat) && /queueCount/.test(sehat)
+);
+check(
+  "/api/health TIDAK mempublikasikan teks alasan dari penyedia email (endpoint publik)",
+  !/last_error/.test(sehat)
+);
+
 // ---------------------------------------------------------------------------
 // C. Live (opsional): antrean benar-benar ada di database
 // ---------------------------------------------------------------------------
@@ -247,6 +342,32 @@ if (env) {
       p_id: "00000000-0000-0000-0000-000000000000",
     });
     check("RPC complete_admin_email bisa dipanggil", !fnErr2, fnErr2?.message || "ok");
+
+    // Jejak kegagalan (migrate-admin-email-failures.sql). Diperiksa langsung ke
+    // kolomnya — kalau kolomnya belum ada, pemeriksaan ini gagal dan itu memang
+    // sinyal yang diinginkan: tanpa migrasi itu, email gagal kembali hilang
+    // tanpa jejak.
+    const { error: jejakErr } = await admin
+      .from("admin_email_outbox")
+      .select("id,last_error,last_attempt_at,failed_at")
+      .limit(1);
+    check(
+      "tabel antrean punya kolom jejak last_error/last_attempt_at/failed_at (jalankan supabase/migrate-admin-email-failures.sql bila ❌)",
+      !jejakErr,
+      jejakErr?.message || "ada"
+    );
+
+    const { error: fnErr3 } = await admin.rpc("fail_admin_email", {
+      p_id: "00000000-0000-0000-0000-000000000000",
+      p_error: "uji verify-admin-email (baris tidak ada, tidak mengubah apa pun)",
+    });
+    check("RPC fail_admin_email bisa dipanggil", !fnErr3, fnErr3?.message || "ok");
+
+    const { error: fnErr4 } = await admin.rpc("retry_admin_email", {
+      p_id: "00000000-0000-0000-0000-000000000000",
+    });
+    check("RPC retry_admin_email bisa dipanggil", !fnErr4, fnErr4?.message || "ok");
+
 
     console.log(`   ℹ️  ${rows?.length ? "ada" : "tidak ada"} baris antrean saat diperiksa (kosong = normal).`);
   }

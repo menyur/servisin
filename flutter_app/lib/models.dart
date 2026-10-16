@@ -491,6 +491,27 @@ class TechnicianBalanceSummary {
   /// Banner pengingat setor aktif: admin sudah mengingatkan DAN saldo masih
   /// 0/minus (hilang otomatis begitu saldo diisi).
   bool get needsDepositReminder => balanceReminderAt != null && balance <= 0;
+
+  /// Boleh mengambil pekerjaan BARU hanya bila saldo DI ATAS nol.
+  ///
+  /// Kenapa: potongan saat pekerjaan selesai (komisi + biaya aplikasi) diambil
+  /// PENUH dari saldo dan saldo boleh menjadi MINUS — nilai minus itu PIUTANG
+  /// teknisi (supabase/enforce-full-charge-balance.sql; ringkasan aturan di
+  /// docs/balance-rule.md). Gerbang `saldo > 0` inilah yang menagihnya: teknisi
+  /// wajib menyetor lebih dulu, jadi piutang tak pernah menumpuk lintas pekerjaan.
+  ///
+  /// Aturan ini ditegakkan SERVER (`claim_job` → `kode: 'saldo_habis'`, lihat
+  /// supabase/migrate-claim-min-balance.sql); yang ini hanya sisi tampilan supaya
+  /// tombolnya tidak tampak bisa diketik tanpa hasil.
+  bool get bolehAmbilPekerjaan => balance > 0;
+
+  /// Kalimat sebab tombol "Ambil Pekerjaan" dimatikan (null = boleh).
+  ///
+  /// Satu tempat untuk strip saldo, kartu lowongan, DAN pesan setelah penolakan
+  /// server — supaya tiga tampilan itu tidak pernah berkata berbeda.
+  String? get sebabTidakBolehAmbil => bolehAmbilPekerjaan
+      ? null
+      : 'Saldo kamu belum terisi (atau masih minus) — isi saldo dulu untuk bisa ambil pekerjaan baru. Setoran menutup kekurangan komisi + biaya aplikasi lebih dulu.';
 }
 
 /// Satu lowongan pekerjaan untuk teknisi: pesanan sudah dibayar,
@@ -619,11 +640,49 @@ class Report {
     );
   }
 
-  String get statusLabel => switch (status) {
-        'reviewed' => 'Sedang Ditinjau',
-        'resolved' => 'Selesai',
-        _ => 'Baru Masuk',
-      };
+  String get statusLabel => reportStatusLabel(status);
+}
+
+/// Label ramah status laporan — dipakai kartu laporan DAN teks notifikasi
+/// realtime (snack) supaya keduanya tidak pernah berbeda kata.
+String reportStatusLabel(String status) => switch (status) {
+      'reviewed' => 'Sedang Ditinjau',
+      'resolved' => 'Selesai',
+      _ => 'Baru Masuk',
+    };
+
+/// Event realtime UPDATE sebuah laporan yang ditulis pengguna ini — praktisnya
+/// admin menanggapi (status `reviewed`/`resolved` dan/atau catatan admin).
+///
+/// Hanya admin yang boleh `update` tabel reports (policy di
+/// `supabase/migrate-reports.sql`), jadi event ini TIDAK PERNAH pantulan aksi
+/// pengguna sendiri — tidak perlu mekanisme penahanan seperti pada pesanan.
+class ReportUpdate {
+  final String id;
+  final String title;
+  final String status;
+  final String? prevStatus;
+  final String? adminNote;
+
+  const ReportUpdate({
+    required this.id,
+    required this.title,
+    required this.status,
+    this.prevStatus,
+    this.adminNote,
+  });
+
+  bool get statusChanged => status != prevStatus;
+
+  String get statusLabel => reportStatusLabel(status);
+}
+
+/// Teks snack untuk [u], atau `null` bila event tidak layak diberitahukan
+/// (status sama seperti sebelumnya) — murni, dipakai MainShell.
+String? reportUpdateSnack(ReportUpdate u) {
+  if (!u.statusChanged) return null;
+  final judul = u.title.trim().isEmpty ? 'Laporan' : u.title.trim();
+  return 'Laporan "$judul" — ${u.statusLabel}';
 }
 
 const appFee = 5000; // sama dengan APP_FEE di lib/pricing.js web
@@ -779,6 +838,94 @@ class BookingTechInfo {
   }
 }
 
+/// Posisi teknisi LIVE untuk satu pesanan — hasil RPC
+/// `booking_technician_position` (supabase/migrate-technician-trip-share.sql).
+///
+/// Server memegang SELURUH gerbang privasi (pesanan harus milik pemanggil,
+/// teknisi sudah ditugaskan, pesanan masih aktif, teknisi sudah menekan
+/// "Berangkat", posisi belum kedaluwarsa dan belum basi). Karena itu kelas ini
+/// sengaja MEMBAWA alasan ketika tidak terlihat: aplikasi hanya menampilkan apa
+/// yang dikatakan server, tanpa menebak sendiri kenapa posisinya kosong.
+class BookingTechPosition {
+  /// Server mengizinkan permintaan ini (pemanggil = pemilik pesanan).
+  /// `false` = permintaan ditolak/ditolak jaringan — jangan tampilkan apa pun.
+  final bool ok;
+
+  /// Posisi boleh ditampilkan SEKARANG. Hanya ini yang membuka peta.
+  final bool visible;
+
+  final double? lat;
+  final double? lng;
+
+  /// Umur pembaruan terakhir (detik) — dipakai menulis "Diperbarui 12 detik lalu".
+  final int? ageSeconds;
+
+  /// Kapan posisi ini berhenti dibagikan (batas satu perjalanan, 90 menit).
+  final DateTime? expiresAt;
+
+  /// Sebab posisi tidak ditampilkan — kalimat siap tampil dari server.
+  final String? reason;
+
+  /// Jarak lurus teknisi → titik pesanan (meter). Null bila pelanggan tidak
+  /// memasang pin (tidak ada titik pembanding).
+  final int? distanceM;
+
+  const BookingTechPosition({
+    this.ok = false,
+    this.visible = false,
+    this.lat,
+    this.lng,
+    this.ageSeconds,
+    this.expiresAt,
+    this.reason,
+    this.distanceM,
+  });
+
+  /// Belum ada jawaban dari server (mis. RPC belum dijalankan).
+  static const kosong = BookingTechPosition();
+
+  factory BookingTechPosition.fromRpc(Map<String, dynamic> m) {
+    final lat = (m['lat'] as num?)?.toDouble();
+    final lng = (m['lng'] as num?)?.toDouble();
+    final expires = m['expires_at'] as String?;
+    return BookingTechPosition(
+      ok: m['ok'] == true,
+      // Koordinat wajib ada bila `visible` — server tidak akan mengirim
+      // visible:true tanpa titik, tetapi pemeriksaan ganda di sini membuat
+      // peta tidak pernah dibuka dengan lat/lng null.
+      visible: m['visible'] == true && lat != null && lng != null,
+      lat: lat,
+      lng: lng,
+      ageSeconds: (m['age_seconds'] as num?)?.toInt(),
+      expiresAt: expires == null ? null : DateTime.tryParse(expires)?.toLocal(),
+      reason: (m['reason'] as String?)?.trim(),
+      distanceM: (m['distance_m'] as num?)?.toInt(),
+    );
+  }
+
+  /// "Sekitar 350 m lagi" — angka yang paling dicari pelanggan (bukan koordinat,
+  /// bukan umur posisi). Dihilangkan bila tidak ada titik pembanding.
+  String? get ringkasanJarak {
+    final d = distanceM;
+    if (d == null) return null;
+    if (d < 1000) return 'Sekitar $d m lagi';
+    final km = (d / 100).round() / 10; // satu desimal
+    return 'Sekitar ${km.toString().replaceAll('.', ',')} km lagi';
+  }
+
+  /// Kalimat umur posisi yang dimengerti manusia: "Diperbarui 12 detik lalu".
+  /// Lebih tua dari semenit dibulatkan ke menit (server sudah menutup di 5
+  /// menit, jadi angka ini tidak pernah terlalu besar).
+  String get ringkasanUmur {
+    final s = ageSeconds;
+    if (s == null) return 'Menunggu posisi terbaru…';
+    if (s < 10) return 'Diperbarui barusan';
+    if (s < 60) return 'Diperbarui $s detik lalu';
+    final m = (s / 60).round();
+    return 'Diperbarui $m menit lalu';
+  }
+}
+
 /// Masa garansi + klaim untuk satu pesanan — hasil RPC `booking_warranty_info`.
 ///
 /// [eligible] true berarti pelanggan masih boleh mengajukan klaim BARU
@@ -885,6 +1032,61 @@ bool bolehBatalkanAtauUbahJadwal({
   if (!buktiBelumAda) return false;
   return slotStart(bookingDate, bookingTime).isAfter(sekarang);
 }
+
+/// Ringkasan penilaian (rating) teknisi: jumlah penilaian + rata-ratanya.
+///
+/// Dipakai layar Profil teknisi; sengaja dipisah dari baris `reviews` mentah
+/// supaya aturan hitungnya bisa diuji tanpa perangkat (lihat
+/// test/rating_summary_test.dart). Pembulatan SATU desimal dan satuan "ulasan"
+/// sama dengan panel admin web (src/app/actions/admin.js) supaya kedua sisi
+/// menampilkan angka yang sama untuk data yang sama.
+class RatingSummary {
+  /// Jumlah penilaian yang sah (rating 1–5).
+  final int count;
+
+  /// Rata-rata 1 desimal, atau null bila [count] nol.
+  final double? average;
+
+  const RatingSummary({required this.count, required this.average});
+
+  /// Teknisi yang belum pernah dinilai — bukan keadaan error.
+  static const RatingSummary kosong = RatingSummary(count: 0, average: null);
+
+  bool get adaPenilaian => count > 0 && average != null;
+}
+
+/// Hitung [RatingSummary] dari baris rating mentah.
+///
+/// Nilai di luar 1–5 dilewati, bukan dihitung: check constraint di database
+/// menjamin rentang itu, tetapi data warisan/impor bisa melenceng dan satu
+/// baris 0 saja cukup untuk merusak rata-rata teknisi.
+RatingSummary summarizeRatings(Iterable<int> ratings) {
+  var jumlah = 0;
+  var total = 0;
+  for (final r in ratings) {
+    if (r < 1 || r > 5) continue;
+    jumlah += 1;
+    total += r;
+  }
+  if (jumlah == 0) return RatingSummary.kosong;
+  return RatingSummary(count: jumlah, average: (total / jumlah * 10).round() / 10);
+}
+
+/// Teks ringkas penilaian untuk ditampilkan, mis. "4,8 · 12 ulasan".
+///
+/// Desimal memakai koma seperti format jarak di aplikasi (lihat
+/// [formatJarak]); belum ada penilaian → "Belum ada rating", kalimat yang
+/// sama dengan panel admin web.
+String ratingSummaryLabel(RatingSummary s) => s.adaPenilaian
+    ? '${s.average!.toStringAsFixed(1).replaceAll('.', ',')} · ${s.count} ulasan'
+    : 'Belum ada rating';
+
+/// Kalimat pembaca layar untuk [RatingSummary] — angkanya harus terdengar
+/// lengkap (rata-rata "dari 5" + jumlah ulasan), bukan hanya "4,8".
+String ratingSummarySemantics(RatingSummary s) => s.adaPenilaian
+    ? 'Penilaian teknisi: ${s.average!.toStringAsFixed(1).replaceAll('.', ',')} dari 5 '
+        '(${s.count} ulasan)'
+    : 'Penilaian teknisi: belum ada rating';
 
 /// Batas jumlah perubahan jadwal per pesanan — sama dengan v_max_reschedule
 /// di RPC reschedule_booking.

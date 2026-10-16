@@ -264,7 +264,18 @@ async function main() {
     check("amount = -(komisi + biaya app)", Number(earning?.amount) === -expectCut, `amount=${earning?.amount} vs ${-expectCut}`);
     const { data: techAfter } = await admin.from("profiles").select("balance").eq("id", technician.id).single();
     check("saldo teknisi berkurang sebesar komisi + biaya app", Number(techAfter?.balance) === balanceBefore - expectCut, `saldo=${techAfter?.balance} vs ${balanceBefore - expectCut}`);
-    check("saldo teknisi tidak negatif (kebijakan saldo ≥ 0)", Number(techAfter?.balance ?? -1) >= 0, `saldo=${techAfter?.balance}`);
+    // Kebijakan potongan PENUH (docs/balance-rule.md): saldo boleh minus, dan
+    // yang penting TIDAK ada sisa yang dibiarkan tak tertagih — potongannya utuh.
+    check("potongan penuh (tidak ada sisa tak tertagih)", Number(earning?.amount) === -expectCut, `amount=${earning?.amount} vs ${-expectCut}`);
+    const { data: earningRow } = await admin
+      .from("balance_transactions")
+      .select("uncovered_amount")
+      .eq("booking_id", booking1.id)
+      .eq("type", "earning")
+      .maybeSingle();
+    if (earningRow) {
+      check("piutang baris ledger 0 (saldo cukup)", Number(earningRow.uncovered_amount || 0) === 0, `uncovered=${earningRow.uncovered_amount}`);
+    }
 
     // ---------------- 8. Idempotensi ----------------
     step("8. Idempotensi komisi (completed dipanggil dua kali)");
@@ -273,7 +284,7 @@ async function main() {
     const { data: techAfter2 } = await admin.from("profiles").select("balance").eq("id", technician.id).single();
     check("komisi tidak dobel", (earnings2 ?? []).length === 1, `${(earnings2 ?? []).length} baris`);
     check("saldo tidak terpotong dua kali", Number(techAfter2?.balance) === balanceBefore - expectCut, `saldo=${techAfter2?.balance}`);
-    check("saldo tetap tidak negatif setelah panggilan ulang", Number(techAfter2?.balance ?? -1) >= 0, `saldo=${techAfter2?.balance}`);
+    check("saldo tidak berubah setelah panggilan ulang", Number(techAfter2?.balance) === balanceBefore - expectCut, `saldo=${techAfter2?.balance}`);
 
     // ---------------- 9. Penilaian ----------------
     step("9. Pelanggan menilai pesanan selesai");

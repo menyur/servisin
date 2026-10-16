@@ -16,10 +16,17 @@
 // .github/workflows/web-lint.yml bersama verify:fcm & verify:cron-auth.
 //
 // Yang diperiksa:
-//   1. Footer (src/components/Footer.js) menautkan /privasi DAN /syarat;
+//   1. Footer (src/components/Footer.js) menautkan /privasi, /syarat, DAN
+//      /hapus-akun;
 //   2. halaman tujuannya benar-benar ada (src/app/<rute>/page.js);
-//   3. sitemap memuat keduanya;
-//   4. robots.txt TIDAK memblokir keduanya (harus tetap bisa dirayapi).
+//   3. sitemap memuat ketiganya;
+//   4. robots.txt TIDAK memblokir ketiganya (harus tetap bisa dirayapi).
+//
+// /hapus-akun ikut dijaga di sini karena halaman itu adalah syarat "Data
+// deletion" Google Play: URL-nya dipakai di Play Console dan harus terjangkau
+// tanpa memasang aplikasi. Kalau tautannya terhapus dari footer saat merapikan
+// menu, tak ada tes lain yang gagal — persis kegagalan senyap yang dicegah
+// berkas ini.
 //
 // Pemakaian:
 //   npm run verify:legal-links
@@ -36,6 +43,7 @@ import path from "node:path";
 export const HALAMAN_LEGAL = [
   { nama: "Kebijakan Privasi", href: "/privasi", berkas: "src/app/privasi/page.js" },
   { nama: "Syarat & Ketentuan", href: "/syarat", berkas: "src/app/syarat/page.js" },
+  { nama: "Hapus Akun", href: "/hapus-akun", berkas: "src/app/hapus-akun/page.js" },
 ];
 
 const argv = process.argv.slice(2);
@@ -90,10 +98,10 @@ export function periksaTautanLegal({ footer, sitemap, robots, halamanAda }) {
 // --- Mode selftest ---------------------------------------------------------
 if (SELFTEST) {
   const sehat = {
-    footer: `import Link from "next/link";\nexport default function Footer(){return (<nav>\n<Link href="/privasi">Kebijakan Privasi</Link>\n<Link href="/syarat">Syarat &amp; Ketentuan</Link>\n</nav>);}`,
-    sitemap: `const x=[{url:base+"/privasi"},{url:base+"/syarat"}];`,
+    footer: `import Link from "next/link";\nexport default function Footer(){return (<nav>\n<Link href="/privasi">Kebijakan Privasi</Link>\n<Link href="/syarat">Syarat &amp; Ketentuan</Link>\n<Link href="/hapus-akun">Hapus Akun</Link>\n</nav>);}`,
+    sitemap: `const x=[{url:base+"/privasi"},{url:base+"/syarat"},{url:base+"/hapus-akun"}];`,
     robots: `export default function robots(){return {rules:[{userAgent:"*",disallow:["/admin","/dashboard"]}]};}`,
-    halamanAda: { "/privasi": true, "/syarat": true },
+    halamanAda: { "/privasi": true, "/syarat": true, "/hapus-akun": true },
   };
 
   const kasus = [
@@ -106,6 +114,16 @@ if (SELFTEST) {
     [
       "tautan syarat DIHAPUS dari footer → gagal",
       { ...sehat, footer: sehat.footer.replace('<Link href="/syarat">Syarat &amp; Ketentuan</Link>', "") },
+      1,
+    ],
+    [
+      "tautan hapus-akun DIHAPUS dari footer → gagal (syarat Google Play)",
+      { ...sehat, footer: sehat.footer.replace('<Link href="/hapus-akun">Hapus Akun</Link>', "") },
+      1,
+    ],
+    [
+      "halaman /hapus-akun tidak ada → gagal",
+      { ...sehat, halamanAda: { "/privasi": true, "/syarat": true, "/hapus-akun": false } },
       1,
     ],
     ["halaman /privasi tidak ada → gagal", { ...sehat, halamanAda: { "/privasi": false, "/syarat": true } }, 1],
@@ -130,7 +148,7 @@ if (SELFTEST) {
 
   // Info tautan yang ditemukan tidak boleh menggagalkan gate.
   const info = periksaTautanLegal(sehat);
-  const okInfo = info.gagal.length === 0 && info.info.length === 2;
+  const okInfo = info.gagal.length === 0 && info.info.length === HALAMAN_LEGAL.length;
   if (!okInfo) gagalSelftest += 1;
   console.log(`${okInfo ? "lulus" : "GAGAL"}  tautan yang ditemukan hanya dilaporkan, bukan kegagalan`);
 

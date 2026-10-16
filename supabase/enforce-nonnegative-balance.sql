@@ -1,5 +1,18 @@
 -- =========================================================
--- KEBIJAKAN BARU: SALDO TEKNISI TIDAK BOLEH NEGATIF (tanpa utang teknisi).
+-- ⛔ USANG — JANGAN DIJALANKAN LAGI.
+-- Kebijakan "saldo tidak boleh negatif (potong sebatas saldo, sisa tak
+-- tertagih bukan utang)" sudah DIGANTI oleh POTONGAN PENUH + saldo minus =
+-- piutang teknisi: supabase/enforce-full-charge-balance.sql (jalankan itu
+-- TERAKHIR).
+--
+-- Berkas ini dipertahankan sebagai riwayat. Kalau dijalankan, ia akan
+-- mengembalikan kebocoran lama: potongan dibatasi saldo, trigger memaksa saldo
+-- minus menjadi 0 (menghapus piutang dari buku), dan set_job_status lama
+-- menimpa definisi yang berlaku.
+-- Alasan lengkap perubahan: docs/balance-rule.md
+-- =========================================================
+-- =========================================================
+-- (RIWAYAT) KEBIJAKAN LAMA: SALDO TEKNISI TIDAK BOLEH NEGATIF.
 --
 -- ⚠️ ATURAN POTONGAN DIKUNCI: potongan saldo = KOMISI + BIAYA APLIKASI
 -- (bookings.app_fee), bukan komisi saja. File ini adalah DEFINISI set_job_status

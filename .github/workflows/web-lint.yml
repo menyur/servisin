@@ -82,6 +82,44 @@ jobs:
       - name: Verifikasi tautan legal di footer
         run: npm run verify:legal-links
 
+      # Pengaturan garansi (saklar + durasi standar) diperiksa di sini karena
+      # kegagalannya paling tidak terlihat: durasi per layanan bisa tetap terbaca
+      # "7 hari" di mana-mana, padahal setelan admin tidak lagi dipakai — jadi
+      # pelanggan dijanjikan garansi yang sudah dimatikan. Statis, tanpa jaringan.
+      - name: Verifikasi pengaturan garansi
+        run: npm run verify:garansi
+
+      # Izin EXECUTE pada fungsi SQL diperiksa di sini karena kegagalannya
+      # benar-benar senyap: PostgreSQL memberi EXECUTE kepada PUBLIC secara
+      # default, sehingga RPC yang bukan untuk umum tetap bisa dipanggil
+      # pengunjung tanpa login — tanpa ada tes yang merah. Statis, tanpa jaringan.
+      - name: Verifikasi izin EXECUTE RPC
+        run: npm run verify:rpc-grants-offline
+
+      # Umur piutang + penghapusan eksplisit diperiksa di sini karena
+      # kegagalannya KEUANGAN dan senyap: piutang teknisi yang berhenti bisa
+      # menua tanpa ada yang mengingatkan atau memutuskan, dan penghapusan yang
+      # salah jalan melepas tagihan yang masih bisa ditagih (atau mengubah buku
+      # tanpa jejak). Statis, tanpa jaringan.
+      - name: Verifikasi umur piutang & penghapusan
+        run: npm run verify:piutang
+
+      # Gerbang privasi "teknisi menuju lokasi" diperiksa di sini karena
+      # kegagalannya SENYAP dan berbahaya: melepas satu penjagaan (mis. cek
+      # kepemilikan pesanan) tetap membuat peta tampil rapi, hanya saja posisi
+      # teknisi bisa dibaca pelanggan lain. Statis, tanpa jaringan.
+      - name: Verifikasi gerbang privasi lacak teknisi
+        run: npm run verify:trip-share
+
+      # Antrian panel admin diperiksa di sini karena kegagalannya paling sunyi
+      # dari semuanya: pesanan baru TIDAK muncul sampai admin me-refresh, tetapi
+      # build hijau, badge "Live" tetap hijau, dan tidak ada satu pun error di
+      # log. Penyebabnya urutan di klien (join kanal Realtime sebelum token
+      # pengguna dipasang → RLS menilai sebagai anon). Statis, tanpa jaringan;
+      # sisi databasenya dijaga scripts/verify-realtime.mjs --rls.
+      - name: Verifikasi realtime panel admin
+        run: npm run verify:admin-realtime
+
       # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
       # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
       # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,

@@ -38,7 +38,13 @@ export async function GET(request) {
       year: yearParam >= 2000 ? yearParam : undefined,
     });
 
-    const csv = buildMonthlyReportCsv(report.rows, { year: report.year, month: report.month });
+    // Laporan tiga kolom: ditagihkan (bookings) / tertagih (ledger) / piutang.
+    const csv = buildMonthlyReportCsv(report.rows, {
+      year: report.year,
+      month: report.month,
+      ledgerByBooking: report.ledgerByBooking,
+      totals: report,
+    });
     const filename = `laporan-pesanan-selesai-${report.year}-${String(report.month).padStart(2, "0")}.csv`;
 
     // ambil email semua admin
@@ -68,6 +74,11 @@ export async function GET(request) {
       count: report.count,
       totalRevenue: report.totalRevenue,
       totalCommission: report.totalCommission,
+      chargedTotal: report.chargedTotal,
+      collectedTotal: report.collectedTotal,
+      receivableTotal: report.receivableTotal,
+      recoveryThisMonth: report.recoveryThisMonth,
+      piutangTerbuka: report.piutangTerbuka,
       filename,
       csvBase64: Buffer.from(csv, "utf8").toString("base64"),
     });
@@ -109,6 +120,11 @@ export async function GET(request) {
       count: report.count,
       totalRevenue: report.totalRevenue,
       totalCommission: report.totalCommission,
+      chargedTotal: report.chargedTotal,
+      collectedTotal: report.collectedTotal,
+      receivableTotal: report.receivableTotal,
+      recoveryThisMonth: report.recoveryThisMonth,
+      piutangTerbuka: report.piutangTerbuka,
       emailedTo: adminEmails.length,
       simulated: res.simulated || false,
       archived,

@@ -136,7 +136,19 @@ const dasar = {
     { id: "beda-area", name: "Eka", service_area: "bandung", skill: "ac" },
     { id: "bukan-teknisi-lolos", name: "Fitri", service_area: "", skill: "" },
   ],
-  locations: [{ technician_id: "dekat", lat: -6.12, lng: 106.15, updated_at: "2026-10-11T09:59:00Z" }],
+  // Stempel waktu relatif terhadap SEKARANG, bukan tanggal tetap: jalur ujung-ke-
+  // ujung di bawah tidak punya seam `now` (aturan umur lokasi dihitung dari jam
+  // nyata di src/lib/job-offer.js), sehingga tanggal mati membuat lokasinya
+  // terbaca BASI dan `nearest_m` jadi null — pemeriksaannya gagal karena kalender,
+  // bukan karena aturan jarak rusak.
+  locations: [
+    {
+      technician_id: "dekat",
+      lat: -6.12,
+      lng: 106.15,
+      updated_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    },
+  ],
   service: { category_id: "ac", categories: { name: "Service AC" } },
 };
 

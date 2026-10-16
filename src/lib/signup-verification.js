@@ -138,6 +138,34 @@ export function catatIp(ip, sekarangMs, jendelaMs = JENDELA_IP_MS) {
   riwayatIp.set(ip, daftar);
 }
 
+/**
+ * Batalkan catatan satu permintaan untuk IP ini — dipakai ketika kegagalannya
+ * dari SISI KAMI (generateLink error, kunci Resend belum diisi/mati), bukan
+ * karena pengguna mengirim berulang.
+ *
+ * Kenapa penting: kuota per IP dimaksudkan membatasi PENDAFTARAN, bukan
+ * menghukum pengguna atas gangguan server. Kejadian nyata 16 Okt 2026 — kunci
+ * Resend di produksi tidak sah sehingga SEMUA pendaftaran gagal; delapan
+ * percobaan gagal (bukan pendaftaran berhasil) dari satu jaringan sudah cukup
+ * memblokir seluruh pendaftaran dari jaringan itu selama 15 menit, persis saat
+ * semua orang mencoba lagi setelah gangguan ditolong. Tanpa pembebasan ini,
+ * pesan yang muncul adalah "Terlalu banyak pendaftaran dari jaringan ini" —
+ * pesan yang menyesatkan dan membuat penolakan server terlihat seperti
+ * kesalahan pengguna.
+ *
+ * Menghapus berdasarkan waktu (nilai yang sama dengan yang dipakai [catatIp])
+ * supaya percobaan LAIN dari IP yang sama tetap terhitung.
+ */
+export function batalkanCatatIp(ip, sekarangMs, jendelaMs = JENDELA_IP_MS) {
+  if (!ip) return false;
+  const daftar = (riwayatIp.get(ip) || []).filter(
+    (t) => t !== sekarangMs && sekarangMs - t < jendelaMs
+  );
+  if (daftar.length) riwayatIp.set(ip, daftar);
+  else riwayatIp.delete(ip);
+  return true;
+}
+
 /** Ambil alamat IP pemanggil dari header proxy (Vercel/Next). Murni. */
 export function ipDariHeader(headers) {
   const awal = (nilai) => String(nilai || "").split(",")[0].trim();
@@ -254,8 +282,11 @@ export async function kirimVerifikasiPendaftaran({
       error?.code ?? "-",
       error?.message ?? "tanpa action_link"
     );
-    // Bebaskan jeda: ini kegagalan server, bukan permintaan berulang pengguna.
+    // Bebaskan jeda & kuota IP: ini kegagalan server, bukan permintaan berulang
+    // pengguna — kalau tidak dibebaskan, pengguna tak bisa mencoba lagi persis
+    // saat penyebabnya baru diperbaiki.
     riwayatAlamat.delete(alamat);
+    batalkanCatatIp(ip, sekarangMs);
     return { ok: false, alasan: "akun_gagal_dibuat", pesan: error?.message };
   }
 
@@ -270,10 +301,12 @@ export async function kirimVerifikasiPendaftaran({
     // Tanpa RESEND_API_KEY isinya hanya masuk log — bukan terkirim. Jeda
     // dibebaskan supaya percobaan berikutnya (setelah env diisi) tidak tertahan.
     riwayatAlamat.delete(alamat);
+    batalkanCatatIp(ip, sekarangMs);
     return { ok: false, alasan: "env", pesan: "RESEND_API_KEY belum terbaca" };
   }
   if (kirim?.error) {
     riwayatAlamat.delete(alamat);
+    batalkanCatatIp(ip, sekarangMs);
     return { ok: false, alasan: "gagal_kirim", pesan: kirim.error };
   }
 

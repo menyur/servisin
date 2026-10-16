@@ -13,7 +13,9 @@
 //   Membuktikan notifikasi sampai ke CLIENT BER-RLS — bukan hanya service-role:
 //   membuat pelanggan A, pelanggan B, dan teknisi sementara; A & teknisi harus
 //   MENERIMA event UPDATE pesanan uji, sedangkan B (tanpa filter) dan klien
-//   anon (tanpa sesi) TIDAK BOLEH menerima apa pun. Ini menutup celah "lulus
+//   anon (tanpa sesi) TIDAK BOLEH menerima apa pun, dan sesi ADMIN (bukan
+//   service-role) HARUS menerima INSERT pesanan baru — inilah yang membuat
+//   antrian panel admin terisi sendiri tanpa refresh. Ini menutup celah "lulus
 //   di service-role, tapi bocor/gagal di app".
 //
 // Kedua mode membersihkan seluruh data uji (baris + akun sementara).
@@ -204,7 +206,10 @@ async function rlsMatrix(env) {
     const customerA = await createTempUser(admin, "customer", "probe-rls-a");
     const customerB = await createTempUser(admin, "customer", "probe-rls-b");
     const technician = await createTempUser(admin, "technician", "probe-rls-tech");
-    tempUsers.push(customerA, customerB, technician);
+    // Admin diuji lewat SESI BIASA (anon key + login), bukan service-role: itulah
+    // yang dipakai panel admin di browser, dan RLS melekat pada sesi itu.
+    const adminUser = await createTempUser(admin, "admin", "probe-rls-admin");
+    tempUsers.push(customerA, customerB, technician, adminUser);
 
     // Teknisi harus "approved" agar setara teknisi sungguhan (is_active_technician).
     const { error: appErr } = await admin
@@ -212,6 +217,19 @@ async function rlsMatrix(env) {
       .update({ approval_status: "approved" })
       .eq("id", technician.id);
     if (appErr) console.log(`  (info) gagal set approval_status teknisi uji: ${appErr.message}`);
+
+    // Peran admin dipastikan di DB (trigger pendaftaran boleh saja tidak
+    // mengizinkan role 'admin' dari metadata — dan kalau begitu, panel admin
+    // memang tidak akan menerima apa pun, jadi peran ini WAJIB benar).
+    const { data: adminProfile, error: admErr } = await admin
+      .from("profiles")
+      .update({ role: "admin" })
+      .eq("id", adminUser.id)
+      .select("id, role")
+      .single();
+    if (admErr || adminProfile?.role !== "admin") {
+      console.log(`  (info) gagal menjadikan akun uji sebagai admin: ${admErr?.message || "role tidak berubah"}`);
+    }
 
     // Pesanan uji: milik pelanggan A, ditugaskan ke teknisi uji.
     const { data: booking, error: bErr } = await admin
@@ -229,7 +247,7 @@ async function rlsMatrix(env) {
 
     // Sesi nyata: ini yang diuji (bukan service-role).
     const sessions = {};
-    for (const [key, user] of Object.entries({ A: customerA, B: customerB, T: technician })) {
+    for (const [key, user] of Object.entries({ A: customerA, B: customerB, T: technician, ADM: adminUser })) {
       const client = makeUserClient(env);
       clients.push(client);
       const { error } = await client.auth.signInWithPassword({ email: user.email, password: user.password });
@@ -261,11 +279,19 @@ async function rlsMatrix(env) {
     // Kontrol negatif: TANPA filter, jadi apa pun yang lolos RLS akan terlihat.
     watchers.push(watch({ client: sessions.B, table: "bookings", event: "UPDATE", name: "kontrol-customer-b" }));
     watchers.push(watch({ client: anonClient, table: "bookings", event: "UPDATE", name: "kontrol-anon" }));
+    // PESANAN BARU sampai ke panel admin: langganan INSERT tanpa filter, persis
+    // seperti useAdminRealtime() di src/lib/realtime.js. Tanpa ini, admin harus
+    // me-refresh halaman setiap ada pesanan masuk — dan itu tidak terdeteksi
+    // oleh kontrol pelanggan/teknisi di atas.
+    watchers.push(watch({ client: sessions.ADM, table: "bookings", event: "INSERT", name: "admin-panel-insert" }));
+    watchers.push(watch({ client: sessions.B, table: "bookings", event: "INSERT", name: "kontrol-insert-b" }));
 
-    const [wA, wT, wB, wAnon] = watchers;
+    const [wA, wT, wB, wAnon, wAdmIns, wBIns] = watchers;
     const subs = [];
     for (const w of watchers) subs.push(await w.subscribe());
-    console.log(`Status channel: A=${subs[0]} teknisi=${subs[1]} B(kontrol)=${subs[2]} anon(kontrol)=${subs[3]}`);
+    console.log(
+      `Status channel: A=${subs[0]} teknisi=${subs[1]} B(kontrol)=${subs[2]} anon(kontrol)=${subs[3]} admin-insert=${subs[4]} B-insert(kontrol)=${subs[5]}`
+    );
     if (subs.some((s) => s !== "SUBSCRIBED")) {
       console.log("HASIL: GAGAL_SUBSCRIBE — ada channel yang tidak siap.");
       return 3;
@@ -301,6 +327,22 @@ async function rlsMatrix(env) {
     const leakB = wB.eventsForId(bookingId);
     const leakAnon = wAnon.eventsForId(bookingId);
 
+    // ---- Pesanan BARU (INSERT): skenario "admin tidak perlu refresh" ----
+    // Pesanan baru milik profil fixture (bukan A/B) supaya kontrol negatifnya
+    // tajam: yang boleh menerimanya HANYA admin, bukan pelanggan lain.
+    const insRow = bookingRow(
+      { profileId: fixtures.profileId, serviceId: fixtures.serviceId },
+      `RT-RLS-BARU-${stamp}`,
+      { notes: "probe RLS realtime — pesanan baru untuk panel admin" }
+    );
+    const tungguAdmin = wAdmIns.waitFor("INSERT", null, RLS_TIMEOUT_MS);
+    const { data: bookingBaru, error: insErr } = await admin.from("bookings").insert(insRow).select("id").single();
+    if (insErr) console.log(`  (info) insert pesanan baru untuk uji admin gagal: ${insErr.message}`);
+    const evtAdmin = bookingBaru?.id ? await tungguAdmin : null;
+    const kolomTerkirim = evtAdmin?.new ? Object.keys(evtAdmin.new).length : 0;
+    const leakInsertB = bookingBaru?.id ? wBIns.eventsForId(bookingBaru.id) : [];
+    if (bookingBaru?.id) await admin.from("bookings").delete().eq("id", bookingBaru.id);
+
     line();
     console.log(`${delivery.A.ok ? "✅" : "❌"} Pelanggan A (filter user_id) : ${delivery.A.ok ? `MENERIMA event UPDATE via ${delivery.A.mutation}` : "TIDAK menerima event"}`);
     if (delivery.A.ok) console.log(`     old_status=${delivery.A.prevStatus} → new_status=${delivery.A.newStatus} (old_record terbaca RLS ✔)`);
@@ -308,11 +350,20 @@ async function rlsMatrix(env) {
     console.log(`${leakB.length === 0 ? "✅" : "❌"} Pelanggan B tanpa filter        : ${leakB.length} event (harus 0 — RLS menyaring)`);
     console.log(`${leakAnon.length === 0 ? "✅" : "❌"} Klien anon tanpa sesi            : ${leakAnon.length} event (harus 0)`);
 
-    const pass = delivery.A.ok && delivery.T.ok && leakB.length === 0 && leakAnon.length === 0;
+    const okAdminInsert = Boolean(evtAdmin);
+    const okInsertPrivat = leakInsertB.length === 0;
+    console.log(
+      `${okAdminInsert ? "✅" : "❌"} Panel ADMIN dapat pesanan BARU: ${okAdminInsert ? `MENERIMA event INSERT (${kolomTerkirim} kolom)` : "TIDAK menerima — admin harus refresh manual"}`
+    );
+    console.log(
+      `${okInsertPrivat ? "✅" : "❌"} Pelanggan lain tanpa filter (INSERT): ${leakInsertB.length} event (harus 0 — pesanan orang lain tetap privat)`
+    );
+
+    const pass = delivery.A.ok && delivery.T.ok && leakB.length === 0 && leakAnon.length === 0 && okAdminInsert && okInsertPrivat;
     line();
     console.log(
       pass
-        ? "KESIMPULAN: REALTIME_RLS_TERBUKTI — notifikasi status booking sampai ke pelanggan & teknisi pemilik pesanan, dan tidak bocor ke pengguna lain/anon."
+        ? "KESIMPULAN: REALTIME_RLS_TERBUKTI — notifikasi status booking sampai ke pelanggan & teknisi pemilik pesanan, pesanan BARU sampai ke panel admin, dan tidak bocor ke pengguna lain/anon."
         : "KESIMPULAN: REALTIME_RLS_GAGAL — periksa baris ❌ di atas (kegagalan kirim ATAU kebocoran)."
     );
     exitCode = pass ? 0 : 5;

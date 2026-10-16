@@ -32,12 +32,15 @@ on:
       - ".github/workflows/flutter-ci.yml"
       # Gate font di bawah ikut diperiksa saat skripnya sendiri berubah.
       - "scripts/verify-font-family.mjs"
+      # Idem untuk gate wiring badge notifikasi.
+      - "scripts/verify-flutter-notif-badges.mjs"
   push:
     branches: [main]
     paths:
       - "flutter_app/**"
       - ".github/workflows/flutter-ci.yml"
       - "scripts/verify-font-family.mjs"
+      - "scripts/verify-flutter-notif-badges.mjs"
   workflow_dispatch:
 
 permissions:
@@ -84,6 +87,14 @@ jobs:
       # Node sudah tersedia di runner (seperti check-flutter-version.mjs).
       - name: Verifikasi fontFamily hanya font bundel
         run: node scripts/verify-font-family.mjs
+
+      # Gate WIRING angka notifikasi (badge MainNav): langganan realtime
+      # laporan, hitung ulang saat app kembali aktif, angka pekerjaan tersedia
+      # bagi teknisi. Aturan hitungnya diuji di `flutter test`; yang dijaga di
+      # sini adalah penyambungannya — hilangnya satu baris tidak menggagalkan
+      # compile maupun test, hanya mematikan fiturnya untuk pengguna.
+      - name: Verifikasi wiring badge jumlah notifikasi
+        run: node scripts/verify-flutter-notif-badges.mjs
 
       # Sama seperti build-apk.yml: kredensial PUBLIK client Supabase
       # (publishable key) — aman, keamanan dijaga RLS di database.

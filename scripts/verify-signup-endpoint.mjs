@@ -298,6 +298,73 @@ console.log("-".repeat(72));
   cek("generateLink tidak disentuh saat kuota IP habis", adminLebih.panggilan.length === 0);
 }
 
+// Kasus 5b: kegagalan SERVER tidak boleh menghabiskan kuota IP.
+//
+// Kejadian nyata 16 Okt 2026: kunci Resend di produksi tidak sah sehingga SEMUA
+// pendaftaran gagal. Tanpa pembebasan, delapan percobaan gagal dari satu
+// jaringan memblokir seluruh pendaftaran dari jaringan itu 15 menit — tepat
+// saat semua orang mencoba lagi setelah gangguannya ditolong, dan pesan yang
+// muncul ("Terlalu banyak pendaftaran dari jaringan ini") menyesatkan. Kuota ini
+// untuk membatasi pendaftaran, bukan menghukum pengguna atas kegagalan server.
+{
+  lupakanRiwayatPendaftaran();
+  const mailer = mailerTiruan();
+  const ipGagal = "203.0.113.9";
+  let terakhirGagal;
+  for (let i = 0; i < BATAS_PER_IP; i += 1) {
+    terakhirGagal = await kirimVerifikasiPendaftaran({
+      ...dasarUji({
+        admin: adminTiruan({
+          data: null,
+          error: { status: 500, code: "unexpected_failure", message: "boom" },
+        }),
+        mailer,
+        email: `gagal${i}@example.com`,
+      }),
+      ip: ipGagal,
+      sekarangMs: 4_000_000,
+    });
+  }
+  cek(
+    "kegagalan server berulang tetap dilaporkan gagal (bukan sukses)",
+    terakhirGagal?.ok === false && terakhirGagal?.alasan === "akun_gagal_dibuat",
+    JSON.stringify(terakhirGagal)
+  );
+
+  const setelahGagal = await kirimVerifikasiPendaftaran({
+    ...dasarUji({ admin: adminTiruan(), mailer, email: "coba-lagi@example.com" }),
+    ip: ipGagal,
+    sekarangMs: 4_000_000,
+  });
+  cek(
+    "setelah delapan kegagalan server, pendaftaran dari jaringan yang sama tetap boleh",
+    setelahGagal.ok === true && setelahGagal.terkirim === true,
+    JSON.stringify(setelahGagal)
+  );
+
+  // Sebaliknya: pendaftaran yang BERHASIL tetap dihitung, jadi kuota anti-spam
+  // itu tidak ikut dilumpuhkan oleh perbaikan ini.
+  lupakanRiwayatPendaftaran();
+  const mailerSukses = mailerTiruan();
+  for (let i = 0; i < BATAS_PER_IP; i += 1) {
+    await kirimVerifikasiPendaftaran({
+      ...dasarUji({ admin: adminTiruan(), mailer: mailerSukses, email: `sukses${i}@example.com` }),
+      ip: "203.0.113.10",
+      sekarangMs: 5_000_000,
+    });
+  }
+  const setelahSukses = await kirimVerifikasiPendaftaran({
+    ...dasarUji({ admin: adminTiruan(), mailer: mailerSukses, email: "kelebihan@example.com" }),
+    ip: "203.0.113.10",
+    sekarangMs: 5_000_000,
+  });
+  cek(
+    "pendaftaran yang BERHASIL tetap dihitung kuota (anti-spam tidak ikut longgar)",
+    setelahSukses.ok === false && setelahSukses.alasan === "jeda_ip",
+    JSON.stringify(setelahSukses)
+  );
+}
+
 // Kasus 6: masukan tidak sah, env kurang, & kegagalan pengiriman email.
 {
   lupakanRiwayatPendaftaran();

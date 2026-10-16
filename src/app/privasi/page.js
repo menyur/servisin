@@ -161,9 +161,27 @@ export default function KebijakanPrivasiPage() {
         <LegalList>
           <li>meminta salinan dan mengakses data pribadimu yang kami simpan;</li>
           <li>memperbaiki data yang tidak akurat (nama, nomor telepon, dan foto profil dapat diubah sendiri dari halaman profil);</li>
-          <li>meminta penghapusan akun dan data pribadi yang tidak wajib kami simpan;</li>
+          <li>
+            <strong>menghapus akunmu sendiri</strong> — dari aplikasi Android (tab Profil → Hapus akun)
+            atau lewat halaman{" "}
+            <Link href="/hapus-akun" className="text-brand underline">
+              Hapus Akun
+            </Link>{" "}
+            yang bisa dibuka tanpa memasang aplikasi;
+          </li>
           <li>menarik persetujuan, misalnya mematikan notifikasi atau mencabut akses Login dengan Google.</li>
         </LegalList>
+        <p className="rounded-xl bg-brand-tint px-4 py-3 text-brand-deep">
+          Menghapus akun berarti identitas dan konten pribadimu dihapus — nama, nomor telepon, foto
+          profil, alamat, foto KTP, percakapan, lampiran, dan laporan — serta akses masukmu dicabut.
+          Riwayat pesanan (catatan audit) dan catatan keuangan seperti saldo, komisi, dan penilaian tetap
+          tersimpan <strong>tanpa identitasmu</strong>. Permintaan dijalankan paling lambat
+          <strong>7 hari</strong> setelah dikonfirmasi; rincian langkahnya ada di halaman{" "}
+          <Link href="/hapus-akun" className="underline">
+            Hapus Akun
+          </Link>
+          .
+        </p>
         <p>
           Untuk mengajukan permintaan tersebut, hubungi kami di{" "}
           <a href={`mailto:${KONTAK_EMAIL}`} className="text-brand underline">

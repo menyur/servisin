@@ -12,6 +12,7 @@ import {
   getTechnicianBalancesAdmin,
   getAllReviewsAdmin,
   getDailyOpsBoardAdmin,
+  getAccountDeletionSummaryAdmin,
 } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import Link from "next/link";
@@ -31,7 +32,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes, boardRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes, boardRes, accountDeletionRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
@@ -46,6 +47,9 @@ export default async function AdminPage() {
     getAllReviewsAdmin().catch(() => ({ error: "Gagal memuat penilaian teknisi." })),
     // Papan harian dimuat di server supaya tab pembuka tidak berkedip kosong.
     getDailyOpsBoardAdmin().catch(() => ({ error: "Gagal memuat papan harian." })),
+    // Hanya hitungan untuk lencana tab. Tabel yang belum dimigrasikan bukan
+    // kegagalan halaman — tabnya sendiri yang menjelaskannya.
+    getAccountDeletionSummaryAdmin().catch(() => ({ error: "Gagal memuat antrean hapus akun." })),
   ]);
 
   if (bookingsRes.error) {
@@ -79,12 +83,15 @@ export default async function AdminPage() {
       technicianBalancesError={techBalancesRes.error || null}
       initialTechnicianAppFee={techBalancesRes.appFeeReport || []}
       technicianAppFeeTotal={techBalancesRes.appFeeReportTotal || null}
+      initialPiutangUmur={techBalancesRes.piutangUmur || null}
+      piutangAmbangHari={techBalancesRes.ambangHari || null}
       initialReviews={reviewsRes.reviews || []}
       reviewsSummary={reviewsRes.summary || null}
       reviewsByTechnician={reviewsRes.byTechnician || []}
       reviewsError={reviewsRes.error || null}
       board={boardRes.board || null}
       boardError={boardRes.error || null}
+      accountDeletionSummary={accountDeletionRes?.error ? null : accountDeletionRes}
     />
   );
 }

@@ -1,7 +1,7 @@
 name: fixify_app
 description: "Fixify — Aplikasi pelanggan: booking teknisi terpercaya datang ke lokasi."
 publish_to: "none"
-version: 1.2.4+9
+version: 1.4.0+10
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -31,6 +31,12 @@ dev_dependencies:
   # Pelacakan kebocoran di test (dipakai test/flutter_test_config.dart).
   # Versi diselaraskan dengan yang dipakai flutter_test agar tidak konflik.
   leak_tracker_flutter_testing: ^3.0.10
+  # Antarmuka platform url_launcher — dipakai test (test/support/fake_url_launcher.dart)
+  # untuk memalsukan peluncur dan memeriksa URL Google Maps yang BENAR-BENAR
+  # dibuka tombol rute. Sudah ada sebagai dependensi transitif url_launcher;
+  # ditulis eksplisit karena test mengimpornya langsung (lint
+  # depend_on_referenced_packages).
+  url_launcher_platform_interface: ^2.3.2
 
 flutter:
   uses-material-design: true

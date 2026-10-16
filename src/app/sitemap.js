@@ -18,6 +18,10 @@ export default async function sitemap() {
     { url: `${base}/unduh`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     { url: `${base}/privasi`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
     { url: `${base}/syarat`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
+    // Jalur hapus akun harus tetap terjangkau/terindeks: URL inilah yang dipakai
+    // sebagai "Data deletion URL" di Google Play, dan pemilik akun yang sudah
+    // tidak memasang aplikasinya perlu bisa menemukannya.
+    { url: `${base}/hapus-akun`, lastModified: now, changeFrequency: "yearly", priority: 0.4 },
     { url: `${base}/login`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
     { url: `${base}/register`, lastModified: now, changeFrequency: "yearly", priority: 0.3 },
   ];

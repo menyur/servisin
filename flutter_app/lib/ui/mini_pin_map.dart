@@ -23,12 +23,20 @@ class MiniPinMap extends StatelessWidget {
   final VoidCallback? onTap;
   final double height;
 
+  /// Teks badge pojok kanan-bawah. `null` = badge disembunyikan — dipakai saat
+  /// peta memang bukan ajakan membuka rute, mis. melacak posisi teknisi yang
+  /// sedang menuju lokasi: pelanggan hanya perlu tahu di mana teknisinya, bukan
+  /// pergi ke sana. Badge tetap ditampilkan secara bawaan supaya seluruh
+  /// pemakaian aksi "peta = rute" tidak berubah.
+  final String? hint;
+
   const MiniPinMap({
     super.key,
     required this.lat,
     required this.lng,
     this.onTap,
     this.height = 150,
+    this.hint = 'Ketuk untuk rute',
   });
 
   /// Koordinat sah: lat ∈ [-90,90], lng ∈ [-180,180], keduanya berhingga.
@@ -97,28 +105,30 @@ class MiniPinMap extends StatelessWidget {
           ],
         ),
       ),
-      // Pojok kanan bawah: petunjuk ketuk → rute.
-      Positioned(
-        right: 8,
-        bottom: 8,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: .92),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: AppColors.line),
+      // Pojok kanan bawah: petunjuk ketuk → rute (bisa dimatikan lewat [hint]).
+      if (hint != null)
+        Positioned(
+          right: 8,
+          bottom: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: .92),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: AppColors.line),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.navigation_rounded,
+                  size: 13, color: AppColors.brandDeep),
+              const SizedBox(width: 4),
+              Text(hint!,
+                  style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.navy)),
+            ]),
           ),
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.navigation_rounded, size: 13, color: AppColors.brandDeep),
-            SizedBox(width: 4),
-            Text('Ketuk untuk rute',
-                style: TextStyle(
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.navy)),
-          ]),
         ),
-      ),
       const RichAttributionWidget(
         attributions: [TextSourceAttribution('© OpenStreetMap contributors')],
       ),

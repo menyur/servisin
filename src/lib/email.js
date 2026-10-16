@@ -6,6 +6,7 @@
 
 import { resetPasswordHtml } from "./email-templates/reset-password.js";
 import { confirmSignupHtml } from "./email-templates/confirm-signup.js";
+import { permintaanHapusHtml, hapusAkunSelesaiHtml } from "./email-templates/account-deletion.js";
 
 async function sendMail({ to, subject, html, attachments }) {
   if (!to || (Array.isArray(to) && to.length === 0)) {
@@ -234,7 +235,11 @@ export async function sendMonthlyReportEmail(adminEmails, report) {
       <table style="margin:16px 0;">
         ${detailRow("Pesanan selesai", `<strong>${report.count}</strong>`)}
         ${detailRow("Total pendapatan", `<strong>${rupiah(report.totalRevenue)}</strong>`)}
-        ${detailRow("Komisi platform", `<strong style="color:#2C8F63;">${rupiah(report.totalCommission)}</strong>`)}
+        ${detailRow("Ditagihkan (komisi + biaya app)", `<strong style="color:#0B3556;">${rupiah(report.chargedTotal ?? report.totalCommission)}</strong>`)}
+        ${detailRow("Tertagih dari saldo teknisi", `<strong style="color:#2C8F63;">${rupiah(report.collectedTotal ?? report.totalCommission)}</strong>`)}
+        ${detailRow("Piutang teknisi (saldo minus)", `<strong style="color:#C3492F;">${rupiah(report.receivableTotal ?? 0)}</strong>`)}
+        ${detailRow("Pemulihan piutang bulan ini (setoran)", `<strong style="color:#2C8F63;">${rupiah(report.recoveryThisMonth ?? 0)}</strong>`)}
+        ${detailRow("Piutang belum lunas (belum tertutup setoran)", `<strong style="color:#C3492F;">${rupiah(report.piutangTerbuka ?? report.receivableTotal ?? 0)}</strong>`)}
       </table>
       <p>Laporan lengkap per pesanan (18 kolom) terlampir dalam bentuk CSV (<strong>${report.filename}</strong>) — siap dibuka di Excel/Google Sheets.</p>
     </div>
@@ -433,8 +438,81 @@ export async function sendSignupVerificationEmail({ to, actionLink, siteUrl, ber
 }
 
 /**
+ * Ke pengguna: tautan konfirmasi permintaan HAPUS AKUN (jalur web /hapus-akun).
+ *
+ * Halaman itu bisa dibuka siapa saja, jadi permintaan baru dianggap sah setelah
+ * tautan ini diklik oleh pemilik kotak masuknya (lihat src/lib/account-deletion.js).
+ * Bila `sudahDiminta` true, isinya pengingat — bukan tautan baru.
+ *
+ * @param {object} o
+ * @param {string} o.to
+ * @param {string|null} [o.actionLink] tautan konfirmasi
+ * @param {string} [o.siteUrl]
+ * @param {number} [o.berlakuJam]
+ * @param {boolean} [o.sudahDiminta]
+ */
+export async function sendAccountDeletionConfirmEmail({
+  to,
+  actionLink = null,
+  siteUrl,
+  berlakuJam = 24,
+  sudahDiminta = false,
+}) {
+  const html = permintaanHapusHtml({ actionLink, email: to, siteUrl, berlakuJam, sudahDiminta });
+  return sendMail({
+    to,
+    subject: sudahDiminta
+      ? "Permintaan hapus akunmu sedang diproses — Fixify"
+      : "Konfirmasi permintaan hapus akun — Fixify",
+    html,
+  });
+}
+
+/**
+ * Ke pengguna (alamat ASLI, dikirim sebelum tombstone dipasang): bukti bahwa
+ * penghapusan sudah dijalankan, beserta apa yang masih disimpan dan mengapa.
+ */
+export async function sendAccountDeletionDoneEmail({ to, siteUrl }) {
+  const html = hapusAkunSelesaiHtml({ email: to, siteUrl });
+  return sendMail({ to, subject: "Akun Fixify-mu sudah dihapus", html });
+}
+
+/**
+ * Ke admin (atau admin yang memilih peristiwa ini di tab "Notif Email Admin"):
+ * ada permintaan hapus akun yang menunggu dijalankan. Dikirim dari jalur ANTREAN
+ * (src/lib/admin-email.js, event `account_deletion`) supaya jalur aplikasi dan
+ * web memakai satu pintu, dan isinya dibaca dari database — bukan dari payload
+ * klien.
+ */
+export async function sendAdminAccountDeletionEmail(adminEmails, req = {}) {
+  const html = wrapper(
+    "Ada permintaan hapus akun",
+    `
+      <p>Seorang pengguna meminta akunnya dihapus. Jalankan lewat alat operasional
+      (<code>npm run hapus-akun -- --eksekusi=&lt;id&gt;</code>) setelah memastikan tidak ada
+      pesanan/saldo yang menggantung.</p>
+      <table style="margin:16px 0;">
+        ${detailRow("Surel", escHtml(req.email))}
+        ${detailRow("Sumber", req.sumber === "web" ? "Halaman web /hapus-akun" : "Aplikasi Android")}
+        ${detailRow("Peran akun", escHtml(req.role || "-"))}
+        ${detailRow("Diminta", escHtml(req.created_at || "-"))}
+        ${req.alasan ? detailRow("Alasan pengguna", escHtml(req.alasan)) : ""}
+        ${detailRow("ID permintaan", `<code>${escHtml(req.id)}</code>`)}
+      </table>
+      <p>Batas janji ke pengguna: <strong>7 hari</strong>. Daftar lengkap:
+      <code>npm run hapus-akun -- --daftar</code>.</p>
+    `
+  );
+
+  return sendMail({ to: adminEmails, subject: `Permintaan hapus akun: ${req.email} — Fixify`, html });
+}
+
+/**
  * Ke teknisi: pengingat setor saldo karena saldo 0/minus (komisi melebihi
- * setoran). Dipicu admin dari daftar "Saldo Aktif".
+ * setoran). Dipicu admin dari daftar "Saldo Aktif", ATAU otomatis oleh cron
+ * pengingat piutang (/api/cron/piutang-reminder) yang mengisi `info.piutang` +
+ * `info.umurHari` — supaya teknisi yang piutangnya sudah menua tahu alasannya,
+ * bukan hanya bahwa saldonya kosong.
  */
 export async function sendTechnicianBalanceReminderEmail(technicianEmail, info = {}) {
   const saldo = Number(info.balance ?? 0);
@@ -443,13 +521,28 @@ export async function sendTechnicianBalanceReminderEmail(technicianEmail, info =
     kurang > 0
       ? ` — kurang <strong>Rp ${kurang.toLocaleString("id-ID")}</strong> dari komisi/biaya app pesanan selesai.`
       : ".";
+
+  // Baris tambahan KHUSUS pengingat terjadwal: piutang yang sudah lewat ambang
+  // umur (kolom ini tidak diisi pada pengingat manual, jadi tampilannya tetap).
+  const piutang = Math.max(0, Number(info.piutang ?? 0));
+  const umurHari = Math.max(0, Number(info.umurHari ?? 0));
+  const barisPiutang =
+    piutang > 0
+      ? `
+      <p style="padding:12px 14px;background:#FDEDE9;border-radius:10px;">
+        Piutang (kekurangan) yang belum tertutup: <strong>Rp ${piutang.toLocaleString("id-ID")}</strong>
+        ${umurHari > 0 ? `— tertua <strong>${umurHari} hari</strong> sejak pekerjaan selesai.` : "."}
+        Setoranmu menutup kekurangan ini lebih dulu; sisanya baru menjadi saldo aktif.
+      </p>`
+      : "";
+
   const html = wrapper(
     "Saldo kamu perlu ditindak",
     `
       <p>Halo ${escHtml(info.name || "Teknisi")},</p>
       <p>
         Saldo aktifmu saat ini <strong>Rp ${Math.max(0, saldo).toLocaleString("id-ID")}</strong>${kekurangan}
-      </p>
+      </p>${barisPiutang}
       <p>
         Agar kamu tetap bisa menyelesaikan pekerjaan dan menarik saldo, ajukan <strong>Setor Saldo</strong>
         lewat halaman Tugas Saya (unggah bukti transfer). Setelah admin verifikasi, saldo bertambah otomatis.
@@ -459,7 +552,12 @@ export async function sendTechnicianBalanceReminderEmail(technicianEmail, info =
 
   return sendMail({
     to: technicianEmail,
-    subject: saldo < 0 ? "Saldo kamu minus — segera setor saldo" : "Saldo kamu kosong — setor agar bisa lanjut",
+    subject:
+      piutang > 0
+        ? `Piutangmu jatuh tempo — setor Rp ${piutang.toLocaleString("id-ID")}`
+        : saldo < 0
+          ? "Saldo kamu minus — segera setor saldo"
+          : "Saldo kamu kosong — setor agar bisa lanjut",
     html,
   });
 }

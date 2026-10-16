@@ -26,6 +26,9 @@ export default function Footer() {
       <div className="max-w-6xl mx-auto mt-5 pt-4 border-t border-line flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-ink-soft">
         <Link href="/privasi" className="hover:text-brand">Kebijakan Privasi</Link>
         <Link href="/syarat" className="hover:text-brand">Syarat &amp; Ketentuan</Link>
+        {/* Jalur hapus akun harus bisa ditemukan dari mana saja — wajib ada
+            menurut kebijakan Google Play; dijaga npm run verify:legal-links. */}
+        <Link href="/hapus-akun" className="hover:text-brand">Hapus Akun</Link>
         <span>Berlaku untuk situs dan aplikasi Android Fixify.</span>
       </div>
     </footer>

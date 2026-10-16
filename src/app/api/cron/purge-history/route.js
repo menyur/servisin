@@ -50,6 +50,30 @@ export async function GET(request) {
     );
   }
 
+  // Sapuan kedua: berbagi posisi "teknisi menuju lokasi" yang sudah lewat masa
+  // berlakunya (supabase/migrate-technician-trip-share.sql). Baris itu memang
+  // ephemeral — trigger sudah menghapusnya saat pesanan selesai — tetapi
+  // perjalanan yang ditinggalkan tanpa menekan "Saya sudah tiba" hanya bisa
+  // dibersihkan dari sini. Kegagalannya TIDAK boleh menggagalkan pembersihan
+  // retensi utama, jadi hasilnya dilaporkan terpisah.
+  let tripSharesDeleted = 0;
+  let tripSharesError = null;
+  try {
+    const { data: trip, error: tripErr } = await supabase.rpc("purge_expired_trip_shares");
+    if (tripErr) {
+      const missingTrip = /purge_expired_trip_shares|does not exist|schema cache/i.test(
+        tripErr.message || ""
+      );
+      tripSharesError = missingTrip
+        ? "Fungsi belum ada — jalankan supabase/migrate-technician-trip-share.sql."
+        : tripErr.message;
+    } else {
+      tripSharesDeleted = Number(trip?.deleted ?? 0);
+    }
+  } catch (e) {
+    tripSharesError = e?.message ?? String(e);
+  }
+
   // Buang objek lampiran laporan yang barisnya sudah dihapus (bucket privat).
   const paths = Array.isArray(data?.report_attachments) ? data.report_attachments.filter(Boolean) : [];
   let attachmentsRemoved = 0;
@@ -68,6 +92,8 @@ export async function GET(request) {
     reportsDeleted: data?.reports_deleted ?? 0,
     bookingsHidden: data?.bookings_marked ?? 0,
     attachmentsRemoved,
+    tripSharesDeleted,
     ...(attachmentsError ? { attachmentsError } : {}),
+    ...(tripSharesError ? { tripSharesError } : {}),
   });
 }

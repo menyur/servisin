@@ -159,6 +159,14 @@ export async function kirimTautanReset({
         error?.code ?? "-",
         error?.message ?? "tanpa action_link"
       );
+      // Bebaskan jeda saat kegagalannya dari SISI KAMI (500/limit/tautan kosong):
+      // tidak ada email yang dikirim, jadi menyuruh pengguna menunggu 60 detik
+      // adalah kebohongan yang membuat "coba lagi" ikut gagal — persis keluhan
+      // "lupa password tidak jalan" padahal pesannya cuma "tunggu sebentar".
+      // Kasus akun-tidak-ada SENGAJA tidak dibebaskan: jeda yang sama untuk
+      // alamat ada maupun tidak itulah yang menjaga endpoint dari enumerasi
+      // (diuji scripts/verify-reset-endpoint.mjs).
+      riwayat.delete(alamat);
     }
     return {
       ok: true,

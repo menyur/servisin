@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../account_deletion.dart';
 import '../api.dart';
 import '../models.dart';
 import '../push_service.dart';
@@ -8,7 +9,14 @@ import 'common.dart';
 import 'auth_widgets.dart';
 
 class ProfileScreen extends StatefulWidget {
-  const ProfileScreen({super.key});
+  /// Seam uji: sumber profil (default `Api.myProfile`).
+  final Future<Profile?> Function()? loadProfile;
+
+  /// Seam uji: sumber ringkasan penilaian teknisi (default
+  /// `Api.myRatingSummary`). Dipanggil HANYA untuk peran teknisi.
+  final Future<RatingSummary?> Function()? loadRating;
+
+  const ProfileScreen({super.key, this.loadProfile, this.loadRating});
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -16,6 +24,12 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   Profile? _profile;
+
+  /// Ringkasan penilaian teknisi. Null = belum dibaca / gagal dibaca / bukan
+  /// teknisi — dalam semua kasus itu lencananya tidak ditampilkan.
+  RatingSummary? _rating;
+  /// Status permintaan hapus akun (jalur dalam aplikasi, syarat Google Play).
+  AccountDeletionState _hapus = AccountDeletionState.kosong;
   bool _loading = true;
   bool _saving = false;
   bool _uploadingAvatar = false;
@@ -41,10 +55,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _load() async {
-    final p = await Api.myProfile().catchError((_) => null);
+    Profile? p;
+    try {
+      p = await (widget.loadProfile?.call() ?? Api.myProfile());
+    } catch (_) {
+      p = null; // gagal baca profil → layar tetap tampil, hanya tanpa data
+    }
+    // Server memutuskan boleh/tidaknya penghapusan; di sini hanya ditampilkan.
+    final hapus = await Api.myAccountDeletion();
+    // Penilaian hanya relevan untuk teknisi, dan baru diambil setelah perannya
+    // diketahui — pelanggan tidak perlu satu query tambahan. Gagal baca → null,
+    // layar menyembunyikan lencananya (lihat Api.myRatingSummary).
+    RatingSummary? rating;
+    if (p?.role == 'technician') {
+      try {
+        rating = await (widget.loadRating?.call() ?? Api.myRatingSummary());
+      } catch (_) {
+        rating = null;
+      }
+    }
     if (!mounted) return;
     setState(() {
       _profile = p;
+      _hapus = hapus;
+      _rating = rating;
       _loading = false;
     });
     if (p != null) {
@@ -92,6 +126,81 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _saving = false);
     }
+  }
+
+  /// Ajukan penghapusan akun dari dalam aplikasi.
+  ///
+  /// Ada dua cabang yang sengaja dipisah supaya tidak ada tombol pasti-gagal
+  /// (pola yang sama dengan tombol "Batalkan" di detail pesanan): server sudah
+  /// menilai kelayakan lewat `hapus_akun_blokir`, dan bila belum layak pengguna
+  /// membaca alasannya, bukan pesan kesalahan umum.
+  Future<void> _hapusAkun() async {
+    if (!_hapus.bolehAjukan) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: Text(_hapus.menungguOperator ? 'Permintaan sedang diproses' : 'Belum bisa dihapus'),
+          content: Text(
+            _hapus.menungguOperator
+                ? 'Permintaan hapus akunmu sudah masuk antrean kami (${hapusAkunStatusLabel(_hapus.status)}). '
+                    'Kamu bisa membatalkannya selama belum dijalankan.'
+                : _hapus.alasanBlokir,
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Mengerti')),
+          ],
+        ),
+      );
+      return;
+    }
+
+    final alasan = await showDialog<String>(
+      context: context,
+      builder: (_) => const _HapusAkunDialog(),
+    );
+    if (alasan == null || !mounted) return; // dibatalkan
+
+    try {
+      final hasil = await Api.requestAccountDeletion(alasan);
+      if (!mounted) return;
+      if (!hasil.ok) {
+        showSnack(context, hasil.error ?? 'Permintaan tidak bisa diajukan.', error: true);
+        return;
+      }
+      setState(() => _hapus = hasil.state);
+      showSnack(context, 'Permintaan hapus akun terkirim. Kami proses paling lambat 7 hari.');
+    } catch (e) {
+      if (mounted) showSnackError(context, e, 'Gagal mengajukan penghapusan akun.');
+    }
+  }
+
+  /// Batalkan permintaan hapus akun yang belum dijalankan operator.
+  Future<void> _batalkanHapus() async {
+    final ya = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Batalkan permintaan hapus akun?'),
+        content: const Text('Akunmu tetap aktif dan tidak akan dihapus.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Tidak jadi')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Batalkan')),
+        ],
+      ),
+    );
+    if (ya != true || !mounted) return;
+
+    final hasil = await Api.cancelAccountDeletion();
+    if (!mounted) return;
+    if (!hasil.ok) {
+      showSnack(context, hasil.error ?? 'Gagal membatalkan permintaan.', error: true);
+      return;
+    }
+    final terbaru = await Api.myAccountDeletion();
+    if (!mounted) return;
+    setState(() => _hapus = terbaru);
+    showSnack(context, 'Permintaan hapus akun dibatalkan.');
   }
 
   Future<void> _logout() async {
@@ -232,6 +341,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     Text(_profile?.email ?? '',
                         style: TextStyle(
                             fontSize: 12.5, color: Colors.white.withValues(alpha: 0.85))),
+                    // Reputasi teknisi tepat di bawah identitasnya: jumlah ulasan
+                    // + rata-rata rating. Hanya untuk teknisi, dan hanya bila
+                    // datanya benar-benar terbaca (gagal baca → tidak ditampilkan,
+                    // bukan "Belum ada rating" yang bisa menyesatkan).
+                    if (_profile?.role == 'technician' && _rating != null) ...[
+                      const SizedBox(height: 10),
+                      TechRatingPill(ringkasan: _rating!),
+                    ],
                     const SizedBox(height: 20),
                   ]),
                 ),
@@ -364,6 +481,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       subtitle: 'Login email & Google aktif',
                     ),
                     const SizedBox(height: 10),
+                    // Jalur hapus akun (syarat Google Play). Selalu terlihat —
+                    // hanya tindakannya yang menyesuaikan keadaan: ajukan,
+                    // batalkan, atau jelaskan apa yang masih menahan.
+                    _MenuTile(
+                      icon: _hapus.menungguOperator
+                          ? Icons.undo_rounded
+                          : Icons.delete_forever_outlined,
+                      color: AppColors.coral,
+                      title: _hapus.menungguOperator ? 'Batalkan hapus akun' : 'Hapus akun',
+                      subtitle: _hapus.menungguOperator
+                          ? hapusAkunStatusLabel(_hapus.status)
+                          : (_hapus.blokir != null
+                              ? hapusAkunBlokirPesan(_hapus.blokir)
+                              : 'Ajukan penghapusan akun & data pribadimu'),
+                      onTap: _hapus.menungguOperator ? _batalkanHapus : _hapusAkun,
+                    ),
+                    const SizedBox(height: 10),
                     _MenuTile(
                       icon: Icons.logout_rounded,
                       color: AppColors.coral,
@@ -377,6 +511,128 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
     );
   }
+}
+
+/// Lencana ringkasan penilaian teknisi di header Profil: bintang + rata-rata +
+/// jumlah ulasan, mis. "4,8 · 12 ulasan" (atau "Belum ada rating").
+///
+/// Dibuat publik supaya bisa ditemukan & diperiksa tes widget; gayanya mengikuti
+/// chip putih transparan di header gradien agar menyatu dengan avatar/nama.
+/// Tanpa penilaian tetap ditampilkan (dengan bintang redup) — teknisi baru perlu
+/// tahu keadaan sebenarnya, bukan lencana yang menghilang tanpa penjelasan.
+class TechRatingPill extends StatelessWidget {
+  final RatingSummary ringkasan;
+
+  const TechRatingPill({super.key, required this.ringkasan});
+
+  @override
+  Widget build(BuildContext context) {
+    final ada = ringkasan.adaPenilaian;
+    return Semantics(
+      label: ratingSummarySemantics(ringkasan),
+      excludeSemantics: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: ada ? 0.22 : 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.45)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.star_rounded,
+              size: 17, color: ada ? AppColors.amber : Colors.white.withValues(alpha: 0.6)),
+          const SizedBox(width: 6),
+          Text(
+            ratingSummaryLabel(ringkasan),
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              color: Colors.white.withValues(alpha: ada ? 1 : 0.85),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// Dialog konfirmasi hapus akun: daftar akibat + alasan opsional + ketik HAPUS.
+///
+/// Penghapusan tidak bisa dibatalkan, jadi sengaja butuh dua sadar: membaca
+/// akibatnya, lalu mengetik kata konfirmasi. Tombolnya tetap satu ketukan dari
+/// halaman Profil (`_MenuTile` di atas), sesuai syarat Google Play bahwa
+/// jalurnya harus mudah ditemukan.
+class _HapusAkunDialog extends StatefulWidget {
+  const _HapusAkunDialog();
+
+  @override
+  State<_HapusAkunDialog> createState() => _HapusAkunDialogState();
+}
+
+class _HapusAkunDialogState extends State<_HapusAkunDialog> {
+  final _ketik = TextEditingController();
+  final _alasan = TextEditingController();
+  bool _sah = false;
+
+  @override
+  void dispose() {
+    _ketik.dispose();
+    _alasan.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Hapus akun Fixify?'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Permintaan ini diproses paling lambat 7 hari. Yang dihapus: akun & akses masuk, '
+                'nama, nomor HP, foto profil, alamat, foto KTP, percakapan, lampiran, dan laporan.',
+                style: TextStyle(fontSize: 13, height: 1.5),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Yang tetap tersimpan tanpa identitasmu: riwayat pesanan (catatan audit) serta saldo, '
+                'komisi, dan penilaian (pembukuan).',
+                style: TextStyle(fontSize: 13, height: 1.5, color: AppColors.inkSoft),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _alasan,
+                maxLength: 300,
+                minLines: 1,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Alasan (opsional)',
+                  counterText: '',
+                ),
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _ketik,
+                textCapitalization: TextCapitalization.characters,
+                onChanged: (v) => setState(() => _sah = konfirmasiKetikSah(v)),
+                decoration: const InputDecoration(
+                  labelText: 'Ketik HAPUS untuk mengonfirmasi',
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+          FilledButton(
+            onPressed: _sah ? () => Navigator.pop(context, rapikanAlasan(_alasan.text)) : null,
+            style: FilledButton.styleFrom(backgroundColor: AppColors.coral),
+            child: const Text('Ajukan hapus akun'),
+          ),
+        ],
+      );
 }
 
 class _MenuTile extends StatelessWidget {

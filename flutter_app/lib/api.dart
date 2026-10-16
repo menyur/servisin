@@ -7,9 +7,11 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'account_deletion.dart';
 import 'config.dart';
 import 'models.dart';
 import 'register_http.dart';
+import 'report_seen.dart';
 import 'reset_http.dart';
 
 /// Fungsi cleanup langganan realtime chat (dipanggil di dispose).
@@ -270,6 +272,32 @@ class Api {
     return row == null ? null : Profile.fromMap(row);
   }
 
+  /// Ringkasan penilaian (rating) teknisi untuk dirinya sendiri — jumlah
+  /// ulasan + rata-ratanya.
+  ///
+  /// Policy `reviews readable by everyone` (supabase/migrate-reviews.sql)
+  /// membolehkan SELECT untuk siapa pun, jadi teknisi bisa membaca penilaiannya
+  /// sendiri tanpa RPC security definer. Hitungannya memakai aturan yang sama
+  /// dengan panel admin web (agregat `rating` per teknisi di
+  /// src/app/actions/admin.js).
+  ///
+  /// Mengembalikan null bila TIDAK BISA dibaca (tidak ada sesi, tabel belum
+  /// ada, offline). Sengaja dibedakan dari [RatingSummary.kosong] (0 ulasan):
+  /// "Belum ada rating" adalah pernyataan tentang teknisi, sedangkan kegagalan
+  /// baca bukan — layar harus menyembunyikan lencananya, bukan berbohong.
+  static Future<RatingSummary?> myRatingSummary() async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) return null;
+    try {
+      final rows = await db.from('reviews').select('rating').eq('technician_id', uid);
+      return summarizeRatings(
+        rows.map<int>((m) => (m['rating'] as num?)?.toInt() ?? 0),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> updateMyProfile(
       {String? name, String? phone, String? address, String? avatarUrl, String? serviceArea}) async {
     final uid = db.auth.currentUser!.id;
@@ -296,6 +324,74 @@ class Api {
     final url = db.storage.from('profile-media').getPublicUrl(path);
     await updateMyProfile(avatarUrl: url);
     return url;
+  }
+
+  // ============ hapus akun (syarat Google Play) ============
+
+  /// Status permintaan hapus akun milik pengguna + alasan yang menahannya.
+  ///
+  /// Server yang memutuskan kelayakannya (fungsi `hapus_akun_blokir` di
+  /// supabase/migrate-account-deletion.sql) — aplikasi hanya menampilkan, supaya
+  /// aturannya tidak terbelah dua antara klien dan database.
+  static Future<AccountDeletionState> myAccountDeletion() async {
+    try {
+      final res = await db.rpc('my_account_deletion');
+      return AccountDeletionState.fromRpc(_asMap(res));
+    } catch (_) {
+      return AccountDeletionState.kosong;
+    }
+  }
+
+  /// Ajukan penghapusan akun dari dalam aplikasi.
+  ///
+  /// Identitas sudah terbukti oleh sesi login, jadi permintaan langsung masuk
+  /// antrean operator (berbeda dari jalur web yang perlu konfirmasi email).
+  static Future<({bool ok, String? error, AccountDeletionState state})>
+      requestAccountDeletion(String? reason) async {
+    final alasan = rapikanAlasan(reason);
+    try {
+      final res = await db.rpc('request_account_deletion', params: {
+        if (alasan.isNotEmpty) 'p_alasan': alasan,
+      });
+      final m = _asMap(res);
+      if (m['ok'] != true) {
+        return (
+          ok: false,
+          error: hapusAkunBlokirPesan(m['error'] as String?),
+          state: AccountDeletionState.kosong,
+        );
+      }
+      return (ok: true, error: null, state: await myAccountDeletion());
+    } catch (e) {
+      return (ok: false, error: _pesanHapusAkunGagal(e), state: AccountDeletionState.kosong);
+    }
+  }
+
+  /// Batalkan permintaan hapus akun yang belum dijalankan operator.
+  static Future<({bool ok, String? error})> cancelAccountDeletion() async {
+    try {
+      final res = await db.rpc('cancel_account_deletion');
+      final m = _asMap(res);
+      if (m['ok'] != true) {
+        return (ok: false, error: 'Tidak ada permintaan hapus akun yang bisa dibatalkan.');
+      }
+      return (ok: true, error: null);
+    } catch (e) {
+      return (ok: false, error: _pesanHapusAkunGagal(e));
+    }
+  }
+
+  /// Peta galat RPC hapus akun → kalimat untuk pengguna.
+  ///
+  /// Migrasi yang belum dijalankan muncul sebagai "function ... does not exist"
+  /// (PostgREST) — itu BUKAN kesalahan pengguna, jadi dikatakan apa adanya dan
+  /// disebut berkas migrasinya, bukan "terjadi kesalahan".
+  static String _pesanHapusAkunGagal(Object e) {
+    final s = e.toString();
+    if (s.contains('does not exist') || s.contains('Could not find the function')) {
+      return 'Fitur hapus akun belum aktif di server. Coba lagi setelah operator menyelesaikan penyiapannya.';
+    }
+    return 'Gagal menghubungi server. Periksa koneksimu lalu coba lagi.';
   }
 
   // ============ chat pelanggan ↔ teknisi ============
@@ -360,6 +456,64 @@ class Api {
 
   /// Berlangganan pesan baru secara realtime. Mengembalikan fungsi
   /// cleanup untuk membatalkan channel (dipanggil di dispose).
+  /// Peta id → status laporan MILIK pengguna ini (query ringan: hanya dua
+  /// kolom). Dipakai badge tab Laporan: angka dihitung dari selisih peta ini
+  /// dengan snapshot "terakhir dilihat" milik perangkat (lib/report_seen.dart).
+  static Future<Map<String, String>> fetchMyReportStatuses() async {
+    final uid = db.auth.currentUser!.id;
+    final rows = await db.from('reports').select('id,status').eq('author_id', uid);
+    return {
+      for (final r in rows)
+        (r['id'] as String): (r['status'] as String?) ?? kReportStatusOpen,
+    };
+  }
+
+  /// Realtime UPDATE laporan milik [uid] — admin menanggapi (status/catatan).
+  ///
+  /// Sama seperti laporan pesanan: tabel `reports` sudah ada di publication
+  /// `supabase_realtime` (migrate-realtime-admin.sql) dan policy "author can
+  /// view own reports" membuat RLS meneruskan event ini ke penulisnya.
+  /// Hanya admin yang boleh meng-update reports, jadi tidak ada event
+  /// pantulan aksi pengguna sendiri.
+  static ChatUnsubscribe subscribeReportUpdates(
+      String uid, void Function(ReportUpdate) onUpdate) {
+    final channel = db.channel('reports-$uid');
+    var active = true;
+
+    void handle(PostgresChangePayload payload) {
+      if (!active) return;
+      final row = payload.newRecord;
+      final id = row['id'] as String?;
+      if (id == null || id.isEmpty) return;
+      final old = payload.oldRecord;
+      onUpdate(ReportUpdate(
+        id: id,
+        title: (row['title'] as String?) ?? (old['title'] as String?) ?? '',
+        status: (row['status'] as String?) ?? kReportStatusOpen,
+        prevStatus: old['status'] as String?,
+        adminNote: row['admin_note'] as String?,
+      ));
+    }
+
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.update,
+      schema: 'public',
+      table: 'reports',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'author_id',
+        value: uid,
+      ),
+      callback: handle,
+    );
+    channel.subscribe();
+    return () async {
+      if (!active) return;
+      active = false;
+      await db.removeChannel(channel);
+    };
+  }
+
   static Future<ChatUnsubscribe> subscribeChat(
       String bookingId, void Function(ChatMessage) onMessage) async {
     final channel = db.channel('chat-$bookingId');
@@ -493,12 +647,20 @@ class Api {
   /// Setelah sukses, server web diberi tahu (fire-and-forget) agar pelanggan
   /// menerima push "teknisi ditugaskan": RPC ini hanya menulis baris bookings,
   /// sedangkan kunci VAPID/FCM ada di server web.
-  static Future<({bool ok, String? error})> claimJob(String bookingId) async {
+  ///
+  /// [kode] adalah alasan terstruktur dari server — dipakai UI supaya tidak
+  /// mencocokkan teks pesan (yang bisa berubah kapan saja). Yang sudah dipakai:
+  ///   * `saldo_habis` — saldo 0/minus, pekerjaan baru ditolak sampai diisi
+  ///     (supabase/migrate-claim-min-balance.sql); layar menawarkan isi saldo;
+  ///   * `tidak_tersedia` — sudah diambil teknisi lain / di luar keahlian;
+  ///   * `bukan_teknisi_aktif` — belum disetujui admin.
+  static Future<({bool ok, String? error, String? kode})> claimJob(
+      String bookingId) async {
     final res = await db.rpc('claim_job', params: {'p_booking': bookingId});
     final m = (res as Map).cast<String, dynamic>();
     final ok = m['ok'] == true;
     if (ok) unawaited(notifyBookingStatus(bookingId, 'technician_assigned'));
-    return (ok: ok, error: m['error'] as String?);
+    return (ok: ok, error: m['error'] as String?, kode: m['kode'] as String?);
   }
 
   /// Pekerjaan yang ditugaskan ke saya (teknisi).
@@ -838,6 +1000,140 @@ class Api {
     }
   }
 
+  /// Posisi teknisi yang sedang MENUJU LOKASI untuk pesanan ini — hasil RPC
+  /// `booking_technician_position` (supabase/migrate-technician-trip-share.sql).
+  ///
+  /// Berbeda dari [bookingTechnicianInfo] (yang sengaja hanya memberi jarak),
+  /// RPC ini mengembalikan koordinat — tetapi server menutupnya dengan empat
+  /// syarat: pesanan ini milik pemanggil, teknisi sudah ditugaskan, pesanan
+  /// masih aktif, DAN teknisi sudah menekan "Berangkat" dengan posisi yang
+  /// belum basi. Kegagalan apa pun (jaringan, migrasi belum jalan) jatuh ke
+  /// [BookingTechPosition.kosong] → kartu peta tidak ditampilkan.
+  static Future<BookingTechPosition> bookingTechnicianPosition(
+      String bookingId) async {
+    try {
+      final res = await db
+          .rpc('booking_technician_position', params: {'p_booking': bookingId});
+      return BookingTechPosition.fromRpc(_asMap(res));
+    } catch (_) {
+      return BookingTechPosition.kosong;
+    }
+  }
+
+  /// Teknisi MULAI membagikan posisinya untuk pesanan ini (tombol "Berangkat").
+  /// Server membatasi: hanya teknisi yang ditugaskan, hanya pesanan aktif, dan
+  /// hanya selama 90 menit. Sekali tekan, pelanggan pemilik pesanan mulai bisa
+  /// melihat posisinya — jadi jangan panggil ini tanpa aksi sadar dari teknisi.
+  static Future<({bool ok, String? error, DateTime? expiresAt})> startTripShare(
+      String bookingId) async {
+    try {
+      final m = _asMap(await db.rpc('start_trip_share', params: {
+        'p_booking': bookingId,
+      }));
+      if (m['ok'] != true) {
+        return (
+          ok: false,
+          error: (m['error'] as String?) ?? 'Gagal memulai berbagi lokasi.',
+          expiresAt: null,
+        );
+      }
+      final exp = m['expires_at'] as String?;
+      return (
+        ok: true,
+        error: null,
+        expiresAt: exp == null ? null : DateTime.tryParse(exp)?.toLocal(),
+      );
+    } catch (e) {
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan, expiresAt: null);
+      }
+      return (
+        ok: false,
+        error: 'Gagal memulai berbagi lokasi. Periksa koneksi lalu coba lagi.',
+        expiresAt: null,
+      );
+    }
+  }
+
+  /// Kirim posisi terkini selama perjalanan.
+  ///
+  /// Jawabannya membawa tiga hal yang menentukan perilaku aplikasi, bukan
+  /// sekadar "berhasil":
+  ///   * [arrived] — server MENGHENTIKAN perjalanan karena teknisi sudah dalam
+  ///     150 m dari titik pesanan. Klien harus berhenti mengirim, dan tidak
+  ///     perlu menekan "Saya sudah tiba".
+  ///   * [near] — ≤ 1 km: saatnya memberi tahu pelanggan "hampir tiba".
+  ///   * [distanceM] — berapa meter lagi, untuk ditampilkan ke teknisi.
+  /// Gagal (`ok == false`) berarti perjalanannya sudah tidak aktif — pemanggil
+  /// harus berhenti, bukan mengulangi tanpa henti.
+  static Future<
+      ({bool ok, String? error, bool arrived, bool near, int? distanceM})>
+      pushTripPosition(String bookingId, double lat, double lng) async {
+    try {
+      final m = _asMap(await db.rpc('push_trip_position', params: {
+        'p_booking': bookingId,
+        'p_lat': lat,
+        'p_lng': lng,
+      }));
+      return (
+        ok: m['ok'] == true,
+        error: m['ok'] == true ? null : (m['error'] as String?),
+        arrived: m['arrived'] == true,
+        near: m['near'] == true,
+        distanceM: (m['distance_m'] as num?)?.toInt(),
+      );
+    } catch (e) {
+      return (
+        ok: false,
+        error: _fungsiBelumAda(e)
+            ? _pesanMigrasiBelumJalan
+            : 'Gagal mengirim posisi. Periksa koneksi lalu coba lagi.',
+        arrived: false,
+        near: false,
+        distanceM: null,
+      );
+    }
+  }
+
+  /// Beri tahu PELANGGAN bahwa teknisi hampir tiba (≤1 km).
+  ///
+  /// Diverifikasi ulang server: hanya teknisi yang ditugaskan, dan hanya bila
+  /// jarak nyatanya memang dekat — notifikasi ini tidak bisa dikarang klien.
+  /// Fire-and-forget: gagal kirim tidak pernah mengganggu perjalanan.
+  static Future<void> notifyTechnicianNear(String bookingId) async {
+    await _notifyWeb('/api/notify-technician-near', {'bookingId': bookingId});
+  }
+
+  /// Teknisi berhenti membagikan posisinya (tombol "Saya sudah tiba"). Barisnya
+  /// DIHAPUS server — bukan ditandai berhenti — sehingga tidak ada riwayat.
+  static Future<({bool ok, String? error})> endTripShare(String bookingId) async {
+    return _rpcAksi(
+      'end_trip_share',
+      {'p_booking': bookingId},
+      gagal: 'Gagal menghentikan berbagi lokasi.',
+    );
+  }
+
+  /// Pemanggil seragam untuk RPC aksi ber-return `{ok, error}`: memetakan
+  /// "fungsi belum ada" (migrasi belum dijalankan) ke pesan yang bisa
+  /// ditindaklanjuti, bukan kegagalan jaringan yang membingungkan.
+  static Future<({bool ok, String? error})> _rpcAksi(
+    String fn,
+    Map<String, dynamic> params, {
+    required String gagal,
+  }) async {
+    try {
+      final m = _asMap(await db.rpc(fn, params: params));
+      if (m['ok'] != true) {
+        return (ok: false, error: (m['error'] as String?) ?? gagal);
+      }
+      return (ok: true, error: null);
+    } catch (e) {
+      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
+      return (ok: false, error: '$gagal Periksa koneksi lalu coba lagi.');
+    }
+  }
+
   /// Kontak + jarak teknisi untuk pesanan ini.
   ///
   /// Koordinat teknisi tidak pernah dikirim server (aturan privasi di
@@ -1012,6 +1308,10 @@ class Api {
 
   // ============ laporan ============
 
+  /// Riwayat laporan yang ditulis pengguna ini (tab Laporan).
+  /// Laporan yang menargetkan dirinya (mis. keluhan atas pekerjaannya) TIDAK
+  /// ikut di sini — layar ini memang menampilkan tulisan sendiri saja, dan
+  /// badge tab Laporan dihitung dari daftar yang sama.
   static Future<List<Report>> fetchMyReports() async {
     final uid = db.auth.currentUser!.id;
     final rows = await db

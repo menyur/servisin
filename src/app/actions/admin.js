@@ -4,12 +4,32 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail, sendTechnicianBalanceReminderEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
-import { computeSplit, commissionBase, ledgerCommission, ledgerAppFee } from "@/lib/pricing";
+import {
+  computeSplit,
+  commissionBase,
+  ledgerCommission,
+  ledgerAppFee,
+  penagihanPesanan,
+  piutangTerbukaBaris,
+  keranjangUmurPiutang,
+  ambangPiutangHari,
+} from "@/lib/pricing";
+import { bacaPiutangTerbuka } from "@/lib/piutang";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
 import { ADMIN_NOTIFY_EVENTS, ADMIN_NOTIFY_EVENT_KEYS } from "@/lib/admin-notify-events";
+import { createAdminClient } from "@/lib/supabase/admin";
+import {
+  daftarPermintaanHapus,
+  eksekusiHapusAkun,
+  ringkasKelayakan,
+  ringkasEksekusi,
+  KODE_KELAYAKAN_RAGU,
+  RENCANA_HAPUS,
+  JANJI_HARI,
+} from "@/lib/account-deletion";
 
 // Nama ikon yang boleh dipakai layanan baru (validasi server-side).
 const ICON_NAMES = Object.keys(ICONS);
@@ -1611,6 +1631,30 @@ export async function rejectWithdrawalAdmin(withdrawalId, reason) {
 }
 
 /**
+ * Ambil baris ledger saldo beserta kolom piutang (`uncovered_amount`).
+ *
+ * Kolom itu ditambahkan supabase/enforce-full-charge-balance.sql; bila migrasinya
+ * belum dijalankan, permintaan dengan kolom tersebut GAGAL dan seluruh laporan
+ * akan tampak kosong. Karena itu ada fallback: ambil tanpa kolomnya dan anggap
+ * semua potongan tertagih (perilaku laporan lama) — angka piutangnya saja yang
+ * belum terpisah, bukan seluruh ringkasan yang hilang.
+ */
+async function pilihTransaksiSaldo(supabase) {
+  const dasar = (kolom) =>
+    supabase
+      .from("balance_transactions")
+      .select(kolom)
+      .order("created_at", { ascending: false })
+      .limit(5000);
+  const lengkap = "id, type, amount, commission_amount, booking_id, uncovered_amount, created_at";
+  let hasil = await dasar(lengkap);
+  if (hasil.error && /uncovered_amount/.test(hasil.error.message || "")) {
+    hasil = await dasar("id, type, amount, commission_amount, booking_id, created_at");
+  }
+  return hasil;
+}
+
+/**
  * Ringkasan keuangan platform untuk admin:
  * - totalBalance   : jumlah saldo aktif semua teknisi (kewajiban platform)
  * - totalTopup     : semua setor disetujui (uang masuk)
@@ -1630,10 +1674,15 @@ export async function getFinanceSummaryAdmin() {
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  const [txRes, wdRes, balRes] = await Promise.all([
-    supabase.from("balance_transactions").select("type, amount, commission_amount, created_at").order("created_at", { ascending: false }).limit(5000),
+  const [txRes, wdRes, balRes, bkRes, recRes] = await Promise.all([
+    pilihTransaksiSaldo(supabase),
     supabase.from("balance_withdrawals").select("amount, status, created_at").limit(5000),
-    supabase.from("profiles").select("balance").eq("role", "technician"),
+    supabase.from("profiles").select("id, balance, commission_rate").eq("role", "technician"),
+    supabase.from("bookings").select("id, total_price, app_fee, technician_id").eq("status", "completed").limit(5000),
+    // Pelunasan piutang (supabase/migrate-piutang-recovery.sql). Bila migrasinya
+    // belum dijalankan, laporan tetap terbuka — piutangnya cuma belum terpasang
+    // ke setoran yang menutupnya (`migrasiJalan: false`).
+    supabase.from("balance_recoveries").select("earning_tx_id, amount, kind, created_at").limit(5000),
   ]);
 
   if (txRes.error && /relation|does not exist/i.test(txRes.error.message || "")) {
@@ -1641,8 +1690,10 @@ export async function getFinanceSummaryAdmin() {
   }
 
   const txs = txRes.data || [];
+  const recs = recRes.error ? [] : recRes.data || [];
   const wds = wdRes.data || [];
   const balances = balRes.data || [];
+  const selesai = bkRes.error ? [] : bkRes.data || [];
 
   const sum = (arr, f = (x) => x) => arr.reduce((s, x) => s + Number(f(x) || 0), 0);
   const inMonth = (row) => new Date(row.created_at) >= startOfMonth;
@@ -1661,6 +1712,90 @@ export async function getFinanceSummaryAdmin() {
   const monthCommission = sum(monthEarnings, ledgerCommission);
   const monthAppFee = sum(monthEarnings, ledgerAppFee);
 
+  // ---- Laporan TIGA KOLOM (kebijakan potongan penuh — docs/balance-rule.md) ----
+  // ditagihkan  = komisi + biaya app dari pesanan selesai (bookings)
+  // tertagih    = yang benar-benar terpotong dari saldo teknisi (ledger)
+  // piutang     = saldo teknisi minus (ditagih lagi saat teknisi menyetor)
+  // Identitas: ditagihkan = tertagih + piutang.
+  const rateById = new Map(balances.map((b) => [b.id, b.commission_rate]));
+  let chargedCommission = 0;
+  let chargedAppFee = 0;
+  for (const b of selesai) {
+    const p = penagihanPesanan({
+      totalPrice: b.total_price,
+      appFee: b.app_fee,
+      rate: rateById.get(b.technician_id) ?? undefined,
+    });
+    chargedCommission += p.commission;
+    chargedAppFee += p.fee;
+  }
+  const chargedTotal = chargedCommission + chargedAppFee;
+  const receivableTechnician = sum(
+    balances.filter((b) => Number(b.balance) < 0),
+    (b) => Math.abs(Number(b.balance) || 0)
+  );
+  const technicianCredit = sum(
+    balances.filter((b) => Number(b.balance) > 0),
+    (b) => Number(b.balance) || 0
+  );
+  // Potongan dari ledger yang pesanannya sudah tidak ada (data lama dibersihkan)
+  // dilaporkan terpisah supaya "ditagihkan − tertagih" tidak dibaca sebagai
+  // piutang padahal sumbernya baris yatim.
+  const idSelesai = new Set(selesai.map((b) => b.id));
+  const yatim = (t) => !t.booking_id || !idSelesai.has(t.booking_id);
+  const orphanCollected = sum(earnings.filter(yatim), (t) => Math.abs(Number(t.amount) || 0));
+
+  // ---- Laporan TIGA KOLOM (kebijakan potongan penuh — docs/balance-rule.md) ----
+  // ditagihkan        = komisi + biaya app dari pesanan selesai (bookings)
+  // tertagih          = bagian potongan yang tertutup saldo prabayar teknisi
+  // piutang           = bagian yang tidak tertutup → saldo teknisi minus
+  // belum terpotong   = pesanan selesai yang baris potongannya belum ada
+  // Identitas: ditagihkan = tertagih + piutang + belum terpotong.
+  const ledgerTerpakai = sum(earnings.filter((t) => !yatim(t)), (t) => Math.abs(Number(t.amount) || 0));
+  const uncovered = (t) =>
+    Math.min(Math.max(0, Number(t.uncovered_amount) || 0), Math.abs(Number(t.amount) || 0));
+  const uncoveredEligible = sum(earnings.filter((t) => !yatim(t)), uncovered);
+  const uncoveredTotal = sum(earnings, uncovered);
+  const coveredTotal = Math.max(0, ledgerTerpakai - uncoveredEligible);
+  const belumTerpotong = Math.max(0, chargedTotal - ledgerTerpakai);
+
+  // ---- PEMULIHAN PIUTANG (setoran menutup kekurangan lebih dulu) ----
+  // `balance_recoveries` memasangkan setiap setoran dengan baris piutang yang
+  // ditutupnya (FIFO), jadi laporan periode berikutnya bisa menunjukkan uang
+  // yang benar-benar masuk untuk melunasi piutang — bukan sekadar angka minus
+  // di neraca yang menurun.
+  const dilunasiPer = new Map();
+  for (const r of recs) {
+    dilunasiPer.set(r.earning_tx_id, (dilunasiPer.get(r.earning_tx_id) || 0) + (Number(r.amount) || 0));
+  }
+  // Dipisah menurut JENIS pelunasan: 'setoran' = uang masuk sungguhan,
+  // 'penghapusan' = piutang yang dilepas lewat keputusan admin (kerugian
+  // platform). Menggabungkannya akan membuat laporan mengaku ada uang masuk
+  // padahal utangnya hanya dihapuskan (lihat supabase/migrate-piutang-writeoff.sql).
+  const recsSetoran = recs.filter((r) => (r.kind || "setoran") === "setoran");
+  const recsHapus = recs.filter((r) => r.kind === "penghapusan");
+  const recoveryTotal = sum(recsSetoran, (r) => r.amount);
+  const recoveryMonth = sum(recsSetoran.filter(inMonth), (r) => r.amount);
+  const writeoffTotal = sum(recsHapus, (r) => r.amount);
+  const writeoffMonth = sum(recsHapus.filter(inMonth), (r) => r.amount);
+  // Piutang yang MASIH terbuka (belum tertutup setoran) — angka yang benar-benar
+  // masih ditagih, berbeda dari piutang tercatat yang sudah sebagian dilunasi.
+  const piutangTerbuka = sum(earnings, (t) =>
+    piutangTerbukaBaris({ uncovered: uncovered(t), dilunasi: dilunasiPer.get(t.id) || 0 })
+  );
+  // Keranjang UMUR piutang (0-30 / 31-60 / 61-90 / >90 hari) + bagian yang jatuh
+  // tempo: piutang teknisi yang berhenti menua tanpa batas, jadi umurnya harus
+  // terlihat di laporan, bukan hanya nominalnya.
+  const piutangUmur = keranjangUmurPiutang(
+    earnings
+      .map((t) => ({
+        created_at: t.created_at,
+        outstanding: piutangTerbukaBaris({ uncovered: uncovered(t), dilunasi: dilunasiPer.get(t.id) || 0 }),
+      }))
+      .filter((x) => x.outstanding > 0),
+    { hariJatuhTempo: ambangPiutangHari() }
+  );
+
   const summary = {
     totalBalance: sum(balances, (b) => b.balance),
     totalTopup: sum(topups, (t) => t.amount),
@@ -1670,6 +1805,52 @@ export async function getFinanceSummaryAdmin() {
     totalWithdrawn: sum(approvedWd, (w) => w.amount),
     pendingHold: sum(pendingWd, (w) => w.amount),
     techCount: balances.length,
+    // Laporan tiga kolom
+    charged: { commission: chargedCommission, appFee: chargedAppFee, total: chargedTotal, orders: selesai.length },
+    collected: {
+      total: coveredTotal,
+      ledgerCharged: ledgerTerpakai,
+      commission: totalCommission,
+      appFee: totalAppFee,
+    },
+    receivable: {
+      /** seluruh piutang yang tercatat di ledger (semua periode) */
+      uncoveredTotal,
+      /** piutang dari pesanan yang selesai bulan ini saja */
+      periode: sum(monthEarnings, uncovered),
+      /** piutang pada neraca: saldo teknisi minus saat ini */
+      saldoMinus: receivableTechnician,
+      /** pesanan selesai yang baris potongannya belum ada (belum ditagih sama sekali) */
+      belumTerpotong,
+      /** potongan dari baris ledger yang pesanannya sudah dihapus (data lama) */
+      orphanCollected,
+      /** cek identitas: tertagih + piutang + belum terpotong */
+      identitas: coveredTotal + uncoveredEligible + belumTerpotong,
+    },
+    /** Umur piutang terbuka: keranjang + jatuh tempo (lihat docs/balance-rule.md) */
+    piutangUmur,
+    // Pemulihan piutang: setoran yang menutup kekurangan (lihat
+    // supabase/migrate-piutang-recovery.sql + docs/balance-rule.md).
+    recovery: {
+      /** pelunasan tercatat dari setoran (semua periode) */
+      total: recoveryTotal,
+      /** pelunasan pada bulan berjalan — kolom "pemulihan piutang" laporan */
+      periode: recoveryMonth,
+      /** piutang yang masih terbuka (belum tertutup setoran) */
+      terbuka: piutangTerbuka,
+      /** piutang tercatat di ledger (semua baris 'earning') */
+      ledgerTercatat: uncoveredTotal,
+      /** piutang yang DIHAPUSKAN (write-off) — kerugian, bukan uang masuk */
+      writeoffTotal,
+      /** penghapusan pada bulan berjalan */
+      writeoffPeriode: writeoffMonth,
+      /** cek identitas: piutang tercatat = masih terbuka + dilunasi setoran + dihapuskan */
+      identitas: piutangTerbuka + recoveryTotal + writeoffTotal,
+      /** false = migrasi pelunasan belum dijalankan (angka pemulihan = 0) */
+      migrasiJalan: !recRes.error,
+    },
+    technicianCredit,
+    technicianDebt: receivableTechnician,
     month: {
       topup: sum(topups.filter(inMonth), (t) => t.amount),
       commission: monthCommission,
@@ -1739,6 +1920,204 @@ export async function remindTechnicianBalanceAdmin(technicianId) {
   return { ok: true };
 }
 
+/* ===================== UMUR PIUTANG & PENGHAPUSAN ===================== */
+
+/**
+ * Ringkasan umur piutang + daftar pengajuan penghapusan untuk panel admin.
+ * Dipakai tab Saldo Aktif (keranjang umur 0-30/31-60/61-90/>90 + tindakan).
+ */
+export async function getPiutangUmurAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { perTeknisi, error, pelunasanTerbaca } = await bacaPiutangTerbuka(supabase);
+  if (error) return { error };
+
+  const ids = [...perTeknisi.keys()];
+  const { data: profs } = ids.length
+    ? await supabase.from("profiles").select("id, name, email, approval_status").in("id", ids)
+    : { data: [] };
+  const info = new Map((profs || []).map((p) => [p.id, p]));
+
+  const semuaItem = [];
+  const teknisi = ids
+    .map((id) => {
+      const v = perTeknisi.get(id);
+      const p = info.get(id);
+      semuaItem.push(...v.items);
+      return {
+        id,
+        nama: p?.name || p?.email || String(id).slice(0, 8),
+        email: p?.email || null,
+        approval_status: p?.approval_status || null,
+        masihAktif: p?.approval_status === "approved",
+        total: v.umur.total,
+        tertua: v.umur.tertua,
+        baris: v.umur.baris,
+        buckets: v.umur.buckets,
+        jatuhTempo: v.umur.jatuhTempo,
+        items: v.items,
+      };
+    })
+    .sort((a, b) => b.tertua - a.tertua);
+
+  const { data: writeoffs, error: woErr } = await supabase
+    .from("piutang_writeoffs")
+    .select(
+      "id, technician_id, amount, reason, status, oldest_days, technician_active, requested_by, requested_at, decided_by, decided_at, decision_note"
+    )
+    .order("requested_at", { ascending: false })
+    .limit(200);
+
+  return {
+    umur: keranjangUmurPiutang(semuaItem, { hariJatuhTempo: ambangPiutangHari() }),
+    teknisi,
+    writeoffs: writeoffs || [],
+    writeoffsError: woErr
+      ? /relation|does not exist/i.test(woErr.message || "")
+        ? "Tabel penghapusan belum ada — jalankan supabase/migrate-piutang-writeoff.sql dulu."
+        : woErr.message
+      : null,
+    pelunasanTerbaca,
+    ambangHari: ambangPiutangHari(),
+  };
+}
+
+/**
+ * Ajukan penghapusan piutang seorang teknisi (mis. teknisi sudah berhenti).
+ *
+ * Penghapusan TIDAK langsung jalan: pengajuan ini menunggu PERSETUJUAN admin
+ * (decidePiutangWriteoffAdmin) dan alasan wajib diisi — inilah yang membedakan
+ * penghapusan sah dari clamp lama yang menghapus piutang tanpa jejak.
+ */
+export async function requestPiutangWriteoffAdmin(technicianId, reason) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const clean = (reason || "").trim();
+  if (clean.length < 10) {
+    return { error: "Tulis alasan penghapusan (minimal 10 karakter) — alasan ini menjadi jejak audit." };
+  }
+  if (!technicianId) return { error: "Teknisi tidak dikenal." };
+
+  const { perTeknisi, error } = await bacaPiutangTerbuka(supabase);
+  if (error) return { error };
+  const v = perTeknisi.get(technicianId);
+  if (!v || v.umur.total <= 0) return { error: "Teknisi ini tidak punya piutang terbuka untuk dihapuskan." };
+
+  const { data: pending } = await supabase
+    .from("piutang_writeoffs")
+    .select("id")
+    .eq("technician_id", technicianId)
+    .eq("status", "pending")
+    .maybeSingle();
+  if (pending) return { error: "Sudah ada pengajuan penghapusan yang menunggu persetujuan." };
+
+  const { data: prof } = await supabase
+    .from("profiles")
+    .select("name, approval_status")
+    .eq("id", technicianId)
+    .maybeSingle();
+  const masihAktif = prof?.approval_status === "approved";
+
+  const { error: insErr } = await supabase.from("piutang_writeoffs").insert({
+    technician_id: technicianId,
+    amount: v.umur.total,
+    reason: clean,
+    oldest_days: v.umur.tertua,
+    technician_active: masihAktif,
+    requested_by: admin.id,
+  });
+  if (insErr) {
+    if (/relation|does not exist/i.test(insErr.message || "")) {
+      return { error: "Tabel penghapusan belum ada — jalankan supabase/migrate-piutang-writeoff.sql dulu." };
+    }
+    if (/duplicate key|unique/i.test(insErr.message || "")) {
+      return { error: "Sudah ada pengajuan penghapusan yang menunggu persetujuan." };
+    }
+    return { error: insErr.message };
+  }
+
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    amount: v.umur.total,
+    oldest_days: v.umur.tertua,
+    masihAktif,
+    nama: prof?.name || null,
+  };
+}
+
+/**
+ * Putuskan pengajuan penghapusan piutang: SETUJU atau TOLAK.
+ *
+ * Yang setuju dijalankan sebagai SATU transaksi di database
+ * (public.approve_piutang_writeoff): mencatat pelunasan jenis 'penghapusan' untuk
+ * tiap baris piutang, menulis baris penyesuaian, dan menaikkan saldo — mustahil
+ * setengah jalan sehingga invarian "saldo = Σ mutasi" tetap utuh.
+ */
+export async function decidePiutangWriteoffAdmin(writeoffId, approve, note) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!writeoffId) return { error: "Pengajuan tidak dikenal." };
+
+  const clean = (note || "").trim();
+  if (!approve && clean.length < 5) {
+    return { error: "Tulis alasan penolakan (minimal 5 karakter)." };
+  }
+
+  const { data: w, error: readErr } = await supabase
+    .from("piutang_writeoffs")
+    .select("id, technician_id, amount, status, reason")
+    .eq("id", writeoffId)
+    .maybeSingle();
+  if (readErr) {
+    return {
+      error: /relation|does not exist/i.test(readErr.message || "")
+        ? "Tabel penghapusan belum ada — jalankan supabase/migrate-piutang-writeoff.sql dulu."
+        : readErr.message,
+    };
+  }
+  if (!w) return { error: "Pengajuan penghapusan tidak ditemukan." };
+  if (w.status !== "pending") return { error: "Pengajuan ini sudah diputuskan sebelumnya." };
+
+  if (!approve) {
+    const { error } = await supabase
+      .from("piutang_writeoffs")
+      .update({
+        status: "rejected",
+        decided_by: admin.id,
+        decided_at: new Date().toISOString(),
+        decision_note: clean,
+      })
+      .eq("id", writeoffId)
+      .eq("status", "pending");
+    if (error) return { error: error.message };
+    revalidatePath("/admin");
+    return { ok: true, status: "rejected" };
+  }
+
+  const { data, error } = await supabase.rpc("approve_piutang_writeoff", {
+    p_writeoff: writeoffId,
+    p_note: clean || null,
+  });
+  if (error) {
+    return {
+      error: /function|does not exist|schema cache/i.test(error.message || "")
+        ? "Fungsi persetujuan belum ada — jalankan supabase/migrate-piutang-writeoff.sql dulu."
+        : error.message,
+    };
+  }
+  if (!data?.ok) return { error: data?.error || "Gagal menghapuskan piutang." };
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return { ok: true, status: "approved", ...data };
+}
+
 export async function getTechnicianBalancesAdmin() {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
@@ -1764,6 +2143,18 @@ export async function getTechnicianBalancesAdmin() {
   const txs = txRes.error ? [] : txRes.data || [];
   const wds = wdRes.error ? [] : wdRes.data || [];
 
+  // Piutang + umurnya per teknisi, dan pengajuan penghapusan yang menunggu
+  // persetujuan (keduanya tampil di kolom tindakan tab Saldo Aktif).
+  const { perTeknisi: piutangPer, error: piutangErr } = await bacaPiutangTerbuka(supabase);
+  const { data: writeoffs } = await supabase
+    .from("piutang_writeoffs")
+    .select("id, technician_id, amount, status, oldest_days, reason, requested_at")
+    .order("requested_at", { ascending: false })
+    .limit(200);
+  const pendingWriteoff = new Map(
+    (writeoffs || []).filter((w) => w.status === "pending").map((w) => [w.technician_id, w])
+  );
+
   const sum = (arr, f) => arr.reduce((s, x) => s + Number(f(x) || 0), 0);
   const technicians = techs.map((t) => {
     const myTx = txs.filter((x) => x.technician_id === t.id);
@@ -1784,6 +2175,13 @@ export async function getTechnicianBalancesAdmin() {
       total_withdrawn: wdApproved,
       pending_withdraw: wdPending,
       available: Number(t.balance || 0) - wdPending,
+      // Umur piutang terbuka (0-30/31-60/61-90/>90 hari) — dasar keputusan
+      // penghapusan untuk teknisi yang berhenti.
+      piutang_terbuka: piutangPer.get(t.id)?.umur.total ?? 0,
+      piutang_tertua: piutangPer.get(t.id)?.umur.tertua ?? 0,
+      piutang_jatuh_tempo: piutangPer.get(t.id)?.umur.jatuhTempo.total ?? 0,
+      piutang_buckets: piutangPer.get(t.id)?.umur.buckets ?? { h0_30: 0, h31_60: 0, h61_90: 0, hLebih90: 0 },
+      writeoff_pending: pendingWriteoff.get(t.id) || null,
     };
   });
 
@@ -1826,6 +2224,12 @@ export async function getTechnicianBalancesAdmin() {
 
   return {
     technicians,
+    piutangUmur: keranjangUmurPiutang(
+      [...piutangPer.values()].flatMap((v) => v.items),
+      { hariJatuhTempo: ambangPiutangHari() }
+    ),
+    piutangError: piutangErr || null,
+    ambangHari: ambangPiutangHari(),
     appFeeReport,
     appFeeReportTotal: {
       count: feeRows.length,        // seluruh baris (bukan hanya yang ditampilkan)
@@ -2120,6 +2524,202 @@ export async function savePaymentSettingsAdmin({ bank, number, name }) {
   return { ok: true };
 }
 
+/* ========================= PENGATURAN GARANSI ========================= */
+
+/**
+ * Setelan garansi pekerjaan (tabel app_settings; kolomnya ditambahkan
+ * supabase/migrate-warranty-settings.sql).
+ *
+ * Dua nilai: `enabled` (saklar utama) dan `days` (durasi standar). Durasi
+ * EFEKTIF tiap pesanan dihitung di DATABASE lewat public.warranty_days_efektif():
+ * saklar mati → 0, layanan yang ditandai tanpa garansi
+ * (services.warranty_days = 0) → 0, selain itu durasi standar. Jadi satu
+ * setelan di sini berlaku untuk seluruh katalog — angka per layanan tidak lagi
+ * menentukan panjang garansi, hanya menandai pengecualian.
+ */
+export async function getWarrantySettingsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("warranty_enabled, warranty_days")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) {
+    if (/relation|does not exist|Could not find the table|schema cache|column/i.test(error.message || "")) {
+      return {
+        error:
+          "Setelan garansi belum ada — jalankan supabase/migrate-warranty-settings.sql di Supabase SQL Editor dulu.",
+      };
+    }
+    return { error: error.message };
+  }
+
+  // Bawaan saat kolomnya masih kosong = nilai bawaan migrasi (aktif, 7 hari),
+  // supaya tab tetap terbuka dan menunjukkan keadaan yang sebenarnya berlaku.
+  return {
+    enabled: data?.warranty_enabled ?? true,
+    days: Number(data?.warranty_days ?? 7),
+  };
+}
+
+/**
+ * Simpan setelan garansi (dipanggil kartu pengaturan di tab "Garansi").
+ *
+ * Saat garansi AKTIF, durasi wajib 1–365 hari: "aktif tapi 0 hari" adalah
+ * keadaan yang membingungkan — saklarnya menyala tetapi tidak ada garansi.
+ * Untuk meniadakan garansi, matikan saklarnya; durasinya tetap tersimpan
+ * supaya bisa dinyalakan lagi dengan nilai yang sama.
+ *
+ * Mematikan garansi TIDAK membatalkan klaim yang sudah diajukan maupun
+ * kunjungan ulang yang sudah dijadwalkan — lihat migrate-warranty-settings.sql.
+ */
+export async function saveWarrantySettingsAdmin({ enabled, days } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const aktif = !!enabled;
+  const n = Number.parseInt(days, 10);
+  if (Number.isNaN(n) || n < 0 || n > 365) {
+    return { error: "Durasi garansi harus angka 0–365 hari." };
+  }
+  if (aktif && n === 0) {
+    return {
+      error:
+        "Durasi garansi minimal 1 hari saat garansi aktif. Matikan saklar garansi untuk meniadakannya.",
+    };
+  }
+
+  const { error } = await supabase
+    .from("app_settings")
+    .update({ warranty_enabled: aktif, warranty_days: n, updated_at: new Date().toISOString() })
+    .eq("id", 1);
+  if (error) {
+    if (/relation|does not exist|Could not find the table|schema cache|column/i.test(error.message || "")) {
+      return {
+        error:
+          "Setelan garansi belum ada — jalankan supabase/migrate-warranty-settings.sql di Supabase SQL Editor dulu.",
+      };
+    }
+    return { error: error.message };
+  }
+
+  revalidatePath("/admin");
+  return { ok: true, enabled: aktif, days: n };
+}
+
+/* ============== JEJAK EMAIL ADMIN YANG GAGAL TERKIRIM ============== */
+
+/** Pesan galat RPC antrean; menyebut berkas migrasinya bila fungsinya belum ada. */
+function pesanGagalAntrean(error) {
+  if (/function|does not exist|schema cache|column/i.test(error?.message || "")) {
+    return "Jejak kegagalan email belum aktif — jalankan supabase/migrate-admin-email-failures.sql di Supabase SQL Editor.";
+  }
+  return error?.message || "Gagal mengakses antrean email.";
+}
+
+/** Klien service role untuk antrean email; mengembalikan pesan galat bila tidak ada. */
+function klienAntreanEmail() {
+  try {
+    return { db: createAdminClient() };
+  } catch {
+    // Tanpa kunci service role, RLS menutup tabel antrean — katakan sebabnya,
+    // jangan tampilkan daftar kosong yang terlihat seperti "semua aman".
+    return { error: "Kunci service role tidak terbaca di server ini, jadi jejak antrean email tidak bisa dibaca." };
+  }
+}
+
+/**
+ * Email admin yang gagal dikirim (kartu "Email yang gagal terkirim" di tab
+ * "Notif Email Admin").
+ *
+ * Dibaca memakai KUNCI SERVICE ROLE karena RLS `admin_email_outbox` memang
+ * menutup tabel itu dari semua klien — termasuk admin; yang boleh melihat
+ * jejaknya hanya server yang sudah memastikan pemanggilnya admin (requireAdmin).
+ *
+ * Yang dikembalikan: baris yang punya alasan kegagalan atau sudah menyerah
+ * (failed_at terisi), plus jumlah baris yang masih menunggu dikirim supaya
+ * "gagal" tidak tertukar dengan "sedang dalam antrean".
+ */
+export async function getAdminEmailFailuresAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { db, error: klienErr } = klienAntreanEmail();
+  if (klienErr) return { error: klienErr };
+
+  const { data, error } = await db
+    .from("admin_email_outbox")
+    .select("id,event,ref_id,attempts,max_attempts,last_error,last_attempt_at,failed_at,created_at")
+    .or("failed_at.not.is.null,last_error.not.is.null")
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (error) {
+    if (/column|does not exist|schema cache/i.test(error.message || "")) {
+      return {
+        rows: [],
+        warning:
+          "Jejak kegagalan email belum aktif — jalankan supabase/migrate-admin-email-failures.sql di Supabase SQL Editor. " +
+          "Sebelum itu, email yang gagal hanya tercatat di log server dan barisnya hilang setelah lima percobaan.",
+      };
+    }
+    return { error: error.message };
+  }
+
+  const { count } = await db
+    .from("admin_email_outbox")
+    .select("id", { count: "exact", head: true })
+    .is("failed_at", null);
+
+  return { rows: data || [], antrean: count ?? null };
+}
+
+/**
+ * Kembalikan satu email yang gagal ke antrean — dipakai setelah penyebabnya
+ * diperbaiki (kunci Resend diganti, domain diverifikasi, penerima dinyalakan).
+ * `last_error` sengaja tidak dihapus supaya alasan terakhir tetap terbaca.
+ */
+export async function retryAdminEmailAdmin(id) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!id) return { error: "Baris antrean tidak dikenal." };
+
+  const { db, error: klienErr } = klienAntreanEmail();
+  if (klienErr) return { error: klienErr };
+
+  const { error } = await db.rpc("retry_admin_email", { p_id: id });
+  if (error) return { error: pesanGagalAntrean(error) };
+
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
+/**
+ * Buang satu baris jejak: kiriman ini memang tidak perlu lagi (mis. peristiwa
+ * untuk data uji yang sudah dihapus). Berbeda dari "coba lagi", ia menghapus
+ * barisnya — jadi tombolnya diberi nama tegas di panel.
+ */
+export async function discardAdminEmailAdmin(id) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!id) return { error: "Baris antrean tidak dikenal." };
+
+  const { db, error: klienErr } = klienAntreanEmail();
+  if (klienErr) return { error: klienErr };
+
+  const { error } = await db.rpc("complete_admin_email", { p_id: id });
+  if (error) return { error: pesanGagalAntrean(error) };
+
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
 /* ================== PENERIMA NOTIFIKASI EMAIL ADMIN ================== */
 
 /**
@@ -2350,6 +2950,54 @@ export async function getDailyOpsBoardAdmin() {
     garansiTerbuka = null;
   }
 
+  // ---- Piutang JATUH TEMPO: tugas yang menunggu keputusan admin ----
+  // Saldo minus teknisi yang menua (mis. teknisi sudah berhenti) tidak akan lunas
+  // sendiri, dan sebelumnya hanya terlihat bila tab Saldo dibuka. Di papan ini ia
+  // menjadi tugas: ingatkan, atau ajukan penghapusan (persetujuan terpisah).
+  let piutang = null;
+  let piutangError = null;
+  try {
+    const { perTeknisi, error } = await bacaPiutangTerbuka(supabase);
+    if (error) {
+      piutangError = error;
+    } else {
+      const ids = [...perTeknisi.keys()];
+      const { data: profs } = ids.length
+        ? await supabase
+            .from("profiles")
+            .select("id, name, email, balance, approval_status, balance_reminder_at")
+            .in("id", ids)
+        : { data: [] };
+      const baris = (profs || [])
+        .map((p) => {
+          const v = perTeknisi.get(p.id);
+          if (!v) return null;
+          return {
+            id: p.id,
+            nama: p.name || p.email || String(p.id).slice(0, 8),
+            saldo: Number(p.balance || 0),
+            approval_status: p.approval_status || null,
+            masihAktif: p.approval_status === "approved",
+            reminder_terakhir: p.balance_reminder_at || null,
+            total: v.umur.total,
+            tertua: v.umur.tertua,
+            baris: v.umur.baris,
+            buckets: v.umur.buckets,
+            jatuhTempo: v.umur.jatuhTempo,
+          };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.tertua - a.tertua);
+      piutang = {
+        ambangHari: ambangPiutangHari(),
+        semua: baris,
+        jatuhTempo: baris.filter((r) => r.jatuhTempo.total > 0),
+      };
+    }
+  } catch (e) {
+    piutangError = e?.message || "Gagal memuat piutang teknisi.";
+  }
+
   return {
     board: {
       hariIni,
@@ -2359,6 +3007,8 @@ export async function getDailyOpsBoardAdmin() {
       rilis,
       rilisError,
       garansiTerbuka,
+      piutang,
+      piutangError,
       counts: {
         jadwalHariIni: jadwal.length,
         menungguBayar: menungguBayar.length,
@@ -2367,6 +3017,7 @@ export async function getDailyOpsBoardAdmin() {
         selesai: jadwal.filter((b) => b.status === "completed").length,
         dibatalkan: jadwal.filter((b) => b.status === "cancelled").length,
         rilisPerluTindak: rilis.filter((r) => r.perluTeknisiBaru).length,
+        piutangJatuhTempo: piutang?.jatuhTempo.length ?? 0,
       },
     },
   };
@@ -2441,4 +3092,250 @@ export async function decideWarrantyClaimAdmin(claimId, decision, note = null, d
 
   revalidatePath("/admin");
   return { ok: true, result: data };
+}
+
+/* ====================== HAPUS AKUN (syarat Google Play) ====================== */
+
+const STATUS_HAPUS = ["menunggu_konfirmasi", "diminta", "dibatalkan", "selesai", "ditolak"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Klien service-role untuk urusan hapus akun, atau null bila kuncinya tidak ada.
+ *
+ * KENAPA HARUS SERVICE ROLE: tabel `account_deletion_requests` hanya punya policy
+ * SELECT untuk PEMILIK barisnya (transparansi bagi pengguna) — tidak ada policy
+ * untuk admin. Sesi admin pun karena itu tidak bisa membaca permintaan orang lain,
+ * dan `eksekusi_hapus_akun` EXECUTE-nya memang dicabut dari `authenticated`.
+ *
+ * KONSEKUENSINYA PENTING: klien service role tidak membawa JWT pengguna, jadi
+ * penjaga admin di DALAM database (`auth.uid()` pada fungsi eksekusi) TIDAK
+ * menyala di jalur ini. Pemeriksaan `requireAdmin(supabase)` dengan sesi pemanggil
+ * pada tiap fungsi di bawah adalah gerbang satu-satunya — jangan dihapus.
+ */
+function klienHapusAkun() {
+  // Tanpa kunci layanan, createAdminClient() diam-diam jatuh ke kunci anon dan
+  // setiap operasi di sini ditolak RLS dengan pesan yang tidak menjelaskan
+  // sebabnya. Lebih baik berhenti dengan sebab yang bisa ditindaklanjuti.
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    return createAdminClient();
+  } catch {
+    return null;
+  }
+}
+
+function pesanTabelBelumAda() {
+  return (
+    "Tabel account_deletion_requests belum ada di database. Jalankan " +
+    "supabase/migrate-account-deletion.sql di Supabase SQL Editor, lalu muat ulang halaman ini."
+  );
+}
+
+/**
+ * Ringkasan singkat untuk lencana di tab: berapa yang menunggu dijalankan.
+ * Sengaja hanya dua hitungan (head count), supaya halaman admin tidak menanggung
+ * biaya memeriksa kelayakan setiap permintaan sebelum tabnya dibuka.
+ */
+export async function getAccountDeletionSummaryAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const klien = klienHapusAkun();
+  if (!klien) return { diminta: 0, menungguKonfirmasi: 0, tersedia: false };
+
+  const hitung = async (status) => {
+    const { count, error } = await klien
+      .from("account_deletion_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", status);
+    if (error) throw new Error(error.message);
+    return count || 0;
+  };
+
+  try {
+    const [diminta, menungguKonfirmasi] = await Promise.all([
+      hitung("diminta"),
+      hitung("menunggu_konfirmasi"),
+    ]);
+    return { diminta, menungguKonfirmasi, tersedia: true };
+  } catch (err) {
+    // Migrasi belum dijalankan = keadaan normal saat ini, bukan galat halaman.
+    return {
+      diminta: 0,
+      menungguKonfirmasi: 0,
+      tersedia: false,
+      error: /does not exist|schema cache|not find the table/i.test(err.message || "")
+        ? pesanTabelBelumAda()
+        : `Gagal menghitung permintaan: ${err.message}`,
+    };
+  }
+}
+
+/**
+ * Daftar permintaan hapus akun untuk panel, lengkap dengan penilaian kelayakan.
+ *
+ * Kelayakan diperiksa dengan fungsi DB yang SAMA dengan jalur pengguna
+ * (`hapus_akun_blokir`), jadi panel tidak bisa punya pendapat yang berbeda dari
+ * aplikasi/web. Pemeriksaan hanya dilakukan untuk baris yang berstatus 'diminta'
+ * (satu-satunya yang bisa dijalankan) supaya tidak ada panggilan RPC sia-sia.
+ */
+export async function getAccountDeletionRequestsAdmin(status = "diminta") {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const klien = klienHapusAkun();
+  if (!klien) {
+    return { error: "Kunci layanan (SUPABASE_SERVICE_ROLE_KEY) belum tersedia di server ini." };
+  }
+
+  const dipilih = status === "semua" || !status ? null : String(status);
+  if (dipilih && !STATUS_HAPUS.includes(dipilih)) return { error: "Status tidak dikenal." };
+
+  let baris;
+  try {
+    baris = await daftarPermintaanHapus({ admin: klien, status: dipilih, limit: 200 });
+  } catch (err) {
+    return {
+      error: /does not exist|schema cache|not find the table/i.test(err.message || "")
+        ? pesanTabelBelumAda()
+        : `Gagal membaca permintaan: ${err.message}`,
+      perluMigrasi: /does not exist|schema cache|not find the table/i.test(err.message || ""),
+    };
+  }
+
+  const permintaan = [];
+  for (const r of baris) {
+    let blokir = null;
+    let kelayakanRagu = false;
+    if (r.user_id && r.status === "diminta") {
+      const { data, error } = await klien.rpc("hapus_akun_blokir", { p_user: r.user_id });
+      if (error) {
+        // Fungsi penjaganya belum ada (migrasi separuh jalan): jangan gagalkan
+        // seluruh daftar — tandai saja supaya admin tahu kelayakannya belum
+        // terbaca, bukan "aman".
+        kelayakanRagu = true;
+      } else {
+        blokir = data || null;
+      }
+    }
+    const kelayakan = ringkasKelayakan({
+      status: r.status,
+      blokir: kelayakanRagu ? KODE_KELAYAKAN_RAGU : blokir,
+    });
+    permintaan.push({
+      id: r.id,
+      userId: r.user_id,
+      email: r.email,
+      sumber: r.sumber,
+      alasan: r.alasan,
+      status: r.status,
+      createdAt: r.created_at,
+      confirmedAt: r.confirmed_at,
+      decidedAt: r.decided_at,
+      catatan: r.catatan_admin,
+      // Janji yang dibaca pengguna di halaman/surel: diproses dalam JANJI_HARI.
+      tenggat: r.created_at
+        ? new Date(Date.parse(r.created_at) + JANJI_HARI * 86400000).toISOString()
+        : null,
+      blokir: kelayakanRagu ? null : blokir,
+      kelayakanRagu,
+      boleh: kelayakan.boleh,
+      pesan: kelayakan.pesan,
+      peringatan: kelayakan.peringatan,
+    });
+  }
+
+  return { requests: permintaan, janjiHari: JANJI_HARI, rencana: RENCANA_HAPUS };
+}
+
+/**
+ * JALANKAN satu permintaan hapus akun dari panel.
+ *
+ * Tombol di UI sudah meminta admin mengetik kata konfirmasi, tetapi itu hanya
+ * kenyamanan: keputusan sesungguhnya ada di sini. Yang tidak boleh dilunakkan —
+ * peran admin diperiksa dengan SESI PEMANGGIL sebelum apa pun terjadi (lihat
+ * catatan di klienHapusAkun), dan `aksesDicabut === false` diteruskan apa adanya
+ * supaya UI bisa menahannya sebagai keadaan bahaya.
+ */
+export async function executeAccountDeletionAdmin(requestId, catatan = "") {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(requestId || "").trim();
+  if (!UUID_RE.test(id)) return { error: "ID permintaan tidak valid." };
+
+  const klien = klienHapusAkun();
+  if (!klien) {
+    return { error: "Kunci layanan (SUPABASE_SERVICE_ROLE_KEY) belum tersedia di server ini." };
+  }
+
+  // Dibaca lebih dulu supaya pesan galatnya jelas (status apa, surel siapa).
+  // Aturan "hanya 'diminta' yang boleh dijalankan" tetap ditegakkan ulang oleh
+  // fungsi database.
+  const { data: baris, error: errBaca } = await klien
+    .from("account_deletion_requests")
+    .select("id, status, email")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (errBaca) {
+    return {
+      error: /does not exist|schema cache|not find the table/i.test(errBaca.message || "")
+        ? pesanTabelBelumAda()
+        : `Gagal membaca permintaan: ${errBaca.message}`,
+    };
+  }
+  if (!baris) return { error: "Permintaan tidak ditemukan." };
+  if (baris.status !== "diminta") {
+    return {
+      error: `Permintaan ini berstatus "${baris.status}" — hanya yang berstatus "diminta" yang menunggu dijalankan.`,
+    };
+  }
+
+  const hasil = await eksekusiHapusAkun({
+    requestId: id,
+    catatan: String(catatan || "").trim() || "Dijalankan dari panel admin",
+    admin: klien,
+  });
+
+  if (!hasil.ok) {
+    return {
+      error: `Gagal menjalankan: ${hasil.error}${hasil.status ? ` (status: ${hasil.status})` : ""}`,
+    };
+  }
+
+  // Jejak siapa yang menjalankan: RPC menulis `decided_by = auth.uid()`, dan itu
+  // NULL saat dipanggil dengan service role. Diisi hanya bila masih kosong,
+  // supaya kolom audit ini benar-benar menunjuk admin yang menekan tombol.
+  let pelaksanaDicatat = false;
+  try {
+    const { error: errCatat } = await klien
+      .from("account_deletion_requests")
+      .update({ decided_by: admin.id })
+      .eq("id", id)
+      .is("decided_by", null);
+    pelaksanaDicatat = !errCatat;
+  } catch {
+    pelaksanaDicatat = false;
+  }
+
+  const ringkas = ringkasEksekusi(hasil);
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    tingkat: ringkas.tingkat,
+    pesan: ringkas.pesan,
+    tiadaAkun: Boolean(hasil.tiadaAkun),
+    userId: hasil.userId ?? null,
+    aksesDicabut: hasil.aksesDicabut ?? null,
+    galatAkses: hasil.galatAkses ?? null,
+    berkasDihapus: hasil.berkasDihapus || [],
+    terhapus: hasil.terhapus || {},
+    surelError: hasil.surel?.error || null,
+    surelTerkirim: Boolean(hasil.surel && !hasil.surel.error),
+    pelaksanaDicatat,
+  };
 }

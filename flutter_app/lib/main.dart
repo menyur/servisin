@@ -9,6 +9,7 @@ import 'config.dart';
 import 'format.dart';
 import 'models.dart';
 import 'theme.dart';
+import 'trip_share.dart';
 import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
 import 'ui/register_screen.dart';
@@ -67,6 +68,11 @@ Future<void> main() async {
   // Push FCM (Android): init Firebase + izin notifikasi + pendaftaran token.
   // No-op di web/iOS; kegagalan (service tidak ada) tidak menghentikan app.
   await PushService.init();
+  // Perjalanan yang sedang dibagikan ("teknisi menuju lokasi") dilanjutkan bila
+  // aplikasi dibuka kembali — mis. HP restart di tengah jalan. Tidak menyentuh
+  // server selain melanjutkan pengiriman selagi batas waktunya masih berlaku,
+  // dan tidak pernah memperpanjang perjalanan (lihat TripShareSession.pulihkan).
+  unawaited(TripShareSession.instance.pulihkan());
   // Onboarding hanya sekali: bila belum pernah diselesaikan, mulai dari
   // '/onboarding'; selain itu langsung '/' atau '/login' sesuai sesi.
   final prefs = await SharedPreferences.getInstance();

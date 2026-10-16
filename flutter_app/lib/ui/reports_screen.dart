@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../format.dart';
 import '../models.dart';
 import '../report_grouping.dart';
+import '../report_seen.dart';
 import '../theme.dart';
 import 'common.dart';
 import 'report_screen.dart';
@@ -16,7 +19,12 @@ class ReportsScreen extends StatefulWidget {
   /// Seam uji: cara memuat riwayat laporan (default [Api.fetchMyReports]).
   final Future<List<Report>> Function()? loadReports;
 
-  const ReportsScreen({super.key, this.loadReports});
+  /// Dipanggil setelah daftar berhasil dimuat untuk menandai laporan sebagai
+  /// "sudah dilihat" (default: simpan snapshot status di perangkat milik user
+  /// yang login — dasar angka badge tab Laporan, lib/report_seen.dart).
+  final Future<void> Function(List<Report> reports)? markSeen;
+
+  const ReportsScreen({super.key, this.loadReports, this.markSeen});
 
   @override
   State<ReportsScreen> createState() => _ReportsScreenState();
@@ -26,6 +34,9 @@ class _ReportsScreenState extends State<ReportsScreen> {
   List<Report>? _reports;
   String? _error;
 
+  /// Langganan tick realtime laporan (lihat [reportUpdatesTick]).
+  StreamSubscription<ReportUpdate>? _tickSub;
+
   /// Signed URL (1 jam) per lampiran — bucket privat, path tak bisa dipakai
   /// langsung. Hanya laporan yang berhasil di-sign yang menampilkan thumbnail.
   final Map<String, String> _signedUrls = {};
@@ -34,19 +45,64 @@ class _ReportsScreenState extends State<ReportsScreen> {
   void initState() {
     super.initState();
     _load();
+    // Admin menanggapi laporan → muat ulang daftar tanpa mengosongkan layar
+    // (tanpa ini pengguna yang membuka tab Laporan hanya melihat status lama).
+    _tickSub = reportUpdatesTick.stream.listen((_) => _load(keepList: true));
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    unawaited(_tickSub?.cancel());
+    super.dispose();
+  }
+
+  /// Muat riwayat laporan.
+  ///
+  /// [keepList] = JANGAN kosongkan daftar lebih dulu (dipakai penyegaran
+  /// realtime): kalau dikosongkan, layar berkedip ke spinner hanya karena
+  /// status satu laporan berubah.
+  Future<void> _load({bool keepList = false}) async {
+    if (!keepList) {
+      setState(() {
+        _error = null;
+        _reports = null;
+      });
+    }
+    final List<Report> list;
+    try {
+      list = await (widget.loadReports ?? Api.fetchMyReports)();
+    } catch (_) {
+      if (mounted && !keepList) setState(() => _error = 'Gagal memuat laporan.');
+      return;
+    }
+    if (!mounted) return;
     setState(() {
       _error = null;
-      _reports = null;
+      _reports = list;
     });
+    // Menandai "sudah dilihat" TIDAK boleh mempengaruhi daftar yang tampil —
+    // dipanggil setelah state terpasang, dan gagalnya ditelan di dalam.
+    _tandaiSudahDilihat(list);
+    unawaitedSignAttachments(list);
+  }
+
+  /// Tandai laporan yang baru tampil sebagai sudah dilihat: snapshot statusnya
+  /// disimpan di perangkat, lalu angka badge tab Laporan dinolkan (angka itu
+  /// dihitung ulang dari server saat app dibuka/aktif kembali).
+  void _tandaiSudahDilihat(List<Report> reports) {
+    unseenReportUpdates.value = 0;
+    unawaited((widget.markSeen ?? _simpanSnapshot)(reports));
+  }
+
+  /// Penyimpanan bawaan: perangkat milik pengguna yang sedang login. Tidak
+  /// pernah melempar — layar tetap tampil walau tidak ada sesi/preferensi
+  /// (mis. saat diuji tanpa Supabase).
+  Future<void> _simpanSnapshot(List<Report> reports) async {
     try {
-      final list = await (widget.loadReports ?? Api.fetchMyReports)();
-      if (mounted) setState(() => _reports = list);
-      unawaitedSignAttachments(list);
+      final uid = Api.session?.user.id ?? '';
+      await ReportSeenStore.markSeen(uid, reports);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Gagal memuat laporan.');
+      // sesi tak terbaca → laporan dianggap sudah dilihat untuk sesi ini
     }
   }
 

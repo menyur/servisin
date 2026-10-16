@@ -39,6 +39,7 @@ import PaymentSettingsTab from "@/components/PaymentSettingsTab";
 import AdminNotifyRecipientsTab from "@/components/AdminNotifyRecipientsTab";
 import DailyOpsBoardTab from "@/components/DailyOpsBoardTab";
 import WarrantyClaimsAdminTab from "@/components/WarrantyClaimsAdminTab";
+import AccountDeletionAdminTab from "@/components/AccountDeletionAdminTab";
 import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
@@ -52,7 +53,7 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialPiutangUmur = null, piutangAmbangHari = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null, accountDeletionSummary = null }) {
   // Tab pembuka = papan harian: pertanyaan pertama admin adalah "hari ini apa
   // yang perlu saya kerjakan?", bukan "lihat semua pesanan".
   const [tab, setTab] = useState("today");
@@ -105,15 +106,25 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   // browser ini sendiri dide-dup lewat pengecekan id (aksi admin sudah
   // meng-update state lokal dulu).
   const [lastLiveAt, setLastLiveAt] = useState(null);
+  /** Pemberitahuan pesanan/laporan yang baru masuk (dismissible oleh admin). */
+  const [arrivals, setArrivals] = useState([]);
+  const catatKedatangan = (jenis, row) => {
+    setArrivals((list) => [
+      { id: row.id, jenis, kode: row.code || "—", waktu: Date.now() },
+      ...list.filter((a) => a.id !== row.id),
+    ].slice(0, 4));
+  };
   const live = useAdminRealtime({
     onNewBooking: (row) => {
       if (!row?.id) return;
       setBookings((bs) => (bs.some((b) => b.id === row.id) ? bs : [row, ...bs]));
+      catatKedatangan("pesanan", row);
       setLastLiveAt(Date.now());
     },
     onNewReport: (row) => {
       if (!row?.id) return;
       setReports((rs) => (rs.some((r) => r.id === row.id) ? rs : [row, ...rs]));
+      catatKedatangan("laporan", row);
       setLastLiveAt(Date.now());
     },
   });
@@ -122,7 +133,9 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   // tetap masuk state (list ter-update di background) — admin memutuskan
   // kapan pindah, tidak dilompat paksa saat sedang mengedit.
   const [newCount, setNewCount] = useState(0);
-  const lastSeenCount = useRef(0);
+  // Dimulai dari isi yang SUDAH tampil: kalau dari 0, lencana "+N baru" langsung
+  // menyala seolah seluruh isi halaman baru masuk.
+  const lastSeenCount = useRef(initialBookings.length + (initialReports?.length || 0));
   const tabRef = useRef(tab);
   // ditulis di effect, bukan saat render (react-hooks/refs); effect di bawah
   // membacanya pada commit yang sama sehingga nilainya tetap paling baru.
@@ -139,13 +152,34 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   }, [bookings.length, reports.length]);
   useEffect(() => {
     if (tab === "bookings" || tab === "reports") setNewCount(0);
+    // Membuka tabnya = pemberitahuan sudah sampai tujuan.
+    if (tab === "bookings") setArrivals((list) => list.filter((a) => a.jenis !== "pesanan"));
+    if (tab === "reports") setArrivals((list) => list.filter((a) => a.jenis !== "laporan"));
   }, [tab]);
+
+  // Data SERVER (papan harian, lencana, antrean setor/penarikan, dst.) hanya
+  // berubah lewat router.refresh() di useAdminRealtime — yang memicu prop baru.
+  // Tanpa baris di bawah, state klien tetap memakai daftar dari render pertama,
+  // sehingga refresh itu tampak tidak melakukan apa-apa dan admin tetap harus
+  // me-reload halaman sendiri.
+  // Pola resmi React "adjusting state when a prop changes": penyesuaian saat
+  // render, bukan lewat effect — jadi tidak ada satu render tambahan yang masih
+  // menampilkan daftar lama setelah refresh server selesai.
+  const [propsTerakhir, setPropsTerakhir] = useState(null);
+  if (propsTerakhir?.bookings !== initialBookings || propsTerakhir?.reports !== initialReports) {
+    setPropsTerakhir({ bookings: initialBookings, reports: initialReports });
+    setBookings(initialBookings);
+    setReports(initialReports);
+  }
 
   const technicians = users.filter((u) => u.role === "technician" && u.approval_status === "approved");
   const pendingTechs = users.filter((u) => u.role === "technician" && u.approval_status === "pending");
   const openReportsCount = reports.filter((r) => r.status === "open").length;
   // pesanan non-COD yang masih menunggu pembayaran — perlu dicek/dikonfirmasi admin
   const unpaidCount = bookings.filter((b) => b.status === "pending" && b.payment_method !== "cod").length;
+  // Ringkasan pemberitahuan kedatangan (realtime) — dipakai pita di bawah judul.
+  const jumlahPesananBaru = arrivals.filter((a) => a.jenis === "pesanan").length;
+  const jumlahLaporanBaru = arrivals.length - jumlahPesananBaru;
 
   function ratingOf(userId) {
     const u = users.find((x) => x.id === userId);
@@ -404,6 +438,38 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         </div>
       </div>
 
+      {arrivals.length > 0 && (
+        <div className="mb-5 rounded-xl border border-amber/40 bg-amber-tint px-4 py-3 flex items-start gap-3">
+          <AlertTriangle size={16} className="text-amber mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-navy">
+              {[
+                jumlahPesananBaru ? `${jumlahPesananBaru} pesanan baru` : null,
+                jumlahLaporanBaru ? `${jumlahLaporanBaru} laporan baru` : null,
+              ]
+                .filter(Boolean)
+                .join(" + ")}{" "}
+              masuk
+              <span className="text-ink-soft font-normal"> — {arrivals.map((a) => a.kode).join(", ")}</span>
+            </p>
+            <p className="text-xs text-ink-soft mt-0.5">Tercatat otomatis, tanpa perlu memuat ulang halaman.</p>
+          </div>
+          <button
+            className="btn-outline !px-3 !py-1.5 text-xs shrink-0"
+            onClick={() => setTab(jumlahPesananBaru ? "bookings" : "reports")}
+          >
+            Lihat
+          </button>
+          <button
+            aria-label="Tutup pemberitahuan"
+            className="text-ink-soft hover:text-navy shrink-0"
+            onClick={() => setArrivals([])}
+          >
+            <XCircle size={16} />
+          </button>
+        </div>
+      )}
+
       <div className="flex gap-2 mb-8 flex-wrap">
         <TabButton
           active={tab === "today"}
@@ -426,6 +492,12 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           icon={ShieldCheck}
           label={`Garansi${board?.garansiTerbuka ? ` (${board.garansiTerbuka})` : ""}`}
         />
+        <TabButton
+          active={tab === "account-deletion"}
+          onClick={() => setTab("account-deletion")}
+          icon={Trash2}
+          label={`Hapus Akun${accountDeletionSummary?.diminta ? ` (${accountDeletionSummary.diminta})` : ""}`}
+        />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
         <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
@@ -443,10 +515,15 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
             setTab("bookings");
             setBookingFilter("all");
           }}
+          // Tugas piutang di papan mengarah ke tab Saldo Aktif — di sanalah
+          // pengingat & pengajuan penghapusan berada.
+          onOpenBalances={() => setTab("tech-balances")}
         />
       )}
 
       {tab === "warranty" && <WarrantyClaimsAdminTab />}
+
+      {tab === "account-deletion" && <AccountDeletionAdminTab />}
 
       {tab === "bookings" && (
         <div>
@@ -922,6 +999,8 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           initialError={technicianBalancesError}
           initialAppFeeReport={initialTechnicianAppFee}
           initialAppFeeTotal={technicianAppFeeTotal}
+          initialPiutangUmur={initialPiutangUmur}
+          ambangHari={piutangAmbangHari}
         />
       )}
 
@@ -1540,6 +1619,17 @@ function AddServiceForm({ categories, services, onCreated, onToggled }) {
   );
 }
 
+/**
+ * Tanda garansi satu layanan dalam bentuk yang dikirim ke server action:
+ * "0" = layanan ini dikecualikan, selain itu ikut durasi standar (tab Garansi).
+ * Kolom `warranty_days` bisa belum ada bila migrasinya belum dijalankan —
+ * anggap layanan bergaransi supaya panel tidak mengirim nilai tak sah.
+ */
+function tandaGaransi(service) {
+  const n = Number(service.warranty_days ?? 7);
+  return String(n > 0 ? n : 0);
+}
+
 function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
   const [value, setValue] = useState(service.base_price);
   const [saved, setSaved] = useState(false);
@@ -1553,8 +1643,13 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
     durationEstimate: service.duration_estimate || "",
     icon: service.icon || "wrench",
     imageUrl: service.image_url || null,
+    // Pengecualian garansi PER LAYANAN. Panjang garansi tidak diatur di sini —
+    // durasinya satu untuk semua layanan di tab "Garansi"
+    // (app_settings.warranty_days); kolom ini hanya menyimpan tandanya.
+    warrantyDays: tandaGaransi(service),
   });
   const active = service.is_active !== false;
+  const tanpaGaransi = Number(form.warrantyDays) === 0;
 
   async function save() {
     await onSave(service.id, Number(value));
@@ -1596,6 +1691,19 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
               <input className="input mt-1" value={form.durationEstimate} onChange={(e) => setF("durationEstimate", e.target.value)} />
             </label>
           </div>
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={tanpaGaransi}
+              onChange={(e) => setF("warrantyDays", e.target.checked ? "0" : "7")}
+            />
+            <span className="text-xs text-ink-soft leading-relaxed">
+              <span className="font-semibold text-navy">Tanpa garansi untuk layanan ini.</span> Durasi
+              garansi diatur SEKALI untuk semua layanan di tab <b>Garansi</b>; centang ini hanya
+              mengecualikan layanan yang tidak boleh diklaim ulang (mis. pembersihan sekali pakai).
+            </span>
+          </label>
           <label className="block">
             <span className="text-xs font-semibold text-navy">Ikon</span>
             <select className="input mt-1" value={form.icon} onChange={(e) => setF("icon", e.target.value)}>
@@ -1614,7 +1722,7 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
             <button type="submit" disabled={savingDetail} className="btn-primary !px-4 !py-2 text-sm flex items-center gap-1.5 disabled:opacity-60">
               {savingDetail ? <><Loader2 size={14} className="animate-spin" /> Menyimpan...</> : "Simpan perubahan"}
             </button>
-            <button type="button" onClick={() => { setEditing(false); setError(""); setForm({ name: service.name, description: service.description || "", priceNote: service.price_note || "mulai dari", durationEstimate: service.duration_estimate || "", icon: service.icon || "wrench", imageUrl: service.image_url || null }); }} className="btn-outline !px-4 !py-2 text-sm">
+            <button type="button" onClick={() => { setEditing(false); setError(""); setForm({ name: service.name, description: service.description || "", priceNote: service.price_note || "mulai dari", durationEstimate: service.duration_estimate || "", icon: service.icon || "wrench", imageUrl: service.image_url || null, warrantyDays: tandaGaransi(service) }); }} className="btn-outline !px-4 !py-2 text-sm">
               Batal
             </button>
           </div>
@@ -1634,6 +1742,9 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
         {service.name}
         {!active && (
           <span className="text-[10px] font-bold uppercase tracking-wide text-ink-soft bg-line px-2 py-0.5 rounded-full">Nonaktif</span>
+        )}
+        {Number(service.warranty_days ?? 7) === 0 && (
+          <span className="text-[10px] font-bold uppercase tracking-wide text-ink-soft bg-line px-2 py-0.5 rounded-full">Tanpa garansi</span>
         )}
       </p>
       <p className="text-xs text-ink-soft mb-3">{service.categories?.name}</p>

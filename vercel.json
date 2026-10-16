@@ -7,6 +7,10 @@
     {
       "path": "/api/cron/purge-history",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/piutang-reminder",
+      "schedule": "0 3 * * *"
     }
   ]
 }

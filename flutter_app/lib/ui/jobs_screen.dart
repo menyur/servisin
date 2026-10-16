@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 
 import '../api.dart';
 import '../format.dart';
+import '../job_filter.dart';
 import '../models.dart';
 import '../theme.dart';
 import 'balance_screen.dart';
@@ -19,7 +20,13 @@ import 'pin_preview_sheet.dart';
 /// - **Tugas Saya** — pekerjaan yang sudah ditugaskan ke saya; ketuk
 ///   kartu untuk membuka detail (chat pelanggan, mulai, selesai).
 class JobsScreen extends StatefulWidget {
-  const JobsScreen({super.key});
+  /// Seam uji: daftar pekerjaan Tersedia & Tugas Saya. Diisi hanya dari test
+  /// supaya layar ini bisa dijalankan tanpa Supabase; `null` (produksi) =
+  /// ambil dari server seperti biasa — perilaku produksi tidak berubah.
+  final List<AvailableJob>? availableUji;
+  final List<Booking>? assignedUji;
+
+  const JobsScreen({super.key, this.availableUji, this.assignedUji});
 
   @override
   State<JobsScreen> createState() => _JobsScreenState();
@@ -81,6 +88,15 @@ class _JobsScreenState extends State<JobsScreen> {
     setState(() {
       _error = null;
     });
+    // Seam uji: data sudah disuntikkan → jangan menyentuh GPS/server sama
+    // sekali (tidak ada 12 detik tunggu lokasi, tidak ada panggilan API).
+    if (widget.availableUji != null || widget.assignedUji != null) {
+      setState(() {
+        _available = widget.availableUji ?? const <AvailableJob>[];
+        _assigned = widget.assignedUji ?? const <Booking>[];
+      });
+      return;
+    }
     if (withLocation) {
       // Batas keras: `LocationSettings.timeLimit` TIDAK selalu dihormati
       // platform — saat izin lokasi diberikan tapi GPS belum dapat fix,
@@ -196,6 +212,14 @@ class _JobsScreenState extends State<JobsScreen> {
     await openRouteToDestination(context, lat: la, lng: ln, address: address);
   }
 
+  /// Buka layar Saldo (isi saldo / riwayat mutasi) lalu muat ulang daftar.
+  /// Dipakai strip saldo, kartu lowongan yang terkunci, dan tawaran setelah
+  /// server menolak klaim karena saldo habis.
+  Future<void> _bukaSaldo() async {
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const BalanceScreen()));
+    await _load();
+  }
+
   Future<void> _claim(AvailableJob job) async {
     final sure = await showDialog<bool>(
       context: context,
@@ -228,6 +252,12 @@ class _JobsScreenState extends State<JobsScreen> {
         await _load();
         // Rute otomatis setelah klaim (pin bila ada, alamat bila tidak).
         if (mounted) await _routeAfterClaim(job);
+      } else if (r.kode == 'saldo_habis') {
+        // Saldo habis di antara pemuatan daftar dan tepukan tombol (mis. baru
+        // saja menyelesaikan pekerjaan). Pesannya dari server apa adanya, lalu
+        // tawarkan jalan keluarnya — bukan sekadar pesan error.
+        await _tawarkanIsiSaldo(r.error);
+        await _load();
       } else {
         showSnack(context, r.error ?? 'Gagal mengambil pekerjaan.', error: true);
         await _load(); // daftar mungkin berubah (diambil orang lain)
@@ -237,6 +267,31 @@ class _JobsScreenState extends State<JobsScreen> {
     } finally {
       if (mounted) setState(() => _claimingId = null);
     }
+  }
+
+  /// Tawaran setelah SERVER menolak klaim karena saldo habis: jelaskan lalu
+  /// buka layar Saldo bila teknisi mau (pesannya dari server apa adanya supaya
+  /// angka/aturan yang berlaku tidak ditebak ulang di aplikasi).
+  Future<void> _tawarkanIsiSaldo(String? pesanServer) async {
+    if (!mounted) return;
+    final isi = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Saldo belum terisi'),
+        content: Text(
+          pesanServer ??
+              'Isi saldo dulu sebelum mengambil pekerjaan baru. Potongan komisi + biaya '
+                  'aplikasi diambil penuh dari saldo (saldo boleh minus = kekurangan yang '
+                  'harus disetor), jadi setoran menutup kekurangan itu lebih dulu.',
+          style: const TextStyle(fontSize: 13, height: 1.45),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Nanti')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Isi Saldo')),
+        ],
+      ),
+    );
+    if (isi == true && mounted) await _bukaSaldo();
   }
 
   Future<void> _openDetail(Booking b) async {
@@ -270,14 +325,7 @@ class _JobsScreenState extends State<JobsScreen> {
           subtitle: 'Ambil pekerjaan baru atau lanjutkan tugasmu',
           bottom: Column(mainAxisSize: MainAxisSize.min, children: [
             // Strip saldo — hidup hanya untuk teknisi (summary terisi).
-            if (_bal != null)
-              _BalanceStrip(
-                summary: _bal!,
-                onTap: () async {
-                  await Navigator.push(context, MaterialPageRoute(builder: (_) => const BalanceScreen()));
-                  _load();
-                },
-              ),
+            if (_bal != null) _BalanceStrip(summary: _bal!, onTap: _bukaSaldo),
             SizedBox(
               height: 46,
               child: Row(children: [
@@ -356,39 +404,22 @@ class _JobsScreenState extends State<JobsScreen> {
       ]);
     }
 
-    // Filter area layanan (paritas dengan push "pekerjaan baru" di server):
-    // area kosong = semua pekerjaan; terisi = cocokkan case-insensitive
-    // sebagai substring alamat pesanan.
-    final area = _areaFilter;
-    final hasArea = area.isNotEmpty;
-
-    // Filter keahlian utama (server-side juga, paritas dengan push):
-    // kategori layanan pesanan harus = profiles.skill teknisi.
+    // Penyaringan area layanan + keahlian utama SATU SUMBER dengan badge tab
+    // Pekerjaan (lib/job_filter.dart) — angka di badge tidak mungkin berbeda
+    // dari jumlah kartu di sini, termasuk aturan FAIL-OPEN-nya (paritas
+    // server, src/lib/skill-match.js::selectJobTargets).
     final skill = (_profile?.skill ?? '').trim();
+    final hasArea = _areaFilter.isNotEmpty;
     final hasSkill = skill.isNotEmpty;
-    final strictFiltered = jobs.where((j) {
-      if (hasArea && !_showAllAreas && !j.address.toLowerCase().contains(area)) {
-        return false;
-      }
-      if (hasSkill && !_showAllSkills) {
-        // Cocokkan lewat id ATAU nama kategori — toleran terhadap nilai
-        // skill warisan berupa label ('Service AC'), paritas dengan RPC
-        // technician_matches_service() dan filter push web. RPC lama tanpa
-        // kolom kategori otomatis fail-open (lihat skillMatchesCategory).
-        return skillMatchesCategory(skill, j.serviceCategory, j.serviceCategoryName);
-      }
-      return true;
-    }).toList(growable: false);
-
-    // FAIL-OPEN (paritas server, src/lib/skill-match.js::selectJobTargets):
-    // penyaringan area/keahlian mencocokkan TEKS. Bila alamat pelanggan tidak
-    // memuat nama area teknisi, hasilnya kosong dan pekerjaan seolah hilang —
-    // padahal server tetap mengirim notifikasi sebagai cadangan. Daftar ini
-    // memakai aturan yang sama agar notifikasi itu ada isinya.
-    final fallbackAktif = strictFiltered.isEmpty &&
-        jobs.isNotEmpty &&
-        ((hasArea && !_showAllAreas) || (hasSkill && !_showAllSkills));
-    final filtered = fallbackAktif ? jobs : strictFiltered;
+    final hasil = filterAvailableJobs(
+      jobs: jobs,
+      serviceArea: _profile?.serviceArea,
+      skill: skill,
+      showAllAreas: _showAllAreas,
+      showAllSkills: _showAllSkills,
+    );
+    final filtered = hasil.shown;
+    final fallbackAktif = hasil.fallbackAktif;
 
     final filterBar = (hasArea || hasSkill)
         ? _AreaFilterBar(
@@ -454,6 +485,12 @@ class _JobsScreenState extends State<JobsScreen> {
         onClaim: () => _claim(job),
         // Rute selalu tersedia selama alamat terbaca — tidak lagi menunggu pin.
         onRoute: job.address.trim().isEmpty ? null : () => _routeToAvailableJob(job),
+        // Saldo 0/minus → tombol Ambil dimatikan dengan alasannya (aturan yang
+        // sama ditegakkan server di claim_job; ini supaya tombolnya tidak tampak
+        // bisa diketik tanpa hasil). Rute tetap aktif: melihat lokasi tidak
+        // memerlukan saldo.
+        blockedReason: _bal?.sebabTidakBolehAmbil,
+        onTopUp: _bal?.bolehAmbilPekerjaan == false ? _bukaSaldo : null,
       );
 
   Widget _assignedList(List<Booking> bookings) {
@@ -642,12 +679,20 @@ class AvailableCard extends StatelessWidget {
   /// Null = tidak ada tujuan rute (alamat kosong) → tombol Rute disembunyikan.
   final VoidCallback? onRoute;
 
+  /// Sebab tombol Ambil dimatikan (mis. saldo 0). Null = boleh diambil.
+  final String? blockedReason;
+
+  /// Aksi "Isi saldo" saat [blockedReason] terisi (null = tanpa tombol itu).
+  final VoidCallback? onTopUp;
+
   const AvailableCard({
     super.key,
     required this.job,
     required this.claiming,
     required this.onClaim,
     this.onRoute,
+    this.blockedReason,
+    this.onTopUp,
   });
 
   @override
@@ -728,7 +773,9 @@ class AvailableCard extends StatelessWidget {
           child: Row(children: [
             Expanded(
               child: FilledButton.icon(
-                onPressed: claiming ? null : onClaim,
+                // Tombol MATI saat saldo 0/minus — server juga menolaknya, jadi
+                // menyalakannya hanya menghasilkan pesan error yang membingungkan.
+                onPressed: claiming || blockedReason != null ? null : onClaim,
                 icon: claiming
                     ? const SizedBox(
                         width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
@@ -753,6 +800,37 @@ class AvailableCard extends StatelessWidget {
             ],
           ]),
         ),
+        // Alasan tombol Ambil mati + jalan keluarnya. Tanpa baris ini teknisi
+        // hanya melihat tombol yang tidak bereaksi (keluhan yang persis ingin
+        // dihapus oleh aturan saldo ini).
+        if (blockedReason != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(11, 9, 6, 9),
+              decoration: BoxDecoration(
+                  color: AppColors.amberTint, borderRadius: BorderRadius.circular(12)),
+              child: Row(children: [
+                const Icon(Icons.account_balance_wallet_rounded,
+                    size: 16, color: AppColors.amber),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(blockedReason!,
+                      style: const TextStyle(
+                          fontSize: 11.5, height: 1.35, color: AppColors.ink)),
+                ),
+                if (onTopUp != null)
+                  TextButton(
+                    onPressed: onTopUp,
+                    style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 34),
+                        padding: const EdgeInsets.symmetric(horizontal: 10)),
+                    child: const Text('Isi Saldo',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                  ),
+              ]),
+            ),
+          ),
       ]),
     );
   }
@@ -966,6 +1044,13 @@ class _BalanceStrip extends StatelessWidget {
                   color: negative ? AppColors.coral : AppColors.navy,
                 ),
               ),
+              // Saldo 0/minus = pekerjaan baru terkunci (aturan server). Ditulis
+              // di strip juga, bukan hanya di kartu lowongan, supaya alasannya
+              // terbaca sebelum teknisi membuka tab Tersedia.
+              if (!summary.bolehAmbilPekerjaan)
+                const Text('Isi saldo dulu untuk bisa ambil pekerjaan',
+                    style: TextStyle(
+                        fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.coral)),
             ]),
           ),
           // Komisi terpotong & pendapatan kotor — sembunyi saat masih nol

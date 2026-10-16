@@ -8,9 +8,11 @@
 // berkas migrasi belum dijalankan, atau penjaganya bocor, skrip ini GAGAL.
 //
 // Semua data dibuat dari nol dan DIBERSIHKAN SENDIRI (aman diulang):
-//   2 pelanggan + 1 teknisi + 1 admin sementara, 5 pesanan uji, 1 baris
+//   2 pelanggan + 1 teknisi + 1 admin sementara, 6 pesanan uji, 1 baris
 //   technician_locations, klaim garansi + kunjungan ulangnya. Nilai
-//   `services.warranty_days` layanan uji dikembalikan seperti semula.
+//   `services.warranty_days` layanan uji DAN setelan garansi global
+//   (`app_settings.warranty_enabled` / `warranty_days`) dikembalikan seperti
+//   semula — probe ini memang sengaja mematikan saklarnya untuk menguji.
 //
 // TANPA SPAM KE ADMIN (penting): trigger DB mengantre email ke admin SUNGGUHAN
 // untuk tiap baris uji — `trg_admin_email_booking` (pesanan) dan
@@ -43,6 +45,11 @@
 //   F. decide_warranty_claim()   — hanya admin; SETUJU → kunjungan ulang
 //                                  berharga 0 ke teknisi yang sama (komisi 0,
 //                                  garansi dibiayai platform).
+//   G. setelan garansi global    — durasi standar menang atas angka per
+//      (app_settings)              layanan, layanan bertanda 0 dikecualikan,
+//                                  saklar mati menolak klaim BARU (+ alasan yang
+//                                  tepat), dan klaim yang sudah masuk tetap bisa
+//                                  diputuskan admin walau garansi dimatikan.
 //
 // Exit: 0 lulus · 1 ada regresi (atau migrasi belum dijalankan) · 3 tanpa kredensial.
 // Tidak pernah mencetak nilai rahasia. Jalankan: npm run verify:self-service
@@ -60,6 +67,7 @@ import {
 
 const MIGRATION_SELF = "supabase/migrate-customer-self-service.sql";
 const MIGRATION_WARRANTY = "supabase/migrate-warranty-claims.sql";
+const MIGRATION_WARRANTY_SETTINGS = "supabase/migrate-warranty-settings.sql";
 
 const stamp = Date.now();
 const bookingIds = [];
@@ -152,6 +160,31 @@ async function pickService(admin) {
     warrantyColumnPresent,
     warrantyDays: Number(row.warranty_days ?? 0),
   };
+}
+
+/**
+ * Setelan garansi platform (baris tunggal `app_settings`). Migrasi
+ * migrate-warranty-settings.sql menambahkan `warranty_enabled` & `warranty_days`;
+ * bila kolomnya belum ada, itu dilaporkan sebagai migrasi yang belum dijalankan —
+ * bukan seolah garansi di database rusak.
+ *
+ * @returns {Promise<{ok: false, error: string} | {ok: true, enabled: boolean, days: number}>}
+ */
+async function bacaSetelanGaransi(admin) {
+  const { data, error } = await admin
+    .from("app_settings")
+    .select("warranty_enabled, warranty_days")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) {
+    if (ABSENT_RE.test(errText(error))) {
+      missing.set("app_settings.warranty_enabled/warranty_days", MIGRATION_WARRANTY_SETTINGS);
+      return { ok: false, error: errText(error) };
+    }
+    throw new Error(`gagal baca setelan garansi: ${errText(error)}`);
+  }
+  if (!data) return { ok: false, error: "baris app_settings id = 1 belum ada" };
+  return { ok: true, enabled: !!data.warranty_enabled, days: Number(data.warranty_days ?? 0) };
 }
 
 /**
@@ -282,6 +315,12 @@ async function main() {
   let adminUser = null;
   let customer = null;
   let warrantyOriginal = null;
+  // Setelan garansi global sebelum probe menyentuhnya (dikembalikan di akhir).
+  let warrantySettingsOriginal = null;
+  // Durasi efektif & kesiapan setelan: tanpa setelan, angka yang diuji tidak
+  // bisa dipastikan, jadi uji garansi DILEWATI dengan alasan yang jelas.
+  let setelOk = false;
+  let durasiEfektif = 0;
   let locationsOk = true;
   let proofColumnsOk = true;
 
@@ -601,10 +640,38 @@ async function main() {
     if (!hasWarranty || !service.warrantyColumnPresent) {
       skip("seluruh uji garansi", `${MIGRATION_WARRANTY} belum dijalankan`);
     } else {
-      if (service.warrantyDays <= 0) {
+      // Durasi garansi yang BERLAKU sekarang datang dari setelan platform
+      // (migrate-warranty-settings.sql); `services.warranty_days` hanya menandai
+      // pengecualian (0 = layanan ini tidak bergaransi).
+      const setel = await bacaSetelanGaransi(admin);
+      setelOk = setel.ok;
+      if (!setel.ok) {
+        skip(
+          "seluruh uji garansi",
+          `${MIGRATION_WARRANTY_SETTINGS} belum dijalankan — durasi efektif tidak bisa dipastikan (${setel.error})`
+        );
+      } else if (!setel.enabled || setel.days <= 0) {
+        // Garansi sedang dimatikan admin: uji ini perlu garansi menyala, jadi
+        // dinyalakan sementara lalu dikembalikan di akhir.
+        warrantySettingsOriginal = { enabled: setel.enabled, days: setel.days };
+        const err = await patch("app_settings", 1, { warranty_enabled: true, warranty_days: 7 });
+        if (err) {
+          setelOk = false;
+          skip("seluruh uji garansi", `gagal menyalakan setelan garansi global (${err})`);
+        } else {
+          setel.enabled = true;
+          setel.days = 7;
+          info("setelan garansi global semula nonaktif → aktif 7 hari selama uji (dikembalikan di akhir)");
+        }
+      }
+
+      if (setelOk) durasiEfektif = setel.days;
+
+      if (setelOk && service.warrantyDays <= 0) {
         warrantyOriginal = service.warrantyDays;
         const err = await patch("services", service.row.id, { warranty_days: 7 });
         if (err) {
+          durasiEfektif = 0;
           skip("seluruh uji garansi", `gagal menyalakan warranty_days layanan uji (${err})`);
         } else {
           service.warrantyDays = 7;
@@ -612,8 +679,8 @@ async function main() {
         }
       }
 
-      if (service.warrantyDays > 0) {
-        const days = service.warrantyDays;
+      if (durasiEfektif > 0 && service.warrantyDays > 0) {
+        const days = durasiEfektif;
         const b5 = await createBooking(clients.cust, service, {
           date: dayOffset(1),
           time: "08:00-10:00",
@@ -744,6 +811,124 @@ async function main() {
       }
     }
 
+    // ---------------- 9. Setelan garansi global (saklar & pengecualian) ----------------
+    step("9. Pengaturan garansi global (saklar aktif/nonaktif & pengecualian layanan)");
+    if (durasiEfektif <= 0) {
+      skip("uji setelan garansi global", `${MIGRATION_WARRANTY_SETTINGS} belum dijalankan / durasi 0`);
+    } else {
+      const b7 = await createBooking(clients.cust, service, {
+        date: dayOffset(3),
+        time: "13:00-15:00",
+        notes: "probe setelan garansi global",
+      });
+      const prepErr = await patch("bookings", b7.id, {
+        technician_id: tech.id,
+        status: "completed",
+        completed_at: new Date().toISOString(),
+      });
+      if (prepErr) throw new Error(`gagal menyiapkan pesanan uji setelan garansi: ${prepErr}`);
+
+      // (a) Durasi standar menang atas angka per layanan.
+      const info7 = await rpc(clients.cust, "booking_warranty_info", { p_booking: b7.id });
+      check(
+        `durasi standar ${durasiEfektif} hari yang berlaku (bukan angka per layanan ${service.warrantyDays})`,
+        Number(info7.data?.warranty_days) === durasiEfektif && info7.data?.warranty_enabled === true,
+        `warranty_days=${info7.data?.warranty_days} enabled=${info7.data?.warranty_enabled}`
+      );
+
+      // (b) Layanan dikecualikan (services.warranty_days = 0) → ditolak dengan
+      //     alasan layanan, BUKAN alasan "garansi dinonaktifkan".
+      const exclErr = await patch("services", service.row.id, { warranty_days: 0 });
+      if (exclErr) {
+        skip("uji pengecualian layanan", `gagal menandai layanan uji tanpa garansi (${exclErr})`);
+      } else {
+        const excl = await rpc(clients.cust, "create_warranty_claim", {
+          p_booking: b7.id,
+          p_reason: "uji pengecualian layanan",
+        });
+        check(
+          "layanan bertanda tanpa garansi → klaim ditolak dengan alasan layanan",
+          excl.data?.ok === false &&
+            /tidak bergaransi/i.test(excl.data?.error ?? "") &&
+            excl.data?.warranty_disabled !== true,
+          errText(excl.error) || excl.data?.error
+        );
+        const balik = await patch("services", service.row.id, { warranty_days: service.warrantyDays });
+        if (balik) skip("kembalikan tanda garansi layanan uji", balik);
+      }
+
+      // (c) Saklar dimatikan → klaim BARU ditolak, informasi garansi jadi 0 hari.
+      const offErr = await patch("app_settings", 1, { warranty_enabled: false });
+      if (offErr) {
+        skip("uji saklar garansi nonaktif", `gagal mematikan setelan garansi (${offErr})`);
+      } else {
+        const off = await rpc(clients.cust, "create_warranty_claim", {
+          p_booking: b7.id,
+          p_reason: "uji garansi dimatikan admin",
+        });
+        check(
+          "saklar garansi dimatikan → klaim baru ditolak & ditandai dinonaktifkan",
+          off.data?.ok === false && off.data?.warranty_disabled === true,
+          errText(off.error) || off.data?.error
+        );
+        const offInfo = await rpc(clients.cust, "booking_warranty_info", { p_booking: b7.id });
+        check(
+          "saklar mati → informasi garansi 0 hari & tidak layak diklaim",
+          Number(offInfo.data?.warranty_days) === 0 &&
+            offInfo.data?.eligible === false &&
+            offInfo.data?.warranty_enabled === false,
+          `warranty_days=${offInfo.data?.warranty_days} eligible=${offInfo.data?.eligible} enabled=${offInfo.data?.warranty_enabled}`
+        );
+      }
+
+      // (d) Dinyalakan lagi → durasi standar berlaku dan klaim diterima.
+      const onErr = await patch("app_settings", 1, {
+        warranty_enabled: true,
+        warranty_days: durasiEfektif,
+      });
+      if (onErr) {
+        skip("uji garansi dinyalakan kembali", `gagal menyalakan setelan garansi (${onErr})`);
+      } else {
+        const on = await rpc(clients.cust, "create_warranty_claim", {
+          p_booking: b7.id,
+          p_reason: "klaim setelah garansi dinyalakan kembali",
+        });
+        check(
+          "garansi dinyalakan lagi → klaim diterima dengan durasi standar",
+          on.data?.ok === true && Number(on.data?.warranty_days) === durasiEfektif,
+          errText(on.error) || on.data?.error
+        );
+
+        // (e) Mematikan garansi TIDAK boleh meninggalkan klaim menggantung:
+        //     klaim yang sudah masuk tetap bisa diputuskan admin.
+        const claim7 = on.data?.claim_id;
+        if (claim7) {
+          const off2 = await patch("app_settings", 1, { warranty_enabled: false });
+          if (off2) {
+            skip("uji keputusan klaim saat garansi mati", off2);
+          } else {
+            const decide7 = await rpc(clients.admin, "decide_warranty_claim", {
+              p_claim: claim7,
+              p_status: "approved",
+              p_note: "kunjungan ulang garansi (uji setelan)",
+              p_date: dayOffset(4),
+              p_time: "10:00-12:00",
+            });
+            check(
+              "garansi dimatikan → klaim yang sudah masuk tetap bisa diputuskan admin",
+              decide7.data?.ok === true,
+              errText(decide7.error) || decide7.data?.error || own(decide7)
+            );
+            if (decide7.data?.revisit_booking_id) {
+              bookingIds.push(decide7.data.revisit_booking_id);
+              await dropQueuedAdminEmail(decide7.data.revisit_booking_id);
+            }
+          }
+          await patch("app_settings", 1, { warranty_enabled: true, warranty_days: durasiEfektif });
+        }
+      }
+    }
+
     for (const c of Object.values(clients)) if (c) await c.auth.signOut();
   } finally {
     step("Pembersihan data uji");
@@ -772,6 +957,25 @@ async function main() {
       const err = await patch("services", service.row.id, { warranty_days: warrantyOriginal });
       console.log(`   warranty_days layanan uji ${err ? `GAGAL dikembalikan (${err})` : `dikembalikan ke ${warrantyOriginal}`}`);
     }
+    // Setelan garansi SELALU dikembalikan: uji di atas sengaja mematikan
+    // saklarnya, dan garansi yang tertinggal mati di produksi bukan sekadar
+    // "data uji tersisa" — pelanggan kehilangan haknya. Bila semula memang
+    // menyala (tidak disimpan di warrantySettingsOriginal), pastikan menyala
+    // lagi walau langkah uji terakhir gagal di tengah jalan.
+    if (warrantySettingsOriginal) {
+      const err = await patch("app_settings", 1, warrantySettingsOriginal);
+      console.log(
+        `   setelan garansi global ${err ? `GAGAL dikembalikan (${err})` : `dikembalikan ke ${warrantySettingsOriginal.enabled ? "aktif" : "nonaktif"} ${warrantySettingsOriginal.days} hari`}`
+      );
+    } else if (durasiEfektif > 0) {
+      const err = await patch("app_settings", 1, {
+        warranty_enabled: true,
+        warranty_days: durasiEfektif,
+      });
+      console.log(
+        `   setelan garansi global ${err ? `GAGAL dipastikan menyala (${err})` : `dipastikan menyala ${durasiEfektif} hari`}`
+      );
+    }
 
     const del = await resilient("hapus akun uji", () => deleteTempUsers(admin, tempUsers));
     for (const d of del) console.log(`   akun uji ${d.label}: ${d.ok ? "OK" : `GAGAL (${d.error})`}`);
@@ -798,15 +1002,18 @@ async function main() {
   if (missing.size) {
     console.log("\nBerkas migrasi yang belum dijalankan (perlu dijalankan lebih dulu):");
     for (const [name, file] of missing) console.log(`   • ${name} → ${file}`);
-    console.log("   Urutannya WAJIB: migrate-customer-self-service.sql dulu, lalu migrate-warranty-claims.sql.");
+    console.log(
+      "   Urutannya WAJIB: migrate-customer-self-service.sql dulu, lalu migrate-warranty-claims.sql, " +
+        "dan terakhir migrate-warranty-settings.sql (setelan garansi global)."
+    );
   }
   if (failed) {
     console.log("\nKESIMPULAN: LAYANAN_MANDIRI_PELANGGAN_GAGAL — perbaiki fungsi/penjaga di atas, jangan melemahkan asersi.");
     process.exit(1);
   }
   console.log(
-    "\nKESIMPULAN: LAYANAN_MANDIRI_PELANGGAN_LULUS — batal/ubah jadwal, jarak & kontak teknisi, dan garansi pekerjaan " +
-      "terbukti jalan lewat RPC yang sama dengan aplikasi."
+    "\nKESIMPULAN: LAYANAN_MANDIRI_PELANGGAN_LULUS — batal/ubah jadwal, jarak & kontak teknisi, garansi pekerjaan, " +
+      "dan setelan garansi global (saklar + durasi standar) terbukti jalan lewat RPC yang sama dengan aplikasi."
   );
   process.exit(0);
 }

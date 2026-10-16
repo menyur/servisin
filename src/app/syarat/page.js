@@ -137,7 +137,17 @@ export default function SyaratKetentuanPage() {
       <LegalSection id="penutupan" title="13. Penangguhan dan penutupan akun">
         <p>
           Kami dapat menangguhkan atau menutup akun yang melanggar ketentuan ini atau membahayakan
-          pengguna lain. Kamu dapat menutup akunmu sendiri dengan menghubungi dukungan.
+          pengguna lain.
+        </p>
+        <p>
+          Kamu dapat menutup akunmu sendiri kapan saja: dari aplikasi Android (tab Profil → Hapus akun)
+          atau lewat halaman{" "}
+          <Link href="/hapus-akun" className="text-brand underline">
+            Hapus Akun
+          </Link>{" "}
+          yang bisa dipakai tanpa memasang aplikasi. Permintaan dijalankan paling lambat 7 hari setelah
+          dikonfirmasi. Pesanan yang belum selesai dan saldo yang belum nol harus dibereskan lebih dulu —
+          alasan lengkapnya ditampilkan saat kamu mengajukan.
         </p>
       </LegalSection>
 

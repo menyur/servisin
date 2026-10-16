@@ -168,9 +168,13 @@ function listDevices() {
 // UI: baca pohon semantik Flutter lewat uiautomator (bukan tangkapan layar,
 // yang tidak bisa dibaca skrip). Flutter menaruh teks di content-desc.
 // ---------------------------------------------------------------------------
+// uiautomator menulis karakter non-ASCII sebagai referensi numerik (mis. tanda
+// pisah "—" → `&#8212;`, emoji → `&#128075;`); entitas numerik itu harus dibuka
+// dulu, kalau tidak pola teks yang memuat karakter tersebut tidak akan cocok.
 const decodeEntities = (s) =>
   s
-    .replace(/&#10;/g, "\n")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")

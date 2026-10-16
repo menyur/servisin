@@ -39,7 +39,56 @@ security definer set search_path = public
 
 Menambah jalur publik baru? Ikuti pola ini — function security definer yang mengembalikan kolom minimal, bukan policy select terbuka.
 
-**Penerima notifikasi admin per peristiwa.** Tabel `admin_notification_optouts` (migrasi [supabase/migrate-admin-notification-prefs.sql](../supabase/migrate-admin-notification-prefs.sql)) memakai policy `for all using (public.is_admin())` — hanya admin yang bisa membaca/mengubahnya. Penyaring penerimanya `admin_emails_for_event(p_event)` adalah function `security definer` yang **hanya mengembalikan alamat email** (sama seperti `get_admin_emails()` yang sudah ada), bukan data profil lain, jadi tidak menambah paparan baru. RPC worker antrean (`take_admin_email_batch`, `complete_admin_email`) tetap **hanya** service role.
+**Penerima notifikasi admin per peristiwa.** Tabel `admin_notification_optouts` (migrasi [supabase/migrate-admin-notification-prefs.sql](../supabase/migrate-admin-notification-prefs.sql)) memakai policy `for all using (public.is_admin())` — hanya admin yang bisa membaca/mengubahnya. Penyaring penerimanya `admin_emails_for_event(p_event)` adalah function `security definer` yang **hanya mengembalikan alamat email** (sama seperti `get_admin_emails()`), bukan data profil lain.
+
+> **Koreksi (audit Okt 2026):** kalimat sebelumnya di sini menyimpulkan "tidak menambah paparan baru" dan "RPC worker antrean hanya service role" — **keduanya tidak benar dalam praktik.** Policy RLS memang benar, tetapi RPC tidak diatur RLS: grant `EXECUTE` bawaan PUBLIC membuat `anon` tetap bisa memanggil `admin_emails_for_event`, `get_admin_emails`, dan `take_admin_email_batch`. Daftar email admin adalah data pribadi dan antrean notifikasi bukan milik publik. Perbaikannya di §2.1 dan [supabase/fix-rpc-grants-public.sql](../supabase/fix-rpc-grants-public.sql).
+
+---
+
+## 2.1 Izin EXECUTE pada FUNGSI — jebakan yang hampir tak terlihat
+
+RLS mengatur **tabel**; ia tidak mengatur **fungsi**. PostgreSQL memberi `EXECUTE`
+kepada peran **PUBLIC** secara default pada setiap fungsi baru, dan
+`revoke ... from anon, authenticated` **tidak** menghapus grant bawaan itu. Jadi
+RPC yang jelas bukan untuk umum tetap bisa dipanggil pengunjung tanpa login —
+tanpa satu pun policy RLS yang dilanggar, sehingga **tidak ada tes yang merah**.
+
+Audit Okt 2026 menemukan `anon` masih bisa memanggil 23 RPC, di antaranya:
+membaca daftar email admin (`get_admin_emails`, `admin_emails_for_event`),
+mengambil dan menandai isi antrean notifikasi (`take_push_batch`,
+`take_admin_email_batch`, `complete_*`), menghapus riwayat lama
+(`purge_expired_history`), dan **membuat bucket penyimpanan baru**
+(`ensure_bucket`) — yang terakhir dibuktikan dengan benar-benar membuat bucket di
+proyek, lalu bucketnya dihapus lagi. Beberapa pencabutan di berkas migrasi lama
+juga ternyata tidak pernah berlaku, jadi jangan mengandalkan berkas lama:
+ukurannya adalah probe, bukan niat yang tertulis di migrasi.
+
+**Aturannya:**
+
+1. Fungsi baru → **selalu** tulis `revoke all on function public.nama(args) from
+   public, anon, authenticated;` lalu `grant execute ... to <peran>`. Sebut
+   ketiga peran sekaligus; menyebut `public` saja terbukti tidak cukup di proyek ini.
+2. `service_role` (kunci service) selalu boleh. Ia server tepercaya, tidak pernah
+   dibagikan ke klien — mengunci dia hanya melahirkan kegagalan yang membingungkan.
+3. Predikat policy RLS — `is_admin`, `is_active_technician`, `is_chat_participant`,
+   `technician_matches_service` — **tetap** boleh dipanggil anon. Policy dievaluasi
+   dengan hak peran yang MENJALANKAN kueri, jadi mencabutnya membuat kueri gagal
+   `permission denied for function` alih-alih mengembalikan daftar kosong:
+   kerusakan yang lebih buruk daripada manfaatnya. Semuanya predikat read-only yang
+   menilai pemanggilnya sendiri dan gagal-tertutup.
+4. `get_booking_by_code` diberi izin **eksplisit** ke anon (halaman /track) — bukan
+   lewat grant bawaan PUBLIC, supaya siapa yang boleh memanggilnya terbaca jelas.
+
+**Jangan percaya daftar RPC di `/rest/v1/`.** PostgREST menyembunyikan fungsi
+ber-grant PUBLIC dari dokumen OpenAPI-nya, sehingga daftar itu tampak kosong untuk
+anon padahal panggilannya tetap berhasil — audit pertama saya sempat tertipu oleh
+ini. Yang benar: `has_function_privilege(...)` (ada di bagian 3 berkas perbaikan)
+atau probe di bawah.
+
+Berkas: [supabase/fix-rpc-grants-public.sql](../supabase/fix-rpc-grants-public.sql)
+(idempoten, memuat daftar lengkap per peran + kueri pemeriksaan).
+Verifikasi: `npm run verify:rpc-grants` (live) dan
+`npm run verify:rpc-grants-offline` (statis, ikut berjalan di CI).
 
 ---
 
@@ -105,6 +154,7 @@ Endpoint baru yang tidak butuh sesi (webhook, cron) → WAJIB punya secret heade
 ## 6. Checklist saat menambah fitur
 
 1. ☐ Tabel baru → `enable row level security` + policy select/insert/update/delete yang eksplisit (jangan pola "biarkan dulu, amankan nanti")
+1b. ☐ Fungsi/RPC baru → `revoke all on function ... from public, anon, authenticated;` + `grant execute ... to <peran>`, lalu daftarkan di `supabase/fix-rpc-grants-public.sql` (lihat §2.1). `npm run verify:rpc-grants-offline` akan merah kalau terlewat.
 2. ☐ Tulis migrasi idempoten di `supabase/` (`drop policy if exists` sebelum `create policy`, `DO $$ ... EXCEPTION` untuk alter yang butuh izin)
 3. ☐ File baru dari user → bucket mana? publik/privat? kalau privat: path di DB + signed URL server
 4. ☐ Server action baru → cek sesi/role di baris pertama
@@ -127,4 +177,16 @@ curl -X POST "$SUPABASE_URL/rest/v1/rpc/get_booking_by_code" \
 # hasil yang benar: []
 ```
 
-Kebocoran yang pernah ketemu (pelajaran): policy `for select using (true)` di tabel bookings membuka seluruh data pelanggan meski UI tidak pernah menampilkannya; bucket bukti transfer yang publik membuat bukti transfer bisa dilihat siapa pun dengan URL. Keduanya sudah ditutup — jangan dibuka lagi.
+**Izin fungsi (audit Okt 2026) — jalankan keduanya:**
+
+```bash
+# live: memanggil tiap RPC sebagai anon, sebagai pengguna masuk, dan sebagai
+# service role, lalu membandingkan hasilnya dengan peran yang seharusnya.
+npm run verify:rpc-grants
+
+# statis (tanpa jaringan, ikut CI): memastikan setiap fungsi security definer
+# tercatat izinnya dan setiap RPC yang dipakai aplikasi tidak terkunci.
+npm run verify:rpc-grants-offline
+```
+
+Kebocoran yang pernah ketemu (pelajaran): policy `for select using (true)` di tabel bookings membuka seluruh data pelanggan meski UI tidak pernah menampilkannya; bucket bukti transfer yang publik membuat bukti transfer bisa dilihat siapa pun dengan URL; dan grant `EXECUTE` bawaan PUBLIC membuat 23 RPC — termasuk penghapusan akun, penghapusan riwayat, dan pembuatan bucket — bisa dipanggil tanpa login. Ketiganya sudah ditutup — jangan dibuka lagi, dan jangan menganggap `revoke ... from anon` cukup untuk fungsi.

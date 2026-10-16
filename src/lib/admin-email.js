@@ -16,7 +16,14 @@
  *        mengirim email ke ADMIN YANG DIPILIH untuk peristiwa itu (pengaturan
  *        tab "Notif Email Admin"; tanpa opt-out = semua admin seperti dulu).
  *     3. Sukses → baris dihapus; gagal → attempts naik, dicoba ulang
- *        (worker berikutnya / jadwal pg_cron / webhook).
+ *        (worker berikutnya / jadwal pg_cron / webhook) DAN alasan dari penyedia
+ *        email dicatat pada barisnya (last_error + last_attempt_at). Setelah
+ *        percobaan habis barisnya TIDAK dibuang: ia muncul di tab "Notif Email
+ *        Admin" sebagai "Email yang gagal terkirim", lengkap dengan tombol coba
+ *        lagi/buang (migrasi supabase/migrate-admin-email-failures.sql).
+ *        Sebelumnya barisnya dihapus dan sebabnya hanya ada di log server —
+ *        kunci Resend yang tidak sah bisa mematikan SEMUA email admin tanpa
+ *        jejak apa pun di panel maupun database.
  *
  * Dengan begitu email admin terkirim untuk SEMUA jalur sekaligus — web maupun
  * aplikasi — tanpa email ganda dan tanpa mempercayai isi payload dari klien:
@@ -38,6 +45,7 @@ import {
   sendAdminNewDepositEmail,
   sendAdminNewApplicantEmail,
   sendAdminNewCustomerEmail,
+  sendAdminAccountDeletionEmail,
 } from "@/lib/email";
 
 /** Label metode pembayaran (paritas dengan panel admin). */
@@ -51,8 +59,8 @@ const PAY_LABEL = {
 
 /**
  * Peristiwa yang dikenal antrean: new_booking | new_report | new_deposit |
- * new_user. Daftar label + kunci yang dipakai PANEL ADMIN (dan disaring per
- * admin di sini) ada di src/lib/admin-notify-events.js.
+ * new_user | account_deletion. Daftar label + kunci yang dipakai PANEL ADMIN
+ * (dan disaring per admin di sini) ada di src/lib/admin-notify-events.js.
  */
 
 /**
@@ -222,16 +230,19 @@ export async function drainAdminEmailOutbox(limit = 20) {
         // Penerima ditentukan PER PERISTIWA di dalam deliver() (pengaturan panel
         // admin): admin yang mematikan jenis peristiwa ini tidak dikirimi.
         const res = await deliver(admin, item);
-        if (res?.skipped === "no-recipient") {
-          // Tak ada admin yang menerima peristiwa ini → jangan biarkan baris
-          // mengendap selamanya (tetap dicatat di log).
-          console.warn("[admin-email] tidak ada penerima — dilewati:", item.event);
-        }
-        if (res !== "skip" && res?.error) {
-          // Gagal kirim (bukan "tidak ada yang perlu dikirim") → biarkan baris
-          // di antrean; worker/jadwal berikutnya mencoba lagi.
+        // "Tidak ada penerima" BUKAN sukses: emailnya tidak sampai ke siapa pun
+        // dan penyebabnya adalah pilihan di tab "Notif Email Admin". Dulu baris
+        // seperti ini dihapus ("terkirim"), sehingga setelan yang mematikan
+        // semua penerima tampak tidak berakibat apa-apa.
+        const tanpaPenerima = res !== "skip" && res?.skipped === "no-recipient";
+        const gagalKirim = res !== "skip" && Boolean(res?.error);
+        if (tanpaPenerima || gagalKirim) {
+          const alasan = gagalKirim
+            ? res.error
+            : "Tidak ada admin yang menerima peristiwa ini — periksa tab \"Notif Email Admin\".";
           pending += 1;
-          console.warn("[admin-email] kirim gagal, dicoba ulang:", item.event, res.error);
+          console.warn("[admin-email] kirim gagal, dicoba ulang:", item.event, alasan);
+          await catatKegagalan(admin, item, alasan);
           return;
         }
         if (res?.simulated) {
@@ -242,11 +253,35 @@ export async function drainAdminEmailOutbox(limit = 20) {
       } catch (err) {
         pending += 1;
         console.warn("[admin-email] gagal proses:", item.event, err?.message);
+        await catatKegagalan(admin, item, err?.message || "gagal proses tak dikenal");
       }
     })
   );
 
   return { ok: true, sent, pending };
+}
+
+/**
+ * Catat alasan kegagalan PADA BARIS ANTREAN (alasan + waktu percobaan terakhir)
+ * supaya tidak ikut hilang bersama log server. Dulu, setelah lima percobaan,
+ * barisnya dihapus dan sebabnya hanya tersisa di log Vercel.
+ *
+ * Aman kalau migrasi belum dijalankan: RPC-nya belum ada, dan kegagalan
+ * pencatatan tidak boleh menggagalkan (atau menghentikan) alur pengiriman —
+ * perilaku lama tetap berlaku, hanya tanpa jejak.
+ */
+async function catatKegagalan(admin, item, alasan) {
+  try {
+    const { error } = await admin.rpc("fail_admin_email", {
+      p_id: item.id,
+      p_error: String(alasan || "").slice(0, 500),
+    });
+    if (error && !/function|does not exist|schema cache/i.test(error.message || "")) {
+      console.warn("[admin-email] gagal mencatat alasan kegagalan:", error.message);
+    }
+  } catch (err) {
+    console.warn("[admin-email] gagal mencatat alasan kegagalan:", err?.message);
+  }
 }
 
 /**
@@ -365,6 +400,31 @@ async function deliver(admin, item) {
         });
       }
       return "skip"; // mis. admin dibuat manual — tidak perlu diberitakan
+    }
+
+    case "account_deletion": {
+      // Permintaan hapus akun (aplikasi MAUPUN halaman web) — lihat
+      // supabase/migrate-account-deletion.sql (trigger mengisi baris antrean).
+      const { data: a } = await admin
+        .from("account_deletion_requests")
+        .select("id, email, sumber, alasan, status, created_at, user_id")
+        .eq("id", ref)
+        .maybeSingle();
+      if (!a) return "skip";
+      // Sudah dijalankan/dibatalkan sebelum sempat dikirim → tidak perlu diberitakan.
+      if (a.status !== "diminta") return "skip";
+      const { data: pelapor } = a.user_id
+        ? await admin.from("profiles").select("role").eq("id", a.user_id).maybeSingle()
+        : { data: null };
+      const emails = await adminEmailsForEvent(admin, "account_deletion");
+      return sendAdminAccountDeletionEmail(emails, {
+        id: a.id,
+        email: a.email,
+        sumber: a.sumber,
+        alasan: a.alasan,
+        created_at: a.created_at,
+        role: pelapor?.role ?? "-",
+      });
     }
 
     default:

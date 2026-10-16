@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api.dart';
+import '../format.dart';
+import '../models.dart';
 import '../theme.dart';
 import 'common.dart';
 
@@ -11,11 +13,20 @@ import 'common.dart';
 ///   2. Lampirkan foto bukti transfer (dikompres otomatis sebelum unggah).
 ///   3. Kirim → baris `balance_deposits` 'pending'; saldo bertambah setelah
 ///      admin memverifikasi bukti.
+///
+/// Saldo minus = PIUTANG teknisi (komisi + biaya aplikasi lebih besar dari
+/// setoran). Layar ini menyebutkan kekurangan itu supaya teknisi tahu setorannya
+/// menutup kekurangan lebih dulu, sisanya baru menjadi saldo aktif — sama dengan
+/// yang dicatat server (balance_recoveries, lihat docs/balance-rule.md).
 class DepositScreen extends StatefulWidget {
-  const DepositScreen({super.key, this.initialAmount});
+  const DepositScreen({super.key, this.initialAmount, this.loadSummary});
 
   /// Jumlah awal opsional (mis. dari nominal yang disarankan).
   final int? initialAmount;
+
+  /// Sumber ringkasan saldo (polanya sama dengan `BalanceScreen.loadPage`):
+  /// bisa diganti di test supaya petunjuk kekurangan bisa diuji tanpa jaringan.
+  final Future<TechnicianBalanceSummary?> Function()? loadSummary;
 
   @override
   State<DepositScreen> createState() => _DepositScreenState();
@@ -26,6 +37,7 @@ class _DepositScreenState extends State<DepositScreen> {
       TextEditingController(text: widget.initialAmount != null ? '${widget.initialAmount}' : '');
 
   Map<String, String>? _account;
+  TechnicianBalanceSummary? _bal;
   Uint8List? _bytes;
   bool _sending = false;
   bool _done = false;
@@ -35,10 +47,17 @@ class _DepositScreenState extends State<DepositScreen> {
   void initState() {
     super.initState();
     _loadAccount();
+    _loadSaldo();
+    // Pratinjau "berapa yang menutup kekurangan" ikut berubah saat nominal
+    // diketik, jadi kolom jumlah perlu memicu rebuild.
+    _amountCtrl.addListener(_onAmountChanged);
   }
+
+  void _onAmountChanged() => setState(() {});
 
   @override
   void dispose() {
+    _amountCtrl.removeListener(_onAmountChanged);
     _amountCtrl.dispose();
     super.dispose();
   }
@@ -48,6 +67,15 @@ class _DepositScreenState extends State<DepositScreen> {
     if (!mounted) return;
     setState(() => _account = acc);
   }
+
+  /// Ringkasan saldo (aman-gagal: null → petunjuk kekurangan tidak ditampilkan).
+  Future<void> _loadSaldo() async {
+    final bal = await (widget.loadSummary ?? Api.fetchMyBalanceSummarySafe)();
+    if (!mounted) return;
+    setState(() => _bal = bal);
+  }
+
+  int get _kekurangan => (_bal?.shortfall ?? 0).round();
 
   Future<void> _pickProof() async {
     final source = await chooseImageSource(context, title: 'Bukti Setor');
@@ -126,10 +154,13 @@ class _DepositScreenState extends State<DepositScreen> {
         const Text('Pengajuan setor terkirim',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.navy)),
         const SizedBox(height: 8),
-        const Text(
-          'Saldo bertambah otomatis setelah admin memverifikasi bukti transfermu. Kamu bisa pantau statusnya di Riwayat Saldo.',
+        Text(
+          _kekurangan > 0
+              ? 'Saldo bertambah otomatis setelah admin memverifikasi bukti transfermu. '
+                  'Kekurangan ${formatRupiah(_kekurangan)} ditutup lebih dulu dari setoran ini, sisanya menjadi saldo aktif.'
+              : 'Saldo bertambah otomatis setelah admin memverifikasi bukti transfermu. Kamu bisa pantau statusnya di Riwayat Saldo.',
           textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 13, color: AppColors.inkSoft, height: 1.5),
+          style: const TextStyle(fontSize: 13, color: AppColors.inkSoft, height: 1.5),
         ),
         const SizedBox(height: 20),
         FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Tutup')),
@@ -137,7 +168,22 @@ class _DepositScreenState extends State<DepositScreen> {
     );
   }
 
+  /// Pratinjau pembagian setoran: berapa menutup kekurangan, berapa masuk saldo.
   Widget _formView() {
+    return _formViewBody();
+  }
+
+  String _pratinjauSetoran() {
+    final setor = int.tryParse(_amountCtrl.text.trim()) ?? 0;
+    final menutup = setor < _kekurangan ? setor : _kekurangan;
+    final sisa = setor - menutup;
+    // formatRupiah sudah memuat awalan "Rp ", jadi jangan ditambah lagi.
+    return sisa > 0
+        ? '${formatRupiah(menutup)} menutup kekurangan · ${formatRupiah(sisa)} masuk saldo aktif.'
+        : 'Seluruh ${formatRupiah(menutup)} menutup kekurangan — belum ada yang masuk saldo aktif.';
+  }
+
+  Widget _formViewBody() {
     final acc = _account;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
@@ -164,6 +210,24 @@ class _DepositScreenState extends State<DepositScreen> {
                 style: TextStyle(fontSize: 11.5, color: AppColors.inkSoft, height: 1.35)),
           ]),
         ),
+        if (_kekurangan > 0) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: AppColors.coral.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(12)),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.info_outline_rounded, size: 16, color: AppColors.coral),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text(
+                  'Saldo aktifmu minus ${formatRupiah(_kekurangan)} (komisi + biaya aplikasi melebihi setoran). '
+                  'Setoran ini menutup kekurangan itu lebih dulu — sisanya baru menjadi saldo aktif.',
+                  style: const TextStyle(fontSize: 12, color: AppColors.navy, height: 1.4),
+                ),
+              ),
+            ]),
+          ),
+        ],
         const SizedBox(height: 16),
         const Text('Jumlah setor (Rp)',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.navy)),
@@ -174,6 +238,13 @@ class _DepositScreenState extends State<DepositScreen> {
           inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           decoration: const InputDecoration(prefixText: 'Rp ', hintText: 'mis. 100000'),
         ),
+        if (_kekurangan > 0 && (int.tryParse(_amountCtrl.text.trim()) ?? 0) > 0) ...[
+          const SizedBox(height: 8),
+          Text(
+            _pratinjauSetoran(),
+            style: const TextStyle(fontSize: 11.5, color: AppColors.inkSoft, height: 1.4),
+          ),
+        ],
         const SizedBox(height: 16),
         const Text('Bukti transfer',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.navy)),

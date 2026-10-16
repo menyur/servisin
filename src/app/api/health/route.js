@@ -24,6 +24,36 @@ export async function GET() {
   const from = process.env.EMAIL_FROM || EMAIL_FROM_DEFAULT;
   const fromIsTestDomain = /(^|[<@.\s])resend\.dev/i.test(from);
 
+  // Jejak kegagalan pengiriman email admin dibaca dari database supaya "email
+  // tidak sampai" bisa terlihat tanpa membuka log Vercel. Yang dilaporkan hanya
+  // JUMLAH dan WAKTU kegagalan terakhir — teks alasan dari penyedia email tidak
+  // dipublikasikan di endpoint publik ini; alasannya lengkap ada di panel admin
+  // (tab "Notif Email Admin"). Kegagalan baca bukan kesalahan endpoint: kolom
+  // jejaknya baru ada setelah supabase/migrate-admin-email-failures.sql.
+  let emailFail = { failedCount: null, lastFailedAt: null, queueCount: null };
+  try {
+    const { createAdminClient } = await import("@/lib/supabase/admin");
+    const db = createAdminClient();
+    const [{ count: gagal }, { data: terakhir }, { count: antre }] = await Promise.all([
+      db.from("admin_email_outbox").select("id", { count: "exact", head: true }).not("failed_at", "is", null),
+      db
+        .from("admin_email_outbox")
+        .select("failed_at")
+        .not("failed_at", "is", null)
+        .order("failed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      db.from("admin_email_outbox").select("id", { count: "exact", head: true }).is("failed_at", null),
+    ]);
+    emailFail = {
+      failedCount: gagal ?? 0,
+      lastFailedAt: terakhir?.failed_at ?? null,
+      queueCount: antre ?? 0,
+    };
+  } catch {
+    // env belum lengkap atau migrasi jejak belum jalan → biarkan null apa adanya
+  }
+
   return Response.json({
     ok: true,
     env: {
@@ -53,6 +83,10 @@ export async function GET() {
       from,
       fromIsTestDomain,
       canSendToAnyone: has(process.env.RESEND_API_KEY) && !fromIsTestDomain,
+      // `resendReady` hanya memeriksa kunci TERISI, bukan SAH. Hitungan di bawah
+      // ini yang menunjukkan akibatnya: kunci tidak sah membuat angka
+      // failedCount naik sementara resendReady tetap true.
+      ...emailFail,
     },
     siteUrl: process.env.NEXT_PUBLIC_SITE_URL || process.env.VERCEL_URL || null,
     nodeVersion: process.version,
