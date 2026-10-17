@@ -216,6 +216,15 @@ Kalau gate `live-probe` gagal, build APK **tertahan** (mekanisme yang disengaja;
 - [ ] Halaman `tentang`, `panduan-pelanggan`, `panduan-teknisi` ditinjau ulang untuk publik.
 - [ ] Bila distribusi lewat Google Play: daftar Privacy Policy URL, isi Data Safety, dan daftarkan
       akun personal, dan aset yang siap diunggah ada di [play-store.md](./play-store.md).
+      ✅ **Kewajiban konten buatan pengguna (chat) sudah dipenuhi** (18 Okt 2026): menu ⋮ di
+      layar chat punya **Laporkan percakapan** (masuk `reports` sebagai `kind='chat'` + `reason`,
+      tampil di tab Laporan Masuk panel admin) dan **Blokir/Buka blokir** (`chat_blocks`,
+      ditegakkan di RLS dua arah), sementara `/syarat` §9 memuat larangan eksplisit untuk pesan
+      chat + janji tinjauan **2×24 jam** beserta sanksinya. Migrasi
+      `supabase/migrate-chat-moderation.sql` **sudah diterapkan ke produksi** dan perilakunya
+      dibuktikan `npm run verify:chat-moderation-live` (7/7, di dalam transaksi yang di-rollback);
+      wiring-nya dijaga `npm run verify:chat-moderation` (34/34, ikut jalan di CI Flutter).
+      Rincian & langkah peninjauan: [play-store.md §7](./play-store.md#7-kebijakan-konten-buatan-pengguna-chat--sudah-dikerjakan-di-repo).
 
 ### 2.7 Monitoring & operasional
 
