@@ -32,7 +32,7 @@ langkah AAB di CI terhapus.
 | Build AAB di CI | ✅ artifact `play-aab` + gate Play | `.github/workflows/build-apk.yml` |
 | **Akun Google Play Developer** | ⛔ **belum** — hanya Anda yang bisa membuat | §1 |
 | **Unggah AAB + isi listing + kirim untuk ditinjau** | ⛔ belum | §4–§6 |
-| **Pelaporan konten di chat (kebijakan UGC)** | ⚠️ **belum ada** — lihat §7 | — |
+| **Pelaporan & blokir chat (kebijakan UGC)** | ✅ ada — 5 alasan laporan di menu ⋮, blokir ditegakkan di RLS, diterapkan ke produksi | `flutter_app/lib/ui/chat_screen.dart` · `supabase/migrate-chat-moderation.sql` · gate `verify:chat-moderation` (34/34) + uji perilaku `verify:chat-moderation-live` (7/7) |
 
 **Artinya:** sisi teknis dan aset sudah siap diunggah. Sisa pekerjaan hampir
 seluruhnya ada di Play Console.

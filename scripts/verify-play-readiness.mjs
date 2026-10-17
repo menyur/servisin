@@ -288,6 +288,27 @@ if (ada(docPlay)) {
   for (const bagian of ["Data safety", "Content rating", "Closed testing", "Play App Signing"]) {
     cek(`  runbook memuat bagian "${bagian}"`, doc.includes(bagian));
   }
+  // Kebijakan konten buatan pengguna: bagian yang WAJIB ada karena chat
+  // pelanggan↔teknisi membuat aplikasi ini punya konten buatan pengguna.
+  // Dicocokkan tanpa peduli huruf besar/kecil: judulnya "…konten buatan
+  // pengguna…" (kecil) sedangkan rujukan lain bisa menulisnya dengan kapital.
+  cek(
+    '  runbook memuat bagian kebijakan konten buatan pengguna (UGC)',
+    /konten buatan pengguna/i.test(doc),
+  );
+  // Status di runbook harus mengikuti kenyataan. Dua kali dokumen ini tertinggal
+  // dari kode — §7 masih berjudul "celah yang harus ditutup" dan daftar §0 masih
+  // menulis "belum ada" — padahal fitur, migrasi, dan gate-nya sudah jalan.
+  // Dokumen yang salah membuat peninjauan berikutnya mengerjakan hal yang sudah
+  // selesai, jadi dua hal ini ikut dijaga di sini.
+  cek(
+    "  status UGC di runbook tidak lagi 'belum ada'",
+    !/belum ada\*\* — lihat §7/.test(doc),
+  );
+  cek(
+    "  runbook menautkan gate kebijakan UGC (verify:chat-moderation)",
+    doc.includes("verify:chat-moderation"),
+  );
 }
 const workflow = baca(".github/workflows/build-apk.yml");
 cek("CI membangun AAB (flutter build appbundle)", /flutter build appbundle/.test(workflow));
