@@ -23,6 +23,10 @@ dependencies:
   shared_preferences: ^2.3.2      # cache preferensi notifikasi lokal
   path_provider: 2.1.4
   share_plus: ^11.0.0  # v7 hardcode compileSdk 33 -> gagal AAR metadata di CI
+  # Paket asli discontinued & belum punya namespace AGP 8+; salinan lokal di
+  # third_party hanya menambah namespace/compileSdk, API Dart tetap sama.
+  flutter_app_badger:
+    path: third_party/flutter_app_badger
 
 dev_dependencies:
   flutter_test:

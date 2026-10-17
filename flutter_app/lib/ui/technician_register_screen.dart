@@ -154,9 +154,10 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
           content: const Text(
             'Selamat datang, calon teknisi Fixify!\n\n'
             'Buka tautan verifikasi di emailmu untuk mengaktifkan akun.\n\n'
-            'Setelah itu akunmu masih MENUNGGU PERSETUJUAN admin '
-            '(1x24 jam kerja). Kamu sudah bisa masuk dan melengkapi profil — '
-            'daftar pekerjaan akan terbuka otomatis setelah akunmu disetujui.',
+            'Setelah itu kamu langsung diarahkan ke halaman Profil untuk '
+            'melengkapi data. Akunmu masih MENUNGGU PERSETUJUAN admin '
+            '(1x24 jam kerja) — daftar pekerjaan terbuka otomatis setelah '
+            'akunmu disetujui.',
           ),
           actions: [
             FilledButton(

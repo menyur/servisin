@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../api.dart';
+import '../models.dart';
 import '../push_service.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
@@ -41,6 +42,28 @@ class _LoginScreenState extends State<LoginScreen> {
       // Ikat token FCM perangkat ini ke user baru (push tugas baru/status).
       await PushService.onLoggedIn();
       if (!mounted) return;
+      // Teknisi yang datanya belum lengkap (khas: baru mendaftar, area layanan
+      // masih kosong) langsung dibawa ke Profil supaya tahu apa yang harus
+      // diisi. Pelanggan & teknisi yang profilnya lengkap tetap ke Beranda.
+      Profile? profil;
+      try {
+        profil = await Api.myProfile();
+      } catch (_) {
+        profil = null; // gagal baca profil → jalur normal, jangan tahan login
+      }
+      if (!mounted) return;
+      if (dataProfilKurang(profil).isNotEmpty) {
+        mainTabIndex.value = kProfileTabIndex;
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) => const MainShell(initialIndex: kProfileTabIndex),
+            settings: const RouteSettings(name: '/'),
+          ),
+          (r) => false,
+        );
+        return;
+      }
       Navigator.pushNamedAndRemoveUntil(context, '/', (r) => false);
     } on AuthException catch (e) {
       if (mounted) showSnack(context, e.message, error: true);

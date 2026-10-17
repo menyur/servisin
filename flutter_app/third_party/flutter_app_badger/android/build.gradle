@@ -1,0 +1,37 @@
+// Salinan lokal flutter_app_badger 1.5.0.
+//
+// Perbedaan dari paket pub.dev:
+//   * namespace Android ditulis eksplisit (AGP 8+ mewajibkannya; paket asli
+//     berhenti di AGP 4 dan gagal dikonfigurasi di proyek ini),
+//   * compileSdk 36 / Java 17 mengikuti aplikasi,
+//   * buildscript AGP 4.1.0 milik paket asli dihapus agar tidak bentrok
+//     dengan AGP 9 yang dipakai proyek.
+//
+// API Dart tidak berubah; lihat lib/flutter_app_badger.dart.
+group 'fr.g123k.flutterappbadge.flutterappbadger'
+version '1.5.0-fix.1'
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'fr.g123k.flutterappbadge.flutterappbadger'
+    compileSdk 36
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdkVersion 24
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    lintOptions {
+        disable 'InvalidPackage'
+    }
+}
+
+dependencies {
+    implementation "me.leolin:ShortcutBadger:1.1.22@aar"
+}

@@ -1,0 +1,23 @@
+name: flutter_app_badger
+description: Local patched copy of flutter_app_badger 1.5.0 for AGP 9 compatibility.
+version: 1.5.0+fix.1
+homepage: https://github.com/g123k/flutter_app_badger
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: fr.g123k.flutterappbadger
+        pluginClass: FlutterAppBadgerPlugin
+      ios:
+        pluginClass: FlutterAppBadgerPlugin
+      macos:
+        pluginClass: FlutterAppBadgerPlugin

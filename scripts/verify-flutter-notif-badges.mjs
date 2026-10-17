@@ -105,7 +105,12 @@ const aturan = [
   },
   {
     berkas: F.common,
-    pola: /unseenReportUpdates\.value = countUnseenReports\(seen: seen, current: current\);/,
+    // Spasi/newline setelah `=` tidak mengubah arti: `dart format` boleh
+    // memecah baris ini, dan dulu pola satu-baris membuat gate MERAH padahal
+    // aturan bersamanya tetap dipakai (persis kejadian yang membuat CI Flutter
+    // gagal 1 detik sebelum analyze). Yang penting bukan bentuk barisnya,
+    // melainkan bahwa angka badge tetap dihitung oleh countUnseenReports.
+    pola: /unseenReportUpdates\.value\s*=\s*countUnseenReports\(\s*seen:\s*seen,\s*current:\s*current\s*\);/s,
     mengapa: "angka badge harus dihitung dari aturan bersama (lib/report_seen.dart)",
   },
 

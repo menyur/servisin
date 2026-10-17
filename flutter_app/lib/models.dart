@@ -124,7 +124,13 @@ class Profile {
   /// banner pengingat setor di aplikasi selama saldo masih 0/minus.
   final DateTime? balanceReminderAt;
 
-  Profile({required this.id, required this.name, required this.email, this.phone, this.address, this.avatarUrl, required this.role, this.serviceArea, this.skill, this.balance = 0, this.balanceReminderAt});
+  /// Status kurasi teknisi: 'pending' | 'approved' | 'rejected'
+  /// (migrate-approval-status.sql). Pelanggan & admin selalu 'approved'.
+  /// Hanya dibaca untuk ditampilkan — teknisi TIDAK boleh mengubahnya sendiri
+  /// (RLS & trigger menolak perubahan approval_status dari klien).
+  final String approvalStatus;
+
+  Profile({required this.id, required this.name, required this.email, this.phone, this.address, this.avatarUrl, required this.role, this.serviceArea, this.skill, this.balance = 0, this.balanceReminderAt, this.approvalStatus = 'approved'});
 
   factory Profile.fromMap(Map<String, dynamic> m) => Profile(
         id: m['id'] as String,
@@ -138,6 +144,10 @@ class Profile {
         skill: m['skill'] as String?,
         balance: _parseNum(m['balance']),
         balanceReminderAt: _parseDate(m['balance_reminder_at']),
+        // Kolom bisa belum ada di instalasi lama; jangan sembunyikan teknisi
+        // yang sebenarnya sudah disetujui hanya karena migrasi belum jalan.
+        approvalStatus:
+            ((m['approval_status'] as String?) ?? 'approved').toLowerCase(),
       );
 
   /// Kolom numeric PostgREST bisa datang sebagai angka ATAU string
@@ -149,6 +159,28 @@ class Profile {
 
   /// Kolom timestamptz PostgREST → DateTime; kosong/tak valid → null.
   static DateTime? _parseDate(dynamic v) => DateTime.tryParse('${v ?? ""}');
+}
+
+/// Data profil teknisi yang masih perlu dilengkapi — label siap tampil.
+///
+/// Dipakai layar Profil (pengingat) dan tab Profil (titik peringatan), serta
+/// penentu tujuan awal setelah login: teknisi yang datanya belum lengkap
+/// dibawa ke Profil supaya tahu persis apa yang harus diisi.
+///
+/// Hanya untuk peran teknisi — pelanggan tidak diminta melengkapi area kerja.
+/// `skill` tidak ikut: nilainya ditetapkan admin saat kurasi pendaftaran, jadi
+/// teknisi tidak bisa memperbaikinya sendiri. Foto profil juga opsional.
+/// "area layanan" tetap dihitung walau boleh dikosongkan (artinya semua area):
+/// tanpa area, notifikasi pekerjaan baru tidak bisa disaring sesuai lokasinya,
+/// jadi teknisi baru perlu melihat dan memutuskan sendiri.
+List<String> dataProfilKurang(Profile? p) {
+  if (p == null || p.role != 'technician') return const <String>[];
+  return <String>[
+    if (p.name.trim().isEmpty) 'nama lengkap',
+    if ((p.phone ?? '').trim().isEmpty) 'nomor HP',
+    if ((p.address ?? '').trim().isEmpty) 'alamat',
+    if ((p.serviceArea ?? '').trim().isEmpty) 'area layanan',
+  ];
 }
 
 /// Satu pesan chat pelanggan ↔ teknisi untuk sebuah pesanan.

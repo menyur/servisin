@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../chat_unread.dart';
 import '../models.dart';
 import '../theme.dart';
 import 'common.dart';
@@ -42,6 +43,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    unawaited(ChatUnreadService.enterChat(widget.booking.id));
     _load();
   }
 
@@ -56,6 +58,11 @@ class _ChatScreenState extends State<ChatScreen> {
       final msgs = await Api.fetchChatMessages(widget.booking.id);
       if (!mounted) return;
       setState(() => _messages = msgs);
+      if (msgs.isNotEmpty) {
+        // Riwayat yang baru dimuat sudah terlihat: majukan penanda baca sampai
+        // pesan terakhir, tanpa memundurkannya bila ada pesan realtime.
+        unawaited(ChatUnreadService.markRead(widget.booking.id, at: msgs.last.createdAt));
+      }
       _jumpToBottom();
     } catch (e) {
       if (!mounted) return;
@@ -68,6 +75,8 @@ class _ChatScreenState extends State<ChatScreen> {
       final exists = _messages?.any((m) => m.id == msg.id) ?? false;
       if (exists) return;
       setState(() => _messages = [...?_messages, msg]);
+      // Pesan ini tampil langsung di layar chat — jangan biarkan badge naik.
+      unawaited(ChatUnreadService.markRead(widget.booking.id, at: msg.createdAt));
       _jumpToBottom();
     });
   }
@@ -123,6 +132,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    unawaited(ChatUnreadService.leaveChat(widget.booking.id));
     _unsubscribe?.call();
     _input.dispose();
     _scroll.dispose();

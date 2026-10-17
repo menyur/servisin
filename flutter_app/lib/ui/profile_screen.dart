@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../account_deletion.dart';
 import '../api.dart';
+import '../chat_unread.dart';
+import '../config.dart';
 import '../models.dart';
 import '../push_service.dart';
 import '../theme.dart';
 import 'common.dart';
 import 'auth_widgets.dart';
+import 'notification_settings_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   /// Seam uji: sumber profil (default `Api.myProfile`).
@@ -16,7 +20,16 @@ class ProfileScreen extends StatefulWidget {
   /// `Api.myRatingSummary`). Dipanggil HANYA untuk peran teknisi.
   final Future<RatingSummary?> Function()? loadRating;
 
-  const ProfileScreen({super.key, this.loadProfile, this.loadRating});
+  /// Seam uji: pembuka tautan (default `url_launcher`). Dipakai tombol
+  /// "Buka halaman bantuan" pada kartu status persetujuan.
+  final Future<bool> Function(Uri)? openLink;
+
+  const ProfileScreen({
+    super.key,
+    this.loadProfile,
+    this.loadRating,
+    this.openLink,
+  });
 
   @override
   State<ProfileScreen> createState() => _ProfileScreenState();
@@ -75,6 +88,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
     }
     if (!mounted) return;
+    // Titik pengingat di tab Profil memakai data yang sama dengan banner di
+    // layar ini — diperbarui di sini supaya langsung hilang setelah lengkap.
+    profilPerluDilengkapi.value = dataProfilKurang(p).isNotEmpty;
     setState(() {
       _profile = p;
       _hapus = hapus;
@@ -113,13 +129,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
+      final lama = _profile;
+      final baru = lama == null
+          ? null
+          : Profile(
+              id: lama.id,
+              name: _name.text.trim(),
+              email: lama.email,
+              phone: _phone.text.trim(),
+              address: _address.text.trim(),
+              avatarUrl: lama.avatarUrl,
+              role: lama.role,
+              serviceArea: lama.role == 'technician'
+                  ? _serviceArea.text.trim()
+                  : lama.serviceArea,
+              skill: lama.skill,
+              balance: lama.balance,
+              balanceReminderAt: lama.balanceReminderAt,
+              // Simpan status kurasi apa adanya. Tanpa ini, menyimpan data diri
+              // akan mengembalikan status ke default 'approved' di layar dan
+              // kartu "menunggu/ditolak" hilang sampai profil dimuat ulang.
+              approvalStatus: lama.approvalStatus,
+            );
       await Api.updateMyProfile(
         name: _name.text.trim(),
         phone: _phone.text.trim(),
         address: _address.text.trim(),
-        serviceArea: _profile?.role == 'technician' ? _serviceArea.text.trim() : null,
+        serviceArea: lama?.role == 'technician' ? _serviceArea.text.trim() : null,
       );
       if (!mounted) return;
+      // Perbarui tampilan dari data yang baru disimpan (tanpa permintaan ulang
+      // yang bisa gagal dan mengosongkan layar): banner pengingat dan titik di
+      // tab Profil ikut hilang begitu datanya lengkap.
+      if (baru != null) {
+        setState(() => _profile = baru);
+        profilPerluDilengkapi.value = dataProfilKurang(baru).isNotEmpty;
+      }
       showSnack(context, 'Profil tersimpan.');
     } catch (_) {
       if (mounted) showSnack(context, 'Gagal menyimpan profil.', error: true);
@@ -223,10 +268,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (ok == true) {
       // Lepas ikatan token FCM dulu agar push berhenti ke perangkat ini.
       await PushService.onLoggedOut();
+      // Badge chat ikut hilang; snapshot tetap tersimpan untuk login berikutnya.
+      await ChatUnreadService.clear();
       await Api.signOut();
       if (!mounted) return;
       Navigator.pushNamedAndRemoveUntil(context, '/login', (r) => false);
     }
+  }
+
+  /// Buka halaman kontak resmi di browser. Dipakai kartu status persetujuan:
+  /// teknisi bisa langsung menghubungi admin tanpa mencari alamat email.
+  Future<void> _bukaBantuan() async {
+    final uri = Uri.parse(AppConfig.tentangUrl);
+    try {
+      final dibuka = await (widget.openLink?.call(uri) ??
+          launchUrl(uri, mode: LaunchMode.externalApplication));
+      if (!dibuka && mounted) {
+        showSnack(context, 'Halaman bantuan tidak bisa dibuka.', error: true);
+      }
+    } catch (_) {
+      if (mounted) {
+        showSnack(context, 'Halaman bantuan tidak bisa dibuka.', error: true);
+      }
+    }
+  }
+
+  /// Pengaturan notifikasi per peristiwa — sebelumnya hanya bisa diubah dari
+  /// panel web, sehingga teknisi di HP tidak punya cara menyalakan pengingat
+  /// pekerjaan/saldo saat ada yang tidak sengaja dimatikan.
+  void _bukaNotifikasi() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => NotificationSettingsScreen(
+        isTechnician: _profile?.role == 'technician',
+      ),
+    ));
   }
 
   @override
@@ -234,6 +309,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final initial = (_profile?.name.isNotEmpty ?? false) ? _profile!.name[0].toUpperCase() : '?';
     // Lencana rating hanya untuk teknisi dan hanya bila datanya terbaca.
     final tampilRating = _profile?.role == 'technician' && _rating != null;
+    final kurangProfil = dataProfilKurang(_profile);
+    // Status kurasi hanya untuk teknisi. 'approved' tidak perlu kartu — yang
+    // perlu tindakan adalah akun yang masih menunggu atau sudah ditolak.
+    final statusKurasi = _profile?.role == 'technician'
+        ? _profile!.approvalStatus
+        : 'approved';
+    final tampilStatusKurasi =
+        statusKurasi == 'pending' || statusKurasi == 'rejected';
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -368,6 +451,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
+                          // Status kurasi akun teknisi: alasan kenapa belum bisa
+                          // mengambil pekerjaan + langkah yang bisa dilakukan
+                          // sekarang. Diletakkan paling atas agar terbaca sebelum
+                          // formulir data diri.
+                          if (tampilStatusKurasi) ...[
+                            _StatusPersetujuanTeknisi(
+                              ditolak: statusKurasi == 'rejected',
+                              kurang: kurangProfil,
+                              onBukaBantuan: _bukaBantuan,
+                            ),
+                            const SizedBox(height: 16),
+                          ],
+                          // Pengingat tetap (bukan SnackBar sekali lewat) untuk
+                          // teknisi yang datanya belum lengkap — teknisi baru
+                          // mendarat di sini dan langsung tahu apa yang kurang.
+                          // Saat status kurasi tampil, daftar yang kurang sudah
+                          // menjadi langkah pertama di kartu status; jangan
+                          // mengulanginya dalam dua kartu.
+                          if (kurangProfil.isNotEmpty && !tampilStatusKurasi) ...[
+                            _PeringatanLengkapiProfil(kurang: kurangProfil),
+                            const SizedBox(height: 16),
+                          ],
                           Row(children: [
                             const Icon(Icons.edit_rounded, size: 18, color: AppColors.brand),
                             const SizedBox(width: 8),
@@ -480,6 +585,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                   child: Column(children: [
+                    _MenuTile(
+                      icon: Icons.notifications_active_outlined,
+                      color: AppColors.brand,
+                      title: 'Notifikasi',
+                      subtitle: 'Pekerjaan, saldo, laporan & chat',
+                      onTap: _bukaNotifikasi,
+                    ),
+                    const SizedBox(height: 10),
                     const _MenuTile(
                       icon: Icons.verified_user_outlined,
                       color: AppColors.mint,
@@ -515,6 +628,235 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
               ],
             ),
+    );
+  }
+}
+
+/// Kartu status persetujuan akun teknisi (pending / ditolak) beserta langkah
+/// perbaikan yang bisa dilakukan dari layar Profil.
+///
+/// Status 'approved' tidak pernah memakai kartu ini. Alasan penolakan tidak
+/// disimpan server, jadi langkah di sini bersifat umum: lengkapi data, simpan,
+/// lalu minta admin meninjau ulang lewat email resmi.
+class _StatusPersetujuanTeknisi extends StatelessWidget {
+  final bool ditolak;
+  final List<String> kurang;
+  final VoidCallback onBukaBantuan;
+
+  const _StatusPersetujuanTeknisi({
+    required this.ditolak,
+    required this.kurang,
+    required this.onBukaBantuan,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final warna = ditolak ? AppColors.coral : AppColors.amber;
+    final latar = ditolak ? AppColors.coralTint : AppColors.amberTint;
+    final langkah = <String>[
+      if (kurang.isNotEmpty)
+        'Lengkapi ${kurang.join(', ')} pada formulir di bawah.'
+      else if (ditolak)
+        'Pastikan nama, nomor HP, alamat, dan area layanan sudah benar.'
+      else
+        'Data profilmu sudah lengkap. Tidak ada yang perlu diubah.',
+      if (ditolak) ...[
+        'Tekan Simpan Perubahan setelah memperbaiki data.',
+        'Buka halaman bantuan, lalu kirim email ke admin dengan subjek '
+            '"Peninjauan ulang pendaftaran teknisi". Sertakan nama, email akun, '
+            'dan keahlian yang perlu diubah.',
+      ] else ...[
+        'Tunggu admin memeriksa pendaftaranmu — keputusannya dikirim sebagai '
+            'notifikasi ke HP ini.',
+        'Bila lebih dari 1×24 jam, buka halaman bantuan dan hubungi admin '
+            'lewat alamat yang tercantum.',
+      ],
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: latar,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: warna.withValues(alpha: 0.5)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: warna.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              ditolak ? Icons.cancel_outlined : Icons.hourglass_top_rounded,
+              size: 20,
+              color: warna,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  ditolak
+                      ? 'Pendaftaran teknisi ditolak'
+                      : 'Menunggu persetujuan admin',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w800,
+                    color: warna,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  ditolak
+                      ? 'Akunmu belum bisa mengambil pekerjaan. Perbaiki data di '
+                          'bawah, lalu minta admin meninjau ulang.'
+                      : 'Kamu sudah bisa masuk dan mengisi profil, tetapi belum '
+                          'bisa mengambil pekerjaan sampai admin menyetujui '
+                          'pendaftaran.',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: AppColors.ink,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ]),
+        const SizedBox(height: 12),
+        const Text(
+          'Langkah perbaikan',
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w800,
+            color: AppColors.navy,
+          ),
+        ),
+        const SizedBox(height: 7),
+        for (var i = 0; i < langkah.length; i++) ...[
+          Padding(
+            padding: EdgeInsets.only(top: i == 0 ? 0 : 6),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Container(
+                width: 18,
+                height: 18,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: warna.withValues(alpha: 0.16),
+                  shape: BoxShape.circle,
+                ),
+                child: Text(
+                  '${i + 1}',
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    color: warna,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  langkah[i],
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: AppColors.ink,
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ],
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          // Bukan OutlinedButton.icon: label di dalamnya tidak dibatasi lebar
+          // sehingga pada layar 320 px tombol meluber ke kanan. Flexible di
+          // sini membiarkan label membungkus, bukan terpotong.
+          child: OutlinedButton(
+            onPressed: onBukaBantuan,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: warna,
+              side: BorderSide(color: warna.withValues(alpha: 0.55)),
+              minimumSize: const Size.fromHeight(40),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.max,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.open_in_new_rounded, size: 16),
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Text(
+                    'Buka halaman bantuan',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      color: warna,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+/// Pengingat melengkapi data profil teknisi, di dalam kartu form.
+///
+/// Sengaja diletakkan di dalam kartu (bukan header) supaya terbaca jelas dan
+/// tidak pernah tertutup kartu yang mengapung. Isinya menyebut field yang
+/// kosong agar teknisi tidak menebak-nebak apa yang harus diisi.
+class _PeringatanLengkapiProfil extends StatelessWidget {
+  final List<String> kurang;
+
+  const _PeringatanLengkapiProfil({required this.kurang});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.amberTint,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.amber.withValues(alpha: 0.45)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.info_outline_rounded, size: 20, color: AppColors.amber),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Lengkapi data profil',
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.amber)),
+              const SizedBox(height: 3),
+              Text(
+                'Masih kosong: ${kurang.join(', ')}. Profil lengkap membantumu '
+                'menerima pekerjaan yang sesuai.',
+                style: const TextStyle(
+                    fontSize: 12, height: 1.45, color: AppColors.ink),
+              ),
+            ],
+          ),
+        ),
+      ]),
     );
   }
 }

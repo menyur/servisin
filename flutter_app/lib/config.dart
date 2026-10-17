@@ -57,6 +57,11 @@ class AppConfig {
   static String get syaratUrl => '$webOrigin/syarat';
   static String get privasiUrl => '$webOrigin/privasi';
 
+  /// Halaman kontak resmi (email & jam operasional). Dipakai teknisi yang
+  /// pendaftarannya ditolak/masih menunggu untuk menghubungi admin — origin
+  /// mengikuti [webBaseUrl], bukan domain hardcode.
+  static String get tentangUrl => '$webOrigin/tentang';
+
   /// URL balik OAuth Google untuk Android — deep link skema kustom
   /// `fixify://login-callback` (bukan URL http dari browser).
   ///

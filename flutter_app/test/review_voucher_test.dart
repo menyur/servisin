@@ -44,6 +44,8 @@ void main() {
         reason: 'voucher harus tersimpan di DB dengan source review_incentive');
     expect(blok.contains("'booking_id': bookingId"), isTrue,
         reason: 'booking_id jadi kunci anti-dobel (unique index di DB)');
+    expect(blok.contains('if (voucherBaru) unawaited(kickPushWorker());'), isTrue,
+        reason: 'trigger voucher menulis outbox — worker harus segera dipicu');
   });
 }
 

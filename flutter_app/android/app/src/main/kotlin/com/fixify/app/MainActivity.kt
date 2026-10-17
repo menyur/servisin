@@ -4,8 +4,10 @@ import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -34,6 +36,7 @@ import io.flutter.plugin.common.MethodChannel
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "fixify/google_signin"
+    private val notificationChannel = "fixify/notifications"
     private val requestCode = 9017
     private var pending: MethodChannel.Result? = null
 
@@ -79,6 +82,39 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        // Setelan notifikasi app. Android 13+ tidak menampilkan dialog izin
+        // lagi setelah pengguna menolak; satu-satunya jalan adalah layar
+        // setelan ini. Notifikasi yang mati di tingkat OS membuat FCM tetap
+        // "terkirim" di server padahal tidak terlihat pengguna.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, notificationChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "openSettings" -> {
+                        result.success(bukaSetelanNotifikasi())
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    private fun bukaSetelanNotifikasi(): Boolean {
+        return try {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                    .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            } else {
+                Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.parse("package:$packageName"),
+                )
+            }
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.e("NotifSettings", "gagal membuka setelan: ${e.message}")
+            false
+        }
     }
 
     private fun launchGoogleSignIn() {
