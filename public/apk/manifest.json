@@ -1,13 +1,13 @@
 {
   "version": "1.4.0",
   "build": "10",
-  "builtAt": "2026-10-16T16:26:28Z",
+  "builtAt": "2026-10-17T21:30:10Z",
   "checksums": {
-    "fixify-arm64.apk": "d96db7543d55e92cc79a9ca51ef53fcbfe36dca897b7904b5b5a83765873d09d",
-    "fixify-armv7a.apk": "0f825d541a68d84e72375b9d77bcdb6f6910e8200b0bc7a4bfd83c9b2207b1ab"
+    "fixify-arm64.apk": "9decef7e5d0036a5a04ba1aa15f8dbb15e01ba0fb5a7dca25ec05ad2bb1421f8",
+    "fixify-armv7a.apk": "2ebb6a1bb1a935d44ee9a51d319aaff29148cba24061a7bdfa51cebd0d6f0601"
   },
   "sizes": {
-    "fixify-arm64.apk": 21277836,
-    "fixify-armv7a.apk": 18702936
+    "fixify-arm64.apk": 21541052,
+    "fixify-armv7a.apk": 18933384
   }
 }
