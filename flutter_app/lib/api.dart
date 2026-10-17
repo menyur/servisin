@@ -59,9 +59,13 @@ class Api {
   /// generik. Dipakai wizard booking & dialog kirim bukti.
   static Future<Map<String, String>?> transferAccount() async {
     try {
-      final row = await db.from('app_settings').select(
-        'transfer_bank_name, transfer_account_number, transfer_account_name',
-      ).eq('id', 1).maybeSingle();
+      final row = await db
+          .from('app_settings')
+          .select(
+            'transfer_bank_name, transfer_account_number, transfer_account_name',
+          )
+          .eq('id', 1)
+          .maybeSingle();
       if (row == null) return null;
       final bank = (row['transfer_bank_name'] as String?)?.trim() ?? '';
       final number = (row['transfer_account_number'] as String?)?.trim() ?? '';
@@ -172,7 +176,8 @@ class Api {
   static Future<String> uploadKtpPendaftaran(Uint8List bytes) async {
     final path = 'pendaftaran/ktp-${DateTime.now().millisecondsSinceEpoch}.jpg';
     await db.storage.from('ktp-documents').uploadBinary(path, bytes,
-        fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false));
+        fileOptions:
+            const FileOptions(contentType: 'image/jpeg', upsert: false));
     return path;
   }
 
@@ -197,7 +202,8 @@ class Api {
   ///   - [Exception] biasa untuk kegagalan lain (server mati, email belum siap).
   ///     Kegagalan jaringan dilempar apa adanya oleh `http` supaya layar bisa
   ///     memakai kalimat "Tidak ada koneksi internet…".
-  static Future<void> sendPasswordReset(String email, {String? redirectTo}) async {
+  static Future<void> sendPasswordReset(String email,
+      {String? redirectTo}) async {
     final origin = AppConfig.webBaseUrl.replaceAll(RegExp(r'/+$'), '');
     final res = await http
         .post(
@@ -264,6 +270,36 @@ class Api {
     } catch (_) {}
   }
 
+  /// Preferensi notifikasi per peristiwa milik user ini.
+  /// Key yang tidak ada = aktif (default server), sama seperti panel web.
+  static Future<Map<String, bool>> fetchNotificationPrefs() async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) return {};
+    final row = await db
+        .from('profiles')
+        .select('notification_prefs')
+        .eq('id', uid)
+        .maybeSingle();
+    final raw = row?['notification_prefs'];
+    if (raw is! Map) return {};
+    return {
+      for (final e in raw.entries) e.key.toString(): e.value != false,
+    };
+  }
+
+  /// Simpan perubahan preferensi notifikasi (partial: hanya key yang diubah).
+  /// Dibaca-dulu-lalu-tulis agar key lain tidak hilang — server web memakai
+  /// aturan merge yang sama (src/app/actions/notifications.js).
+  static Future<void> saveNotificationPrefs(Map<String, bool> patch) async {
+    if (patch.isEmpty) return;
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) return;
+    final merged = {...await fetchNotificationPrefs(), ...patch};
+    await db
+        .from('profiles')
+        .update({'notification_prefs': merged}).eq('id', uid);
+  }
+
   /// Profil user saat ini (row di tabel profiles).
   static Future<Profile?> myProfile() async {
     final uid = db.auth.currentUser?.id;
@@ -289,7 +325,8 @@ class Api {
     final uid = db.auth.currentUser?.id;
     if (uid == null) return null;
     try {
-      final rows = await db.from('reviews').select('rating').eq('technician_id', uid);
+      final rows =
+          await db.from('reviews').select('rating').eq('technician_id', uid);
       return summarizeRatings(
         rows.map<int>((m) => (m['rating'] as num?)?.toInt() ?? 0),
       );
@@ -299,7 +336,11 @@ class Api {
   }
 
   static Future<void> updateMyProfile(
-      {String? name, String? phone, String? address, String? avatarUrl, String? serviceArea}) async {
+      {String? name,
+      String? phone,
+      String? address,
+      String? avatarUrl,
+      String? serviceArea}) async {
     final uid = db.auth.currentUser!.id;
     final patch = <String, dynamic>{};
     if (name != null) patch['name'] = name;
@@ -319,7 +360,8 @@ class Api {
     await db.storage.from('profile-media').uploadBinary(
           path,
           bytes,
-          fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: true),
+          fileOptions:
+              const FileOptions(contentType: 'image/jpeg', upsert: true),
         );
     final url = db.storage.from('profile-media').getPublicUrl(path);
     await updateMyProfile(avatarUrl: url);
@@ -363,7 +405,11 @@ class Api {
       }
       return (ok: true, error: null, state: await myAccountDeletion());
     } catch (e) {
-      return (ok: false, error: _pesanHapusAkunGagal(e), state: AccountDeletionState.kosong);
+      return (
+        ok: false,
+        error: _pesanHapusAkunGagal(e),
+        state: AccountDeletionState.kosong
+      );
     }
   }
 
@@ -373,7 +419,10 @@ class Api {
       final res = await db.rpc('cancel_account_deletion');
       final m = _asMap(res);
       if (m['ok'] != true) {
-        return (ok: false, error: 'Tidak ada permintaan hapus akun yang bisa dibatalkan.');
+        return (
+          ok: false,
+          error: 'Tidak ada permintaan hapus akun yang bisa dibatalkan.'
+        );
       }
       return (ok: true, error: null);
     } catch (e) {
@@ -388,7 +437,8 @@ class Api {
   /// disebut berkas migrasinya, bukan "terjadi kesalahan".
   static String _pesanHapusAkunGagal(Object e) {
     final s = e.toString();
-    if (s.contains('does not exist') || s.contains('Could not find the function')) {
+    if (s.contains('does not exist') ||
+        s.contains('Could not find the function')) {
       return 'Fitur hapus akun belum aktif di server. Coba lagi setelah operator menyelesaikan penyiapannya.';
     }
     return 'Gagal menghubungi server. Periksa koneksimu lalu coba lagi.';
@@ -417,6 +467,26 @@ class Api {
         .select('id, booking_id, sender_id, body, created_at')
         .eq('booking_id', bookingId)
         .order('created_at', ascending: true);
+    return rows.map<ChatMessage>((m) => ChatMessage.fromMap(m)).toList();
+  }
+
+  /// Semua pesan untuk beberapa pesanan sekaligus — dipakai penghitung badge
+  /// chat saat aplikasi dibuka/dikembalikan ke depan. Satu query agar tidak
+  /// menembak server sekali per pesanan.
+  ///
+  /// Urut TERBARU dulu + batas 1000 (batas default PostgREST): bila riwayat
+  /// sangat panjang, yang terpotong adalah pesan lama, bukan pesan baru yang
+  /// justru menentukan badge.
+  static Future<List<ChatMessage>> fetchChatMessagesForBookings(
+      Iterable<String> bookingIds) async {
+    final ids = bookingIds.where((id) => id.isNotEmpty).toSet().toList();
+    if (ids.isEmpty) return const <ChatMessage>[];
+    final rows = await db
+        .from('chat_messages')
+        .select('id, booking_id, sender_id, body, created_at')
+        .inFilter('booking_id', ids)
+        .order('created_at', ascending: false)
+        .limit(1000);
     return rows.map<ChatMessage>((m) => ChatMessage.fromMap(m)).toList();
   }
 
@@ -452,7 +522,8 @@ class Api {
   /// Picu POST /api/push-worker (fire-and-forget) untuk menyapu antrean push
   /// yang tertunda. Gagal = tidak masalah — worker dipicu lagi pada interaksi
   /// berikutnya atau saat aplikasi dibuka.
-  static Future<void> kickPushWorker() => WorkerKickHelper.kick(pushWorkerUrl());
+  static Future<void> kickPushWorker() =>
+      WorkerKickHelper.kick(pushWorkerUrl());
 
   /// Berlangganan pesan baru secara realtime. Mengembalikan fungsi
   /// cleanup untuk membatalkan channel (dipanggil di dispose).
@@ -461,7 +532,8 @@ class Api {
   /// dengan snapshot "terakhir dilihat" milik perangkat (lib/report_seen.dart).
   static Future<Map<String, String>> fetchMyReportStatuses() async {
     final uid = db.auth.currentUser!.id;
-    final rows = await db.from('reports').select('id,status').eq('author_id', uid);
+    final rows =
+        await db.from('reports').select('id,status').eq('author_id', uid);
     return {
       for (final r in rows)
         (r['id'] as String): (r['status'] as String?) ?? kReportStatusOpen,
@@ -505,6 +577,32 @@ class Api {
         value: uid,
       ),
       callback: handle,
+    );
+    channel.subscribe();
+    return () async {
+      if (!active) return;
+      active = false;
+      await db.removeChannel(channel);
+    };
+  }
+
+  /// Realtime SEMUA pesan chat yang boleh dilihat pengguna ini (RLS yang
+  /// menyaring: pelanggan hanya pesanan miliknya, teknisi hanya yang
+  /// ditugaskan). Dipakai badge chat global — tanpa ini badge hanya bergantung
+  /// pada push FCM yang bisa telat atau dimatikan lewat preferensi.
+  static ChatUnsubscribe subscribeIncomingChat(
+      String uid, void Function(ChatMessage) onMessage) {
+    final channel = db.channel('chat-inbox-$uid');
+    var active = true;
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.insert,
+      schema: 'public',
+      table: 'chat_messages',
+      callback: (payload) {
+        if (!active) return;
+        final row = payload.newRecord;
+        if (row.isNotEmpty) onMessage(ChatMessage.fromMap(row));
+      },
     );
     channel.subscribe();
     return () async {
@@ -606,11 +704,12 @@ class Api {
   /// Bila [lat]/[lng] tersedia (GPS on-duty), dipakai RPC available_jobs_nearby
   /// agar tiap job membawa jarak & daftar terurut terdekat; bila RPC itu
   /// belum ada (migrasi GPS belum dijalankan), jatuh ke available_jobs polos.
-  static Future<List<AvailableJob>> fetchAvailableJobs({double? lat, double? lng}) async {
+  static Future<List<AvailableJob>> fetchAvailableJobs(
+      {double? lat, double? lng}) async {
     if (lat != null && lng != null) {
       try {
-        final res = await db.rpc('available_jobs_nearby',
-            params: {'p_lat': lat, 'p_lng': lng});
+        final res = await db
+            .rpc('available_jobs_nearby', params: {'p_lat': lat, 'p_lng': lng});
         return (res as List)
             .cast<Map<String, dynamic>>()
             .map(AvailableJob.fromMap)
@@ -668,7 +767,8 @@ class Api {
     final uid = db.auth.currentUser!.id;
     final rows = await db
         .from('bookings')
-        .select('*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
+        .select(
+            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
         .eq('technician_id', uid)
         .order('booking_date', ascending: true);
     return rows.map<Booking>((m) => Booking.fromMap(m)).toList();
@@ -683,12 +783,13 @@ class Api {
   /// menerima push "pengerjaan dimulai" / "pesanan selesai".
   static Future<({bool ok, String? error, num? commission, num? balance})> setJobStatus(
       String bookingId, String status) async {
-    final res = await db.rpc('set_job_status', params: {'p_booking': bookingId, 'p_status': status});
+    final res = await db.rpc('set_job_status',
+        params: {'p_booking': bookingId, 'p_status': status});
     final m = (res as Map).cast<String, dynamic>();
     final ok = m['ok'] == true;
     if (ok) {
-      unawaited(notifyBookingStatus(
-          bookingId, status == 'completed' ? 'order_completed' : 'work_started'));
+      unawaited(notifyBookingStatus(bookingId,
+          status == 'completed' ? 'order_completed' : 'work_started'));
     }
     return (
       ok: ok,
@@ -702,8 +803,10 @@ class Api {
   /// (technician_id null, status paid) dan bisa diambil teknisi lain.
   /// Setelah sukses, server web diberi tahu untuk mengirim push + email
   /// ke semua admin (fire-and-forget — gagal notif tidak menggagalkan).
-  static Future<({bool ok, String? error})> releaseJob(String bookingId, String reason) async {
-    final res = await db.rpc('release_job', params: {'p_booking': bookingId, 'p_reason': reason});
+  static Future<({bool ok, String? error})> releaseJob(
+      String bookingId, String reason) async {
+    final res = await db.rpc('release_job',
+        params: {'p_booking': bookingId, 'p_reason': reason});
     final m = (res as Map).cast<String, dynamic>();
     final ok = m['ok'] == true;
     if (ok) unawaited(notifyAdminOfRelease(bookingId));
@@ -723,8 +826,10 @@ class Api {
   /// hanya menulis DB; kunci VAPID & FCM ada di server web.
   /// [event]: 'technician_assigned' | 'work_started' | 'order_completed'.
   /// Best-effort: gagal jaringan/env diabaikan.
-  static Future<void> notifyBookingStatus(String bookingId, String event) async {
-    await _notifyWeb('/api/notify-booking-status', {'bookingId': bookingId, 'event': event});
+  static Future<void> notifyBookingStatus(
+      String bookingId, String event) async {
+    await _notifyWeb(
+        '/api/notify-booking-status', {'bookingId': bookingId, 'event': event});
   }
 
   /// Beri tahu server web bahwa PELANGGAN membatalkan atau memindahkan
@@ -733,8 +838,10 @@ class Api {
   ///
   /// Server memverifikasi pemanggil = pemilik pesanan DAN keadaan barisnya
   /// memang sesuai, jadi notifikasi tidak bisa dipalsukan.
-  static Future<void> notifyBookingChange(String bookingId, String event) async {
-    await _notifyWeb('/api/notify-booking-change', {'bookingId': bookingId, 'event': event});
+  static Future<void> notifyBookingChange(
+      String bookingId, String event) async {
+    await _notifyWeb(
+        '/api/notify-booking-change', {'bookingId': bookingId, 'event': event});
   }
 
   /// Beri tahu server web (pemegang kunci email) bahwa satu peristiwa perlu
@@ -750,7 +857,8 @@ class Api {
   /// Fire-and-forget: gagal kirim tak pernah mengganggu alur utama aplikasi.
   static Future<void> notifyAdminEvent(String event, String? refId) async {
     if (refId == null || refId.isEmpty) return;
-    await _notifyWeb('/api/notify-admin-event', {'event': event, 'refId': refId});
+    await _notifyWeb(
+        '/api/notify-admin-event', {'event': event, 'refId': refId});
   }
 
   /// POST JSON ke server web dengan Bearer token sesi. Fire-and-forget —
@@ -788,16 +896,23 @@ class Api {
   static Future<List<Service>> fetchServices() async {
     final results = await Future.wait([
       db.from('services').select().eq('is_active', true).order('sort_order'),
-      db.from('service_options').select().eq('is_active', true).order('sort_order'),
+      db
+          .from('service_options')
+          .select()
+          .eq('is_active', true)
+          .order('sort_order'),
     ]);
     final optionRows = (results[1] as List).cast<Map<String, dynamic>>();
     final byService = <String, List<ServiceOption>>{};
     for (final o in optionRows) {
-      byService.putIfAbsent(o['service_id'] as String, () => []).add(ServiceOption.fromMap(o));
+      byService
+          .putIfAbsent(o['service_id'] as String, () => [])
+          .add(ServiceOption.fromMap(o));
     }
     return (results[0] as List)
         .cast<Map<String, dynamic>>()
-        .map((m) => Service.fromMap(m, options: byService[m['id'] as String] ?? const []))
+        .map((m) => Service.fromMap(m,
+            options: byService[m['id'] as String] ?? const []))
         .toList();
   }
 
@@ -847,7 +962,9 @@ class Api {
       'p_address': address,
       if (notes != null && notes.isNotEmpty) 'p_notes': notes,
       if (attachmentUrl != null) 'p_attachment': attachmentUrl,
-      'p_payment': paymentMethod == 'qris' || paymentMethod == 'virtual_account' || paymentMethod == 'e_wallet'
+      'p_payment': paymentMethod == 'qris' ||
+              paymentMethod == 'virtual_account' ||
+              paymentMethod == 'e_wallet'
           ? 'transfer'
           : paymentMethod,
       if (voucherId != null) 'p_voucher_id': voucherId,
@@ -856,11 +973,14 @@ class Api {
       if (lat != null && lng != null) 'p_lat': lat,
       if (lat != null && lng != null) 'p_lng': lng,
     });
-    final map = res is List ? (res.first as Map<String, dynamic>) : (res as Map<String, dynamic>);
+    final map = res is List
+        ? (res.first as Map<String, dynamic>)
+        : (res as Map<String, dynamic>);
     if (map['error'] != null) {
       throw Exception(map['error']);
     }
-    final booking = Booking.fromMap((map['booking'] as Map).cast<String, dynamic>());
+    final booking =
+        Booking.fromMap((map['booking'] as Map).cast<String, dynamic>());
     // Email ke semua admin: "ada pesanan baru masuk".
     unawaited(notifyAdminEvent('new_booking', booking.id));
     return booking;
@@ -872,7 +992,8 @@ class Api {
   static Future<List<Booking>> fetchMyBookings() async {
     final rows = await db
         .from('bookings')
-        .select('*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
+        .select(
+            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
         .order('created_at', ascending: false);
     final reviewRows = await _myReviewedBookingIds();
     final reviewed = reviewRows.toSet();
@@ -880,13 +1001,34 @@ class Api {
     // sudah dipurge disembunyikan dari daftar — barisnya tetap ada (audit).
     final visible = rows.where((m) => m['history_purged_at'] == null);
     return visible
-        .map<Booking>((m) => Booking.fromMap(m, hasReview: reviewed.contains(m['id'] as String)))
+        .map<Booking>((m) =>
+            Booking.fromMap(m, hasReview: reviewed.contains(m['id'] as String)))
         .toList();
+  }
+
+  /// Satu pesanan berdasarkan id — dipakai notifikasi chat agar bisa langsung
+  /// membuka detail tanpa memuat seluruh daftar pesanan. RLS tetap menentukan
+  /// boleh-tidaknya baris ini dibaca (pemilik atau teknisi yang ditugaskan).
+  static Future<Booking?> fetchBookingById(String bookingId) async {
+    final id = bookingId.trim();
+    if (id.isEmpty) return null;
+    final row = await db
+        .from('bookings')
+        .select(
+            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
+        .eq('id', id)
+        .maybeSingle();
+    if (row == null) return null;
+    final reviewed = await _myReviewedBookingIds();
+    return Booking.fromMap(row, hasReview: reviewed.contains(id));
   }
 
   static Future<List<String>> _myReviewedBookingIds() async {
     try {
-      final rows = await db.from('reviews').select('booking_id').eq('user_id', db.auth.currentUser!.id);
+      final rows = await db
+          .from('reviews')
+          .select('booking_id')
+          .eq('user_id', db.auth.currentUser!.id);
       return rows.map<String>((m) => m['booking_id'] as String).toList();
     } catch (_) {
       return []; // tabel reviews mungkin belum ada — paritas dgn web
@@ -926,17 +1068,23 @@ class Api {
       final applied = row['payment_method'] == method;
       return (
         ok: applied,
-        error: applied ? null : 'Metode bayar tidak bisa diubah (pesanan mungkin sudah diproses).',
+        error: applied
+            ? null
+            : 'Metode bayar tidak bisa diubah (pesanan mungkin sudah diproses).',
       );
     } catch (e) {
-      return (ok: false, error: 'Gagal mengubah metode bayar. Periksa koneksi lalu coba lagi.');
+      return (
+        ok: false,
+        error: 'Gagal mengubah metode bayar. Periksa koneksi lalu coba lagi.'
+      );
     }
   }
 
   /// Samakan bentuk balikan RPC `returns jsonb` — bisa datang sebagai Map
   /// atau List satu elemen, tergantung bentuk fungsinya.
   static Map<String, dynamic> _asMap(dynamic res) {
-    final raw = res is List ? (res.isEmpty ? <String, dynamic>{} : res.first) : res;
+    final raw =
+        res is List ? (res.isEmpty ? <String, dynamic>{} : res.first) : res;
     return (raw as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
   }
 
@@ -966,14 +1114,22 @@ class Api {
       });
       final m = _asMap(res);
       if (m['ok'] != true) {
-        return (ok: false, error: (m['error'] as String?) ?? 'Pesanan gagal dibatalkan.');
+        return (
+          ok: false,
+          error: (m['error'] as String?) ?? 'Pesanan gagal dibatalkan.'
+        );
       }
       // Teknisi yang sudah ditugaskan harus tahu SEBELUM berangkat ke lokasi.
       unawaited(notifyBookingChange(bookingId, 'order_cancelled'));
       return (ok: true, error: null);
     } catch (e) {
-      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
-      return (ok: false, error: 'Gagal membatalkan pesanan. Periksa koneksi lalu coba lagi.');
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
+      return (
+        ok: false,
+        error: 'Gagal membatalkan pesanan. Periksa koneksi lalu coba lagi.'
+      );
     }
   }
 
@@ -989,14 +1145,22 @@ class Api {
       });
       final m = _asMap(res);
       if (m['ok'] != true) {
-        return (ok: false, error: (m['error'] as String?) ?? 'Jadwal gagal diubah.');
+        return (
+          ok: false,
+          error: (m['error'] as String?) ?? 'Jadwal gagal diubah.'
+        );
       }
       // Teknisi bisa saja sudah menyusun rute harinya — beri tahu perubahan ini.
       unawaited(notifyBookingChange(bookingId, 'order_rescheduled'));
       return (ok: true, error: null);
     } catch (e) {
-      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
-      return (ok: false, error: 'Gagal mengubah jadwal. Periksa koneksi lalu coba lagi.');
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
+      return (
+        ok: false,
+        error: 'Gagal mengubah jadwal. Periksa koneksi lalu coba lagi.'
+      );
     }
   }
 
@@ -1067,7 +1231,7 @@ class Api {
   /// Gagal (`ok == false`) berarti perjalanannya sudah tidak aktif — pemanggil
   /// harus berhenti, bukan mengulangi tanpa henti.
   static Future<
-      ({bool ok, String? error, bool arrived, bool near, int? distanceM})>
+          ({bool ok, String? error, bool arrived, bool near, int? distanceM})>
       pushTripPosition(String bookingId, double lat, double lng) async {
     try {
       final m = _asMap(await db.rpc('push_trip_position', params: {
@@ -1106,7 +1270,8 @@ class Api {
 
   /// Teknisi berhenti membagikan posisinya (tombol "Saya sudah tiba"). Barisnya
   /// DIHAPUS server — bukan ditandai berhenti — sehingga tidak ada riwayat.
-  static Future<({bool ok, String? error})> endTripShare(String bookingId) async {
+  static Future<({bool ok, String? error})> endTripShare(
+      String bookingId) async {
     return _rpcAksi(
       'end_trip_share',
       {'p_booking': bookingId},
@@ -1129,7 +1294,9 @@ class Api {
       }
       return (ok: true, error: null);
     } catch (e) {
-      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
       return (ok: false, error: '$gagal Periksa koneksi lalu coba lagi.');
     }
   }
@@ -1142,7 +1309,8 @@ class Api {
   /// layar detail tetap tampil tanpa kartu teknisi.
   static Future<BookingTechInfo> bookingTechnicianInfo(String bookingId) async {
     try {
-      final res = await db.rpc('booking_technician_info', params: {'p_booking': bookingId});
+      final res = await db
+          .rpc('booking_technician_info', params: {'p_booking': bookingId});
       final m = _asMap(res);
       if (m['ok'] != true) return BookingTechInfo.kosong;
       return BookingTechInfo.fromRpc(m);
@@ -1153,9 +1321,11 @@ class Api {
 
   /// Masa garansi + status klaim untuk satu pesanan.
   /// Pesanan tanpa garansi/klaim mengembalikan objek kosong (kartu disembunyikan).
-  static Future<BookingWarrantyInfo> bookingWarrantyInfo(String bookingId) async {
+  static Future<BookingWarrantyInfo> bookingWarrantyInfo(
+      String bookingId) async {
     try {
-      final res = await db.rpc('booking_warranty_info', params: {'p_booking': bookingId});
+      final res = await db
+          .rpc('booking_warranty_info', params: {'p_booking': bookingId});
       final m = _asMap(res);
       if (m['ok'] != true) return const BookingWarrantyInfo();
       return BookingWarrantyInfo.fromRpc(m);
@@ -1174,16 +1344,25 @@ class Api {
       });
       final m = _asMap(res);
       if (m['ok'] != true) {
-        return (ok: false, error: (m['error'] as String?) ?? 'Klaim garansi gagal diajukan.');
+        return (
+          ok: false,
+          error: (m['error'] as String?) ?? 'Klaim garansi gagal diajukan.'
+        );
       }
       return (ok: true, error: null);
     } catch (e) {
-      if (_fungsiBelumAda(e)) return (ok: false, error: _pesanMigrasiBelumJalan);
-      return (ok: false, error: 'Gagal mengajukan klaim garansi. Periksa koneksi lalu coba lagi.');
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
+      return (
+        ok: false,
+        error: 'Gagal mengajukan klaim garansi. Periksa koneksi lalu coba lagi.'
+      );
     }
   }
 
-  static Future<String> createSignedUrl(String bucket, String path, {int seconds = 3600}) async {
+  static Future<String> createSignedUrl(String bucket, String path,
+      {int seconds = 3600}) async {
     final res = await db.storage.from(bucket).createSignedUrl(path, seconds);
     return res;
   }
@@ -1246,6 +1425,7 @@ class Api {
     // vouchers_review_incentive_booking_uidx (fix-review-voucher-idempotent.sql)
     // + pre-check existing di bawah.
     Map<String, dynamic>? voucher;
+    var voucherBaru = false;
     try {
       const reviewIncentiveDays = 0;
       const reviewIncentiveAmount = 2000;
@@ -1262,8 +1442,8 @@ class Api {
       final days = completedAt == null
           ? 0.0
           : DateTime.now()
-              .difference(DateTime.parse(completedAt))
-              .inMicroseconds /
+                  .difference(DateTime.parse(completedAt))
+                  .inMicroseconds /
               Duration.microsecondsPerDay;
       if (isNewReview && days >= reviewIncentiveDays) {
         // Pre-check anti-dobel (jalur lambat); race window sempit ditutup
@@ -1277,7 +1457,8 @@ class Api {
         if (existing != null) {
           voucher = Map<String, dynamic>.from(existing as Map);
         } else {
-          final rand = DateTime.now().microsecondsSinceEpoch
+          final rand = DateTime.now()
+              .microsecondsSinceEpoch
               .toRadixString(36)
               .toUpperCase();
           final code =
@@ -1297,11 +1478,16 @@ class Api {
               .select('code, amount')
               .single();
           voucher = Map<String, dynamic>.from(v as Map);
+          voucherBaru = true;
         }
       }
     } catch (_) {
       // kolom/voucher belum tersedia di DB → insentif dilewati, review tetap valid
     }
+
+    // Trigger DB voucher menulis ke push_outbox. Sapu antrean sekarang agar
+    // notifikasi "voucher baru" tidak menunggu jadwal cron; tetap best-effort.
+    if (voucherBaru) unawaited(kickPushWorker());
 
     return (ok: true, error: null, voucher: voucher);
   }
@@ -1347,20 +1533,18 @@ class Api {
     // `.select('id')` (tanpa `.single()`) supaya INSERT tetap gagal keras bila
     // ditolak, tapi id-nya bisa dibawa ke notifikasi admin. Bila baris tak
     // terbaca-balik (policy select belum ada), notifikasi saja yang dilewati.
-    final inserted = await db
-        .from('reports')
-        .insert({
-          'author_id': uid,
-          'author_role': authorRole,
-          'title': title,
-          'content': content,
-          if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
-          if (attachmentPath != null) 'attachment_url': attachmentPath,
-        })
-        .select('id');
+    final inserted = await db.from('reports').insert({
+      'author_id': uid,
+      'author_role': authorRole,
+      'title': title,
+      'content': content,
+      if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
+      if (attachmentPath != null) 'attachment_url': attachmentPath,
+    }).select('id');
     // Email ke semua admin: ada laporan baru (server verifikasi kepemilikan).
     if (inserted.isNotEmpty) {
-      unawaited(notifyAdminEvent('new_report', inserted.first['id'] as String?));
+      unawaited(
+          notifyAdminEvent('new_report', inserted.first['id'] as String?));
     }
   }
 
@@ -1380,8 +1564,11 @@ class Api {
   /// Satu panggilan untuk LAYAR Saldo: summary + daftar transaksi
   /// dari fetch paralel yang sama (hemat satu query profil vs
   /// memanggil fetchMyBalanceSummary + fetchMyBalanceTransactions).
-  static Future<({TechnicianBalanceSummary summary, List<BalanceTransaction> transactions})>
-      fetchMyBalancePage() async {
+  static Future<
+      ({
+        TechnicianBalanceSummary summary,
+        List<BalanceTransaction> transactions
+      })> fetchMyBalancePage() async {
     final results = await Future.wait([
       myProfile().catchError((_) => null as Profile?),
       fetchMyBalanceTransactions(),
@@ -1495,20 +1682,19 @@ class Api {
       extension: 'jpg',
     );
 
-    final inserted = await db
-        .from('balance_deposits')
-        .insert({
-          'technician_id': uid,
-          'amount': amount,
-          'claimed_amount': amount,
-          'proof_url': path, // simpan PATH (bucket privat); admin lihat via signed URL
-          'status': 'pending',
-        })
-        .select('id');
+    final inserted = await db.from('balance_deposits').insert({
+      'technician_id': uid,
+      'amount': amount,
+      'claimed_amount': amount,
+      'proof_url':
+          path, // simpan PATH (bucket privat); admin lihat via signed URL
+      'status': 'pending',
+    }).select('id');
     // Email ke semua admin: teknisi mengajukan setor saldo (server verifikasi
     // bahwa baris ini memang milik teknisi yang memanggil).
     if (inserted.isNotEmpty) {
-      unawaited(notifyAdminEvent('new_deposit', inserted.first['id'] as String?));
+      unawaited(
+          notifyAdminEvent('new_deposit', inserted.first['id'] as String?));
     }
     return path;
   }
@@ -1516,14 +1702,17 @@ class Api {
   /// Riwayat mutasi saldo (100 terbaru, terbaru dulu).
   /// join bookings supaya transaksi komisi menampilkan kode pesanan,
   /// nilai pekerjaan, dan biaya aplikasi yang ikut dipotong dari saldo.
-  static Future<List<BalanceTransaction>> fetchMyBalanceTransactions({int limit = 100}) async {
+  static Future<List<BalanceTransaction>> fetchMyBalanceTransactions(
+      {int limit = 100}) async {
     final rows = await db
         .from('balance_transactions')
         .select(
             'id, type, amount, commission_amount, note, created_at, bookings(code, total_price, app_fee)')
         .order('created_at', ascending: false)
         .limit(limit);
-    return rows.map<BalanceTransaction>((m) => BalanceTransaction.fromMap(m)).toList();
+    return rows
+        .map<BalanceTransaction>((m) => BalanceTransaction.fromMap(m))
+        .toList();
   }
 
   // ============ voucher ============
@@ -1555,7 +1744,8 @@ class Api {
       int quality = 75,
       int maxBytes = 400 * 1024,
       int minQuality = 40}) async {
-    final picked = await ImagePicker().pickImage(source: source, imageQuality: 85, maxWidth: 2000);
+    final picked = await ImagePicker()
+        .pickImage(source: source, imageQuality: 85, maxWidth: 2000);
     if (picked == null) return null;
     final raw = await picked.readAsBytes();
     Uint8List compressed;
@@ -1574,14 +1764,17 @@ class Api {
       } catch (_) {
         break; // pertahankan iterasi sukses terakhir
       }
-      if (attempt.length >= compressed.length) break; // kualitas turun tak mengecilkan → stop
+      if (attempt.length >= compressed.length) {
+        break; // kualitas turun tak mengecilkan → stop
+      }
       compressed = attempt;
     }
     return compressed;
   }
 
   /// Kompres byte gambar ke JPEG (sisi terpanjang ≤ maxSide, kualitas [q]).
-  static Future<Uint8List> _compressBytes(Uint8List raw, int maxSide, int q) async {
+  static Future<Uint8List> _compressBytes(
+      Uint8List raw, int maxSide, int q) async {
     return FlutterImageCompress.compressWithList(
       raw,
       minWidth: maxSide,
@@ -1622,9 +1815,11 @@ class Api {
     String extension = 'jpg',
   }) async {
     final uid = db.auth.currentUser!.id;
-    final path = '$folder/$uid-${DateTime.now().millisecondsSinceEpoch}.$extension';
+    final path =
+        '$folder/$uid-${DateTime.now().millisecondsSinceEpoch}.$extension';
     await db.storage.from(bucket).uploadBinary(path, bytes,
-        fileOptions: const FileOptions(contentType: 'image/jpeg', upsert: false));
+        fileOptions:
+            const FileOptions(contentType: 'image/jpeg', upsert: false));
     return path;
   }
 }

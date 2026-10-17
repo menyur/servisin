@@ -266,7 +266,19 @@ class _FixifyAppState extends State<FixifyApp> {
       if (!shouldGoHomeAfterSignIn(currentRouteName.value)) return;
       final nav = navigatorKey.currentState;
       if (nav == null) return;
-      if (role == null) {
+      if (role == 'technician') {
+        // Teknisi baru langsung ke Profil — bukan layar perantara — karena
+        // area layanan belum terisi saat mendaftar dan justru itu yang perlu
+        // dilengkapi sebelum mengambil pekerjaan.
+        mainTabIndex.value = kProfileTabIndex;
+        nav.pushAndRemoveUntil(
+          MaterialPageRoute<void>(
+            builder: (_) => const MainShell(initialIndex: kProfileTabIndex),
+            settings: const RouteSettings(name: '/'),
+          ),
+          (r) => false,
+        );
+      } else if (role == null) {
         nav.pushNamedAndRemoveUntil('/', (r) => false);
       } else {
         nav.pushNamedAndRemoveUntil('/welcome', (r) => false, arguments: role);
@@ -318,6 +330,17 @@ class _FixifyAppState extends State<FixifyApp> {
         if (settings.name == '/order-detail') {
           final booking = settings.arguments as Booking;
           return MaterialPageRoute(builder: (_) => OrderDetailScreen(booking: booking));
+        }
+        // Notifikasi chat: detail pesanan + percakapan langsung di atasnya.
+        if (settings.name == '/order-detail-chat') {
+          final booking = settings.arguments as Booking;
+          return MaterialPageRoute(
+            settings: settings,
+            builder: (_) => OrderDetailScreen(
+              booking: booking,
+              openChatOnOpen: true,
+            ),
+          );
         }
         // Langkah 2 reset (mobile): dibuka otomatis dari deep link
         // fixify://reset-password — lihat _FixifyAppState._openSetPassword.

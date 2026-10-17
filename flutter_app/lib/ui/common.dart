@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
+import '../chat_unread.dart';
 import '../job_filter.dart';
 import '../models.dart';
 import '../report_seen.dart';
@@ -101,7 +102,8 @@ class HeaderGradientBackground extends StatelessWidget {
   /// menambahkan inset bilah status pada avatar).
   final EdgeInsetsGeometry? padding;
 
-  const HeaderGradientBackground({super.key, required this.child, this.padding});
+  const HeaderGradientBackground(
+      {super.key, required this.child, this.padding});
 
   @override
   Widget build(BuildContext context) {
@@ -125,10 +127,11 @@ class HeaderGradientBackground extends StatelessWidget {
           ),
         ),
         child: Stack(children: [
+          const Positioned(top: -48, right: -36, child: _DecoCircle(size: 172)),
           const Positioned(
-              top: -48, right: -36, child: _DecoCircle(size: 172)),
-          const Positioned(
-              bottom: -58, left: -30, child: _DecoCircle(size: 130, opacity: 0.08)),
+              bottom: -58,
+              left: -30,
+              child: _DecoCircle(size: 130, opacity: 0.08)),
           const Positioned(top: 30, right: 86, child: _DecoRing(size: 48)),
           if (padding != null)
             Padding(padding: padding!, child: child)
@@ -176,7 +179,8 @@ class _DecoRing extends StatelessWidget {
         height: size,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.withValues(alpha: 0.22), width: 2),
+          border:
+              Border.all(color: Colors.white.withValues(alpha: 0.22), width: 2),
         ),
       ),
     );
@@ -188,7 +192,10 @@ class FloatingCard extends StatelessWidget {
   final Widget child;
   final EdgeInsets padding;
 
-  const FloatingCard({super.key, required this.child, this.padding = const EdgeInsets.all(14)});
+  const FloatingCard(
+      {super.key,
+      required this.child,
+      this.padding = const EdgeInsets.all(14)});
 
   @override
   Widget build(BuildContext context) {
@@ -235,12 +242,13 @@ class StatusBadge extends StatelessWidget {
       };
 
   @override
-  Widget build(BuildContext context) =>
-      Container(
+  Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(999)),
+        decoration:
+            BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(999)),
         child: Text(status.label,
-            style: TextStyle(color: _fg, fontSize: 11, fontWeight: FontWeight.w700)),
+            style: TextStyle(
+                color: _fg, fontSize: 11, fontWeight: FontWeight.w700)),
       );
 }
 
@@ -276,7 +284,8 @@ String? friendlyNetworkError(Object e) {
 /// Tanya sumber gambar (galeri / ambil kamera) lewat bottom sheet; layar
 /// bawah bisa ditutup tanpa memilih → return null (pemanggil berhenti).
 /// Dipakai lampiran booking, bukti bayar, laporan, foto profil, dan KTP.
-Future<ImageSource?> chooseImageSource(BuildContext context, {String title = 'Pilih Gambar'}) async {
+Future<ImageSource?> chooseImageSource(BuildContext context,
+    {String title = 'Pilih Gambar'}) async {
   return showModalBottomSheet<ImageSource>(
     context: context,
     shape: const RoundedRectangleBorder(
@@ -286,15 +295,18 @@ Future<ImageSource?> chooseImageSource(BuildContext context, {String title = 'Pi
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Padding(
           padding: const EdgeInsets.all(16),
-          child: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+          child:
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
         ),
         ListTile(
-          leading: const Icon(Icons.photo_library_rounded, color: AppColors.brand),
+          leading:
+              const Icon(Icons.photo_library_rounded, color: AppColors.brand),
           title: const Text('Pilih dari Galeri'),
           onTap: () => Navigator.pop(ctx, ImageSource.gallery),
         ),
         ListTile(
-          leading: const Icon(Icons.photo_camera_rounded, color: AppColors.brand),
+          leading:
+              const Icon(Icons.photo_camera_rounded, color: AppColors.brand),
           title: const Text('Ambil Foto dengan Kamera'),
           onTap: () => Navigator.pop(ctx, ImageSource.camera),
         ),
@@ -332,7 +344,8 @@ Future<bool> openRouteToDestination(
   final url = Api.routeUrl(lat: lat, lng: lng, address: address);
   if (url == null) {
     if (context.mounted) {
-      showSnack(context, 'Tujuan belum tersedia — alamat pesanan kosong.', error: true);
+      showSnack(context, 'Tujuan belum tersedia — alamat pesanan kosong.',
+          error: true);
     }
     return false;
   }
@@ -346,7 +359,9 @@ Future<bool> openRouteToDestination(
     }
     return ok;
   } catch (e) {
-    if (context.mounted) showSnackError(context, e, 'Gagal membuka Google Maps.');
+    if (context.mounted) {
+      showSnackError(context, e, 'Gagal membuka Google Maps.');
+    }
     return false;
   }
 }
@@ -372,7 +387,8 @@ Future<bool> releaseJobFlow(BuildContext context, String bookingId) async {
     final r = await Api.releaseJob(bookingId, reason);
     if (context.mounted) {
       if (r.ok) {
-        showSnack(context, 'Tugas dilepas — pesanan kembali ke daftar Tersedia.');
+        showSnack(
+            context, 'Tugas dilepas — pesanan kembali ke daftar Tersedia.');
       } else {
         showSnack(context, r.error ?? 'Gagal melepas tugas.', error: true);
       }
@@ -411,7 +427,8 @@ class _ReleaseJobDialogState extends State<_ReleaseJobDialog> {
   void _submit() {
     final reason = _ctrl.text.trim();
     if (reason.length < 5) {
-      setState(() => _error = 'Tulis alasan melepas tugas (minimal 5 karakter).');
+      setState(
+          () => _error = 'Tulis alasan melepas tugas (minimal 5 karakter).');
       return;
     }
     Navigator.pop(context, reason);
@@ -423,28 +440,33 @@ class _ReleaseJobDialogState extends State<_ReleaseJobDialog> {
       title: const Text('Lepas tugas ini?'),
       // Scrollable: papan ketik di layar pendek tidak boleh memicu overflow.
       content: SingleChildScrollView(
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text(
-              'Pesanan akan kembali ke daftar Tersedia dan bisa diambil teknisi lain.',
-              style: TextStyle(fontSize: 13, height: 1.45)),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _ctrl,
-            minLines: 2,
-            maxLines: 4,
-            maxLength: 500,
-            textInputAction: TextInputAction.done,
-            onSubmitted: (_) => _submit(),
-            decoration: InputDecoration(
-              labelText: 'Alasan melepas (wajib)',
-              hintText: 'mis. jadwal bentrok, di luar area saya…',
-              errorText: _error,
-            ),
-          ),
-        ]),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                  'Pesanan akan kembali ke daftar Tersedia dan bisa diambil teknisi lain.',
+                  style: TextStyle(fontSize: 13, height: 1.45)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _ctrl,
+                minLines: 2,
+                maxLines: 4,
+                maxLength: 500,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit(),
+                decoration: InputDecoration(
+                  labelText: 'Alasan melepas (wajib)',
+                  hintText: 'mis. jadwal bentrok, di luar area saya…',
+                  errorText: _error,
+                ),
+              ),
+            ]),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+        TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Batal')),
         FilledButton(
           style: FilledButton.styleFrom(backgroundColor: AppColors.coral),
           onPressed: _submit,
@@ -476,7 +498,8 @@ class ScreenStateView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (loading) {
       return const Center(
-        child: Padding(padding: EdgeInsets.all(40), child: CircularProgressIndicator()),
+        child: Padding(
+            padding: EdgeInsets.all(40), child: CircularProgressIndicator()),
       );
     }
     if (error != null) {
@@ -484,9 +507,12 @@ class ScreenStateView extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.cloud_off_rounded, size: 40, color: AppColors.inkSoft),
+            const Icon(Icons.cloud_off_rounded,
+                size: 40, color: AppColors.inkSoft),
             const SizedBox(height: 12),
-            Text(error!, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.inkSoft)),
+            Text(error!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.inkSoft)),
             if (onRetry != null) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
@@ -504,10 +530,12 @@ class ScreenStateView extends StatelessWidget {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Icon(Icons.inbox_rounded, size: 44, color: AppColors.brandLight),
+            const Icon(Icons.inbox_rounded,
+                size: 44, color: AppColors.brandLight),
             const SizedBox(height: 12),
             Text(emptyMessage,
-                textAlign: TextAlign.center, style: const TextStyle(color: AppColors.inkSoft)),
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: AppColors.inkSoft)),
           ]),
         ),
       );
@@ -529,15 +557,18 @@ class StaggerIn extends StatefulWidget {
   State<StaggerIn> createState() => _StaggerInState();
 }
 
-class _StaggerInState extends State<StaggerIn> with SingleTickerProviderStateMixin {
+class _StaggerInState extends State<StaggerIn>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   bool _started = false;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 320));
-    Future.delayed(Duration(milliseconds: (widget.index * 45).clamp(0, 480)), () {
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 320));
+    Future.delayed(Duration(milliseconds: (widget.index * 45).clamp(0, 480)),
+        () {
       if (mounted) {
         setState(() => _started = true);
         _ctrl.forward();
@@ -560,7 +591,10 @@ class _StaggerInState extends State<StaggerIn> with SingleTickerProviderStateMix
         opacity: _started ? Curves.easeOut.transform(_ctrl.value) : 0.0,
         child: Transform.translate(
           offset: Offset(
-              0, _started ? 14 * (1 - Curves.easeOutCubic.transform(_ctrl.value)) : 14.0),
+              0,
+              _started
+                  ? 14 * (1 - Curves.easeOutCubic.transform(_ctrl.value))
+                  : 14.0),
           child: child,
         ),
       ),
@@ -652,8 +686,17 @@ final StreamController<BookingUpdate> bookingUpdatesTick =
 /// Posisi tab "Pesanan" pada bar navigasi — sama untuk pelanggan dan teknisi.
 const int kOrdersTabIndex = 1;
 
+/// Posisi tab "Voucher" — HANYA pelanggan (di indeks yang sama teknisi punya
+/// tab Laporan). Jangan dipakai langsung untuk teknisi; gunakan
+/// [tabIndexForNotificationTarget] yang sudah menangani peran.
+const int kVouchersTabIndex = 3;
+
 /// Posisi tab "Pekerjaan" pada bar navigasi — hanya ada untuk teknisi.
 const int kJobsTabIndex = 2;
+
+/// Posisi tab "Profil" pada bar navigasi — sama untuk kedua peran. Dipakai
+/// pengalihan awal teknisi baru (lihat MainShell._detectRole) dan layar login.
+const int kProfileTabIndex = 4;
 
 /// Posisi tab "Laporan" pada bar navigasi — **berbeda per peran**: pelanggan
 /// 2 (Beranda · Pesanan · Laporan · Voucher · Profil), teknisi 3 (Beranda ·
@@ -673,6 +716,75 @@ const Duration kJobCountRefreshInterval = Duration(seconds: 60);
 /// — 2 untuk pelanggan, 3 untuk teknisi — jadi shell yang menerjemahkannya.
 /// Nilai dinaikkan (counter) supaya tetap memicu listener meski nilainya sama.
 final ValueNotifier<int> openReportsRequest = ValueNotifier<int>(0);
+
+/// Satu ketukan notifikasi: tujuan tab, pesanan terkait (bila ada), + waktunya.
+class NotificationTap {
+  final String target;
+
+  /// Diisi notifikasi chat. Shell memakai ini untuk membuka detail pesanan
+  /// dan ruang chat, bukan sekadar mendarat di daftar Pesanan.
+  final String? bookingId;
+  final DateTime at;
+
+  NotificationTap(this.target, {this.bookingId, DateTime? at})
+      : at = at ?? DateTime.now();
+}
+
+/// Batas umur titipan notifikasi. Saat diketuk, Android bisa MEMBANGUN ULANG
+/// activity/task (terbukti di emulator: MainShell baru lahir ±0,4 detik setelah
+/// handler tap jalan). Karena itu nilai ini tidak langsung dibuang setelah
+/// shell lama memakainya: shell baru dalam jendela ini juga menerapkannya.
+const Duration kNotificationTapWindow = Duration(seconds: 20);
+
+/// Ketukan notifikasi terakhir yang belum diterapkan oleh shell tertentu.
+///
+/// Kenapa bukan langsung `mainTabIndex`: notifikasi bisa diketuk saat app
+/// TERMINASI — nilai ditulis sebelum MainShell ada, listener belum terpasang,
+/// dan tujuannya hilang. Shell membaca [NotificationTap] setelah perannya
+/// diketahui; tiap shell mencatat objek yang sudah ia pakai, jadi shell baru
+/// (cold start / activity dibangun ulang) tetap mendapat tujuan yang sama.
+final ValueNotifier<NotificationTap?> pendingNotificationTap =
+    ValueNotifier<NotificationTap?>(null);
+
+/// Masih adakah ketukan notifikasi yang layak diterapkan?
+bool adaNotifikasiPending([DateTime? sekarang]) {
+  final tap = pendingNotificationTap.value;
+  if (tap == null) return false;
+  final now = sekarang ?? DateTime.now();
+  return now.difference(tap.at) < kNotificationTapWindow;
+}
+
+/// Tutup layar yang menutupi shell (detail pesanan, chat, dialog) sebelum
+/// berpindah tab dari notifikasi. Tanpa ini, tab berubah di belakang layar
+/// detail yang tetap terlihat — pengguna mengira notifikasinya tidak bekerja.
+///
+/// Dipisah dari [MainShell] agar bisa diuji dengan Navigator nyata.
+void tutupLayarDiAtasShell(NavigatorState? navigator) {
+  if (navigator == null || !navigator.canPop()) return;
+  navigator.popUntil((route) => route.isFirst);
+}
+
+/// Indeks tab untuk tujuan notifikasi. Murni supaya bisa diuji tanpa widget:
+/// tab Laporan berbeda per peran (pelanggan 2, teknisi 3); 'jobs' hanya ada
+/// untuk teknisi — pelanggan yang menerimanya kembali ke Pesanan.
+int tabIndexForNotificationTarget(String? target, bool isTechnician) {
+  switch (target) {
+    case 'reports':
+      return reportsTabIndex(isTechnician);
+    case 'jobs':
+      return isTechnician ? kJobsTabIndex : kOrdersTabIndex;
+    case 'profile':
+      return kProfileTabIndex;
+    case 'vouchers':
+      // Teknisi tidak punya tab Voucher; notifikasi voucher untuk mereka
+      // (mis. hadiah manual admin) diarahkan ke Pesanan, bukan ke Laporan
+      // yang kebetulan menempati indeks 3.
+      return isTechnician ? kOrdersTabIndex : kVouchersTabIndex;
+    case 'orders':
+    default:
+      return kOrdersTabIndex;
+  }
+}
 
 /// Jumlah event realtime pesanan yang belum "dilihat": naik tiap event
 /// bermakna (perubahan status / penugasan teknisi) datang saat user tidak
@@ -695,6 +807,13 @@ final ValueNotifier<int> unseenReportUpdates = ValueNotifier<int>(0);
 /// Isinya selalu berasal dari [filterAvailableJobs] yang sama dengan daftar
 /// kartu di layar Pekerjaan.
 final ValueNotifier<int> availableJobCount = ValueNotifier<int>(0);
+
+/// Profil teknisi masih ada data yang perlu dilengkapi (lihat
+/// [dataProfilKurang]). Menyalakan **titik** di ikon tab Profil — bukan angka,
+/// karena ini pengingat tindakan, bukan hitungan notifikasi. Diperbarui
+/// MainShell saat peran terbaca dan ProfileScreen setelah profil dimuat /
+/// disimpan, sehingga titik hilang segera setelah datanya lengkap.
+final ValueNotifier<bool> profilPerluDilengkapi = ValueNotifier<bool>(false);
 
 /// Tick event realtime laporan (admin menanggapi). Layar Laporan mendengarkan
 /// stream ini untuk memuat ulang daftarnya; MainShell menyiarkannya sekaligus
@@ -758,6 +877,19 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   late int _prevIndex = widget.initialIndex;
   bool _isTechnician = false;
 
+  /// Sekali per shell: teknisi yang profilnya belum lengkap sudah dibawa ke tab
+  /// Profil dan sudah diingatkan — jangan mengulanginya saat tab berganti.
+  bool _sudahKeProfil = false;
+  bool _sudahIngatLengkapi = false;
+
+  /// Peran sudah dibaca? Tujuan notifikasi menunggu sampai ini benar karena
+  /// indeks tab Laporan bergantung pada peran.
+  bool _peranTerbaca = false;
+
+  /// Ketukan notifikasi yang sudah diterapkan shell INI. Mencegah listener
+  /// yang sama menerapkannya berulang, tanpa menghalangi shell baru.
+  NotificationTap? _notificationTapTerpakai;
+
   // Realtime status pesanan (satu channel untuk seluruh aplikasi).
   ChatUnsubscribe? _realtimeCleanup;
   String? _realtimeUid;
@@ -765,6 +897,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   // Realtime tanggapan admin atas laporan pengguna (badge tab Laporan).
   ChatUnsubscribe? _reportCleanup;
   String? _reportUid;
+
+  // Realtime SEMUA chat masuk (badge tombol chat + badge ikon aplikasi).
+  ChatUnsubscribe? _chatCleanup;
+  String? _chatUid;
 
   /// Profil pengguna yang login — dipakai filter area/keahlian untuk angka
   /// badge tab Pekerjaan (dan hasil `_detectRole` sudah memuatnya).
@@ -780,20 +916,20 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// Tab sesuai peran: teknisi mendapat tab **Pekerjaan**
   /// (ambil pekerjaan) di posisi tengah, menggantikan Voucher.
   List<Widget> get _screens => _isTechnician
-        ? <Widget>[
-            const HomeScreen(),
-            const OrdersScreen(),
-            const JobsScreen(),
-            const ReportsScreen(),
-            const ProfileScreen(),
-          ]
-        : <Widget>[
-            const HomeScreen(),
-            const OrdersScreen(),
-            const ReportsScreen(),
-            const VouchersScreen(),
-            const ProfileScreen(),
-          ];
+      ? <Widget>[
+          const HomeScreen(),
+          const OrdersScreen(),
+          const JobsScreen(),
+          const ReportsScreen(),
+          const ProfileScreen(),
+        ]
+      : <Widget>[
+          const HomeScreen(),
+          const OrdersScreen(),
+          const ReportsScreen(),
+          const VouchersScreen(),
+          const ProfileScreen(),
+        ];
 
   void _select(int i) {
     if (i == _index) return;
@@ -820,12 +956,37 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // Sinkron saat layar lain meminta pindah tab (mainTabIndex.value = X).
     mainTabIndex.addListener(_onExternalTabRequest);
+    // Badge chat dari snapshot lokal — tampil segera, lalu dihitung ulang dari
+    // server setelah peran terbaca (_detectRole).
+    unawaited(ChatUnreadService.loadCached());
     // Notifikasi laporan meminta tab Laporan (indeks tergantung peran).
     openReportsRequest.addListener(_onOpenReportsRequest);
+    // Notifikasi yang diketuk (termasuk saat app cold start) menitipkan tujuan.
+    pendingNotificationTap.addListener(_onPendingNotification);
     if (widget.initialIndex == kOrdersTabIndex) unseenBookingUpdates.value = 0;
     _detectRole();
     _initBookingRealtime();
     _initReportRealtime();
+    _initChatRealtime();
+  }
+
+  /// Pasang pendengar chat global. RLS Supabase hanya meneruskan pesan dari
+  /// pesanan milik pelanggan ini / tugas teknisi ini, jadi satu channel cukup
+  /// tanpa perlu tahu ID pesanan lebih dulu.
+  void _initChatRealtime() {
+    final uid = Api.session?.user.id;
+    if (uid == null || uid.isEmpty) return;
+    if (_chatUid == uid) return;
+    _chatUid = uid;
+    _chatCleanup = Api.subscribeIncomingChat(uid, (m) {
+      // Pesan yang saya kirim sendiri (mis. dari perangkat lain) bukan unread.
+      if (m.senderId == uid) return;
+      ChatUnreadService.onIncoming(
+        m.bookingId,
+        messageId: m.id,
+        at: m.createdAt,
+      );
+    });
   }
 
   Future<void> _detectRole() async {
@@ -833,13 +994,58 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       final p = await Api.myProfile();
       if (!mounted || p == null) return;
       _myProfile = p;
-      if (p.role == 'technician' && !_isTechnician) {
-        setState(() => _isTechnician = true);
+      final kurang = dataProfilKurang(p);
+      profilPerluDilengkapi.value = kurang.isNotEmpty;
+      final jadiTeknisi = p.role == 'technician' && !_isTechnician;
+      _peranTerbaca = true;
+      // Tampilan awal teknisi yang datanya belum lengkap = Profil. Ini menutup
+      // semua jalur masuk (termasuk sesi yang dipulihkan saat app dibuka),
+      // sehingga teknisi baru tidak ditinggal di Beranda tanpa tahu apa yang
+      // harus diisi. Login & verifikasi email sudah mengarahkannya lebih awal.
+      final alihkanKeProfil = p.role == 'technician' &&
+          kurang.isNotEmpty &&
+          widget.initialIndex == 0 &&
+          // Jangan menimpa tujuan yang sudah diminta dari luar (mis. notifikasi
+          // push yang membuka tab Pesanan/Pekerjaan saat app baru dibuka).
+          mainTabIndex.value == 0 &&
+          !adaNotifikasiPending() &&
+          !_sudahKeProfil;
+      if (jadiTeknisi || alihkanKeProfil) {
+        setState(() {
+          if (jadiTeknisi) _isTechnician = true;
+          if (alihkanKeProfil) {
+            _sudahKeProfil = true;
+            _prevIndex = _index;
+            _index = kProfileTabIndex;
+          }
+        });
       }
+      if (alihkanKeProfil) mainTabIndex.value = kProfileTabIndex;
       if (p.role == 'technician') _startJobCountRefresh();
+      if (p.role == 'technician' && kurang.isNotEmpty) {
+        _ingatkanLengkapiProfil();
+      }
+      // Badge chat: muat angka tersimpan lalu hitung ulang dari server. Peran
+      // menentukan daftar pesanan yang perlu diperiksa (pelanggan vs teknisi).
+      unawaited(ChatUnreadService.init(isTechnician: p.role == 'technician'));
+      // Tujuan notifikasi baru bisa diterjemahkan setelah peran diketahui.
+      _consumePendingNotification();
     } catch (_) {
       // gagal muat profil → tetap tab pelanggan
     }
+  }
+
+  /// Beri tahu SEKALI per shell bahwa profil teknisi masih perlu dilengkapi.
+  /// SnackBar ini pelengkap pengingat tetap di layar Profil dan titik di tab
+  /// Profil — jadi teknisi tetap punya jejak walau SnackBar-nya sudah lewat.
+  void _ingatkanLengkapiProfil() {
+    if (_sudahIngatLengkapi) return;
+    _sudahIngatLengkapi = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showSnack(context,
+          'Lengkapi data profil teknismu agar siap menerima pekerjaan.');
+    });
   }
 
   /// Mulai pemantauan jumlah pekerjaan tersedia (teknisi): sekali sekarang,
@@ -893,7 +1099,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (uid == null) return;
     if (_reportUid == uid) return;
     _reportUid = uid;
-    _reportCleanup = Api.subscribeReportUpdates(uid, (u) => _onReportUpdate(uid, u));
+    _reportCleanup =
+        Api.subscribeReportUpdates(uid, (u) => _onReportUpdate(uid, u));
     unawaited(_refreshReportBadge(uid));
   }
 
@@ -904,7 +1111,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       final current = await Api.fetchMyReportStatuses();
       final seen = await ReportSeenStore.read(uid);
       if (!mounted) return;
-      unseenReportUpdates.value = countUnseenReports(seen: seen, current: current);
+      unseenReportUpdates.value =
+          countUnseenReports(seen: seen, current: current);
     } catch (_) {
       // gagal baca server → pertahankan angka terakhir
     }
@@ -914,7 +1122,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// tahu pengguna, lalu hitung ulang angka badge dari server — seluruh alurnya
   /// ada di [handleReportUpdate] supaya bisa diuji deterministik.
   void _onReportUpdate(String uid, ReportUpdate u) {
-    handleReportUpdate(context, u, refreshBadge: () => unawaited(_refreshReportBadge(uid)));
+    handleReportUpdate(context, u,
+        refreshBadge: () => unawaited(_refreshReportBadge(uid)));
   }
 
   /// Kembali dari background/layar mati: websocket tidak menerima apa pun
@@ -924,6 +1133,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (state != AppLifecycleState.resumed) return;
     final uid = Api.session?.user.id;
     if (uid != null) unawaited(_refreshReportBadge(uid));
+    // Chat yang masuk saat app di background/mati tidak melewati listener FCM
+    // Dart — hitung ulang dari server begitu app kembali ke depan.
+    unawaited(ChatUnreadService.refresh());
     if (_isTechnician) unawaited(_refreshJobCount());
   }
 
@@ -983,15 +1195,64 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _reportUid = null;
     _reportCleanup?.call();
     _reportCleanup = null;
+    _chatUid = null;
+    _chatCleanup?.call();
+    _chatCleanup = null;
     WidgetsBinding.instance.removeObserver(this);
     mainTabIndex.removeListener(_onExternalTabRequest);
     openReportsRequest.removeListener(_onOpenReportsRequest);
+    pendingNotificationTap.removeListener(_onPendingNotification);
     super.dispose();
   }
 
   void _onExternalTabRequest() {
     if (mainTabIndex.value == _index) return;
     _select(mainTabIndex.value);
+  }
+
+  /// Terapkan tujuan notifikasi yang dititipkan PushService, sekali saja.
+  /// Diabaikan selama peran belum terbaca — `_detectRole` akan memanggilnya.
+  void _onPendingNotification() {
+    if (!mounted) return;
+    _consumePendingNotification();
+  }
+
+  void _consumePendingNotification() {
+    final tap = pendingNotificationTap.value;
+    if (tap == null || !_peranTerbaca || !mounted) return;
+    if (identical(tap, _notificationTapTerpakai)) return;
+    if (!adaNotifikasiPending()) return;
+    _notificationTapTerpakai = tap;
+    // Tutup layar yang sedang terbuka (detail pesanan, chat, dialog) SEBELUM
+    // berpindah tab. Tanpa ini, `_select` hanya mengganti tab di belakang
+    // layar detail yang tetap di atas — pengguna mengetuk notifikasi Voucher
+    // tetapi masih melihat detail pesanan dan mengira notifikasinya gagal.
+    tutupLayarDiAtasShell(navigatorKey.currentState);
+    _select(tabIndexForNotificationTarget(tap.target, _isTechnician));
+    final bookingId = tap.bookingId;
+    if (bookingId != null && bookingId.isNotEmpty) {
+      unawaited(_bukaPesananDariNotifikasi(bookingId));
+    }
+  }
+
+  /// Notifikasi chat → detail pesanan, lalu chat-nya langsung terbuka.
+  ///
+  /// Kalau pesanan sudah tidak bisa dibaca (dihapus/dipindahkan), pengguna
+  /// tetap mendarat di tab Pesanan; jangan biarkan notifikasi membuka layar
+  /// kosong atau menggagalkan seluruh alur startup.
+  Future<void> _bukaPesananDariNotifikasi(String bookingId) async {
+    try {
+      final booking = await Api.fetchBookingById(bookingId);
+      if (!mounted || booking == null) return;
+      final navigator = navigatorKey.currentState;
+      if (navigator == null) return;
+      await navigator.pushNamed(
+        '/order-detail-chat',
+        arguments: booking,
+      );
+    } catch (_) {
+      // Best-effort: tab Pesanan sudah terbuka sebagai fallback.
+    }
   }
 
   /// Notifikasi laporan meminta tab Laporan — indeks berbeda per peran.
@@ -1047,7 +1308,11 @@ class MainNav extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int>? onTabSelected;
   final bool isTechnician;
-  const MainNav({super.key, required this.currentIndex, this.onTabSelected, this.isTechnician = false});
+  const MainNav(
+      {super.key,
+      required this.currentIndex,
+      this.onTabSelected,
+      this.isTechnician = false});
 
   // Urutan HARUS sama dengan _screens pelanggan & routes ['/orders',
   // '/reports', '/vouchers']: idx 2 = Laporan, idx 3 = Voucher — sebelumnya
@@ -1121,6 +1386,40 @@ class MainNav extends StatelessWidget {
     );
   }
 
+  /// Titik oranye kecil di ikon tab Profil: pengingat melengkapi data teknisi.
+  ///
+  /// Berbeda dari [_denganBadge] yang membawa ANGKA, titik ini menandai
+  /// tindakan yang belum selesai. Disembunyikan saat tab Profil sedang dibuka
+  /// — di sana pengingatnya sudah berbentuk kartu di dalam layar.
+  Widget _denganTitik(Widget icon, int i) {
+    if (i == currentIndex) return icon;
+    return Stack(clipBehavior: Clip.none, children: [
+      icon,
+      Positioned(
+        top: -4,
+        right: -6,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: profilPerluDilengkapi,
+          builder: (context, perlu, _) => perlu
+              ? Semantics(
+                  container: true,
+                  label: 'Profil perlu dilengkapi',
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: AppColors.accent,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 1.5),
+                    ),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ),
+    ]);
+  }
+
   void _go(BuildContext context, int i) {
     if (onTabSelected != null) {
       onTabSelected!(i);
@@ -1162,6 +1461,11 @@ class MainNav extends StatelessWidget {
             // Ikon tab dibungkus Stack bila punya badge angka (jumlah notifikasi
             // belum dibaca / pekerjaan tersedia) supaya lencananya menempel.
             icon = _denganBadge(icon, i);
+            // Tab Profil teknisi memakai TITIK (bukan angka) saat datanya belum
+            // lengkap — pengingat tindakan, bukan hitungan notifikasi.
+            if (isTechnician && i == kProfileTabIndex) {
+              icon = _denganTitik(icon, i);
+            }
             return Expanded(
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
@@ -1199,10 +1503,12 @@ class MainNav extends StatelessWidget {
                         duration: const Duration(milliseconds: 200),
                         style: TextStyle(
                           fontSize: active ? 10.5 : 10,
-                          fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                          fontWeight:
+                              active ? FontWeight.w800 : FontWeight.w600,
                           color: active ? Colors.white : AppColors.inkSoft,
                         ),
-                        child: Text(item.$3, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        child: Text(item.$3,
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
                       ),
                     ],
                   ),
@@ -1264,7 +1570,8 @@ class TechAvatarChip extends StatelessWidget {
   final String? url;
   final String name;
   final double size;
-  const TechAvatarChip({super.key, required this.name, this.url, this.size = 26});
+  const TechAvatarChip(
+      {super.key, required this.name, this.url, this.size = 26});
 
   @override
   Widget build(BuildContext context) {
@@ -1314,11 +1621,15 @@ class InfoRow extends StatelessWidget {
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           SizedBox(
               width: 120,
-              child: Text(label, style: const TextStyle(color: AppColors.inkSoft, fontSize: 13))),
+              child: Text(label,
+                  style:
+                      const TextStyle(color: AppColors.inkSoft, fontSize: 13))),
           Expanded(
               child: Text(value,
                   style: const TextStyle(
-                      color: AppColors.ink, fontSize: 13, fontWeight: FontWeight.w600))),
+                      color: AppColors.ink,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600))),
         ]),
       );
 }

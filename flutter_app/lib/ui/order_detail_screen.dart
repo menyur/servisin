@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
+import '../chat_unread.dart';
 import '../format.dart';
 import '../models.dart';
 import '../theme.dart';
 import '../trip_share.dart';
 import 'chat_screen.dart';
+import 'chat_unread_badge.dart';
 import 'common.dart';
 import 'mini_pin_map.dart';
 import 'receipt_screen.dart';
@@ -42,6 +44,10 @@ class OrderDetailScreen extends StatefulWidget {
   /// Diteruskan ke [TripShareSession] saat perjalanan dimulai.
   final TripShareHooks? tripShareUji;
 
+  /// Dibuka dari notifikasi chat: detail ini langsung menumpuk layar chat di
+  /// atasnya, jadi pengguna mendarat di percakapan dan bisa kembali ke detail.
+  final bool openChatOnOpen;
+
   const OrderDetailScreen({
     super.key,
     required this.booking,
@@ -50,6 +56,7 @@ class OrderDetailScreen extends StatefulWidget {
     this.warrantyInfoUji,
     this.positionUji,
     this.tripShareUji,
+    this.openChatOnOpen = false,
   });
 
   @override
@@ -115,6 +122,29 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     }
     // Detail pesanan terbuka — perubahan item ini langsung tampak, reset badge.
     unseenBookingUpdates.value = 0;
+    if (widget.openChatOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _bukaChat();
+      });
+    }
+  }
+
+  /// Buka percakapan pelanggan ↔ teknisi untuk pesanan ini.
+  void _bukaChat() {
+    final chatMyId = Api.session?.user.id;
+    if (chatMyId == null) return;
+    final isCustomer = _b.technicianId != chatMyId;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ChatScreen(
+          booking: _b,
+          myId: chatMyId,
+          peerName: isCustomer ? (_b.technicianName ?? 'Teknisi') : 'Pelanggan',
+          peerAvatarUrl: isCustomer ? _b.technicianAvatar : null,
+        ),
+      ),
+    ).then((_) => _reload());
   }
 
   @override
@@ -1176,28 +1206,29 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
               (b.status == BookingStatus.paid || b.status == BookingStatus.inProgress))
             const SizedBox(height: 10),
 
-          // chat kedua sisi: pelanggan ↔ teknisi
+          // chat kedua sisi: pelanggan ↔ teknisi. Label ikut memantau angka
+          // global agar badge pada pesanan ini langsung berubah saat pesan
+          // masuk lewat realtime/FCM.
           if (b.technicianId != null)
-            FilledButton.icon(
-              onPressed: () {
-                final chatMyId = Api.session?.user.id;
-                if (chatMyId == null) return;
-                final isCustomer = b.technicianId != chatMyId;
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ChatScreen(
-                      booking: b,
-                      myId: chatMyId,
-                      peerName: isCustomer ? (b.technicianName ?? 'Teknisi') : 'Pelanggan',
-                      peerAvatarUrl: isCustomer ? b.technicianAvatar : null,
-                    ),
+            ValueListenableBuilder<int>(
+              valueListenable: ChatUnreadService.total,
+              builder: (context, _, __) {
+                final belumDibaca = ChatUnreadService.countFor(b.id);
+                return FilledButton.icon(
+                  onPressed: _bukaChat,
+                  icon: const Icon(Icons.chat_bubble_rounded),
+                  label: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(b.technicianId != myId ? 'Chat Teknisi' : 'Chat Pelanggan'),
+                      if (belumDibaca > 0) ...[
+                        const SizedBox(width: 8),
+                        ChatUnreadBadge(count: belumDibaca),
+                      ],
+                    ],
                   ),
-                ).then((_) => _reload());
+                );
               },
-              icon: const Icon(Icons.chat_bubble_rounded),
-              label: Text(
-                  b.technicianId != myId ? 'Chat Teknisi' : 'Chat Pelanggan'),
             ),
           if (b.technicianId != null) const SizedBox(height: 10),
           OutlinedButton.icon(
