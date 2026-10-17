@@ -108,7 +108,13 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
       Tanpa ini, email yang gagal hilang diam-diam dan antrean tampak kosong),
       `migrate-admin-notification-prefs.sql`, `migrate-push-scheduler.sql`, `migrate-history-retention.sql`,
       `migrate-voucher-push.sql` (trigger voucher baru → antrean push; wajib setelah
+      `migrate-chat-push.sql` supaya pelanggan diberi tahu saat insentif penilaian atau voucher admin masuk),
       `migrate-chat-moderation.sql` (**Laporkan & Blokir chat** — syarat kebijakan konten buatan
+      pengguna Google Play. Menambah tabel `chat_blocks` (blokir per pengguna, berlaku di semua
+      pesanan) dan kolom `reports.kind`/`reports.reason`, lalu memperketat policy `chat_messages`:
+      pesan dari pihak yang diblokir tidak lagi terlihat oleh yang memblokir, dan INSERT ditolak bila
+      ada blokir di arah mana pun. Jalankan SESUDAH `migrate-chat-messages.sql` +
+      `migrate-reports.sql`; tanpa berkas ini tombol Laporkan/Blokir di aplikasi gagal menyimpan),
       `fix-balance-proofs-owner-read.sql`, `enforce-full-charge-balance.sql`
       (kebijakan uang yang berlaku: potongan **PENUH** = komisi + biaya app; saldo
       teknisi boleh minus dan nilai minus itu **piutang** teknisi — menambah kolom
