@@ -38,6 +38,11 @@
 // Kode keluar: 0 = lulus, 1 = ada yang gagal (termasuk produksi tak terjangkau).
 // ============================================================================
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { opsiPushDariAntrean } from "../src/lib/push-payload.js";
+
 // Base URL produksi — sama dengan AppConfig.webBaseUrl di aplikasi Flutter
 // (flutter_app/lib/config.dart) dan NEXT_PUBLIC_SITE_URL di .env.local.
 const DEFAULT_URL = "https://servisin-six.vercel.app";
@@ -212,7 +217,43 @@ if (SELFTEST) {
     if (ok && gagal.length) console.log(`       alasan: ${gagal[0]}`);
   }
 
-  const total = kasus.length + 1 + kasusKirim.length;
+  // Bagian C: baris antrean push_outbox harus sampai ke pengirim DENGAN
+  // kolom `data`-nya (bookingId notifikasi chat). Regresi nyata: worker hanya
+  // meneruskan judul/isi/rute, sehingga ketukan notifikasi chat selalu
+  // mendarat di tab Pesanan dan tidak pernah membuka percakapan pesanan.
+  const akarRepo = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const routeWorker = readFileSync(
+    join(akarRepo, "src/app/api/push-worker/route.js"),
+    "utf8"
+  );
+  const kirim = opsiPushDariAntrean({
+    title: "Budi",
+    body: "halo",
+    event: "chat_message",
+    route: "/orders",
+    tag: "chat-b-123",
+    data: { bookingId: "b-123" },
+  });
+  const kasusAntrean = [
+    ["data bookingId diteruskan", kirim.data?.bookingId === "b-123"],
+    ["rute & event tetap", kirim.url === "/orders" && kirim.event === "chat_message"],
+    ["route kosong jatuh ke /dashboard", opsiPushDariAntrean({}).url === "/dashboard"],
+    [
+      "data null/bukan objek tidak meledak",
+      opsiPushDariAntrean({ data: null }).data?.bookingId === undefined &&
+        Object.keys(opsiPushDariAntrean({ data: "rusak" }).data).length === 0,
+    ],
+    [
+      "worker benar-benar memakai pemetaan itu",
+      /opsiPushDariAntrean\(item\)/.test(routeWorker),
+    ],
+  ];
+  for (const [nama, ok] of kasusAntrean) {
+    if (!ok) gagalSelftest += 1;
+    console.log(`${ok ? "lulus" : "GAGAL"}  ${nama}`);
+  }
+
+  const total = kasus.length + 1 + kasusKirim.length + kasusAntrean.length;
   console.log("=".repeat(72));
   console.log(`${gagalSelftest === 0 ? "LULUS" : "GAGAL"}: selftest ${total - gagalSelftest}/${total}`);
   process.exit(gagalSelftest === 0 ? 0 : 1);

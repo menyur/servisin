@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { sendPushToUser } from "@/lib/notify";
 import { fcmReadiness, sendFcmSelfTest } from "@/lib/fcm";
+import { opsiPushDariAntrean } from "@/lib/push-payload";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -83,16 +84,26 @@ export async function POST() {
 
     let sent = 0;
     let pending = 0;
+    let dilewati = 0;
     await Promise.all(
       batch.map(async (item) => {
         try {
-          const hasil = await sendPushToUser(item.user_id, {
-            title: item.title,
-            body: item.body,
-            event: item.event,
-            url: item.route,
-            tag: item.tag || undefined,
-          });
+          // `data` (mis. bookingId notifikasi chat) HARUS ikut: tanpa itu app
+          // hanya tahu rute tab, bukan percakapan mana yang harus dibuka.
+          const hasil = await sendPushToUser(
+            item.user_id,
+            opsiPushDariAntrean(item)
+          );
+          // Tujuan akun uji (probe): barisnya DIBERESKAN tanpa kiriman. Kalau
+          // dibiarkan, percobaannya terpakai habis untuk notifikasi yang tidak
+          // pernah punya perangkat — dan muncul sebagai "tak ada perangkat
+          // tujuan" seolah ada gangguan. Sama seperti jalur email admin.
+          if (hasil?.skipped === "sumber-uji") {
+            dilewati += 1;
+            console.warn(`[push-worker] dilewati (akun uji): event=${item.event}`);
+            await admin.rpc("complete_push", { p_id: item.id });
+            return;
+          }
           const delivered = Number(hasil?.total) || 0;
           if (delivered > 0) {
             await admin.rpc("complete_push", { p_id: item.id });
@@ -114,7 +125,7 @@ export async function POST() {
       })
     );
 
-    return NextResponse.json({ ok: true, sent, pending });
+    return NextResponse.json({ ok: true, sent, pending, dilewati });
   } catch (err) {
     console.error("[push-worker] fatal:", err?.message);
     return NextResponse.json({ ok: false }, { status: 500 });
