@@ -34,6 +34,13 @@ on:
       - "scripts/verify-font-family.mjs"
       # Idem untuk gate wiring badge notifikasi.
       - "scripts/verify-flutter-notif-badges.mjs"
+      # Gate Laporkan & Blokir chat menyentuh berkas di luar flutter_app/
+      # (halaman /syarat, panel admin, migrasi SQL), jadi berkas-berkas itu ikut
+      # jadi pemicu — kalau tidak, lampu merahnya baru terlihat di push berikutnya.
+      - "scripts/verify-chat-moderation.mjs"
+      - "src/app/syarat/page.js"
+      - "src/components/AdminDashboard.js"
+      - "supabase/migrate-chat-moderation.sql"
   push:
     branches: [main]
     paths:
@@ -41,6 +48,10 @@ on:
       - ".github/workflows/flutter-ci.yml"
       - "scripts/verify-font-family.mjs"
       - "scripts/verify-flutter-notif-badges.mjs"
+      - "scripts/verify-chat-moderation.mjs"
+      - "src/app/syarat/page.js"
+      - "src/components/AdminDashboard.js"
+      - "supabase/migrate-chat-moderation.sql"
   workflow_dispatch:
 
 permissions:
@@ -95,6 +106,12 @@ jobs:
       # compile maupun test, hanya mematikan fiturnya untuk pengguna.
       - name: Verifikasi wiring badge jumlah notifikasi
         run: node scripts/verify-flutter-notif-badges.mjs
+
+      # Gate kebijakan konten buatan pengguna (UGC): pastikan menu Laporkan &
+      # Blokir, kolom laporan chat, policy chat_blocks, janji 2×24 jam di
+      # /syarat, dan tanda di panel admin tetap tersambung satu sama lain.
+      - name: Verifikasi wiring Laporkan & Blokir chat
+        run: node scripts/verify-chat-moderation.mjs
 
       # Sama seperti build-apk.yml: kredensial PUBLIK client Supabase
       # (publishable key) — aman, keamanan dijaga RLS di database.

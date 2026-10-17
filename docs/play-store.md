@@ -219,29 +219,48 @@ sumber: [Target API level requirements](https://support.google.com/googleplay/an
 
 ---
 
-## 7. Kebijakan konten buatan pengguna (chat) — **celah yang harus ditutup**
+## 7. Kebijakan konten buatan pengguna (chat) — **sudah dikerjakan di repo**
 
 Aplikasi menyediakan chat pelanggan ↔ teknisi. Google Play menempatkan chat seperti ini
 sebagai **user-generated content**, dan kebijakan UGC mewajibkan **tiga** hal:
 
-1. **Syarat penggunaan** yang melarang konten kasar/ilegal — sudah ada di `/syarat`
-   (pastikan bagian ini eksplisit menyebut pesan chat).
+1. **Syarat penggunaan** yang melarang konten kasar/ilegal.
 2. **Mekanisme pelaporan** di dalam aplikasi untuk konten/pengguna yang melanggar.
 3. **Moderasi** yang konsisten dengan syarat: tindak lanjut laporan (mis. menonaktifkan
    akun pelanggar) tercatat.
 
-Yang dimiliki sekarang: **belum ada** tombol laporkan/blokir di layar chat. Aplikasi
-punya fitur **Laporan** (kendala pesanan) — jalur yang wajar untuk diperluas, bukan
-dibuat dari nol. Rekomendasi minimal sebelum mengirim ke produksi:
+Ketiganya kini ada di repo (18 Okt 2026):
 
-- Tambahkan aksi **"Laporkan percakapan"** di `ChatScreen` → kirim laporan berisi
-  `booking_id`, pelapor, dan alasan; tampil di panel admin bersama laporan lain.
-- Sediakan **keluaran cepat**: "Blokir & akhiri chat" bila memungkinkan, atau
-  minimal tombol hubungi admin agar pengguna punya jalan keluar selain balas pesan.
-- Catat kebijakan tindak lanjut di `/syarat` (mis. *laporan ditinjau ≤ 2×24 jam,
-  pelanggar dapat dinonaktifkan*).
+| Kewajiban | Wujudnya |
+|---|---|
+| Syarat penggunaan | `/syarat` §9 **Konten pengguna**: larangan eksplisit untuk pesan chat (ujaran kebencian, ancaman, pelecehan, konten seksual, penipuan, bayar di luar aplikasi, spam, tautan berbahaya) + komitmen tinjauan **2×24 jam** dan sanksi |
+| Pelaporan | Menu ⋮ di `ChatScreen` → **Laporkan percakapan** (5 alasan tetap + catatan opsional) — tersimpan di tabel `reports` dengan `kind='chat'`, `reason`, `target_id` sehingga muncul di tab **Laporan Masuk** panel admin dengan tanda *Laporkan chat* |
+| Blokir | Menu ⋮ → **Blokir {nama}** (dengan konfirmasi) atau **Buka blokir**. Tabel `chat_blocks` menutup chat **di RLS**, bukan hanya di UI: INSERT ditolak dua arah dan pesan pihak yang diblokir tidak lagi tampil bagi yang memblokir |
 
-Sampai poin ini dikerjakan, pengajuan produksi berisiko ditolak karena kebijakan UGC —
+Yang tetap perlu Anda lakukan sebelum pengajuan produksi:
+
+- **Migrasi sudah diterapkan** ke database produksi (18 Okt 2026, 17 pernyataan, idempoten) dan
+diverifikasi *live*: `npm run verify:chat-moderation-live` → 7/7 lulus di dalam transaksi yang
+di-rollback (sisa `blokir=0 · pesan_uji=0 · laporan_uji=0`). Tabel `chat_blocks` + kolom
+`reports.kind`/`reports.reason` sudah ada — tidak ada langkah SQL tersisa, kecuali bila Anda
+mengganti project Supabase (jalankan berkasnya lagi).
+- Pastikan tim benar-benar meninjau laporan masuk ≤ 2×24 jam — itulah janji yang tertulis di
+`/syarat` dan yang dilihat pengguna saat menekan "Kirim laporan".
+- Uji ulang di perangkat: laporkan percakapan, blokir, lalu buka blokir (bukti ada di
+`flutter_app/test/chat_moderation_test.dart`, 22 pemeriksaan).
+- Jaga agar wiring-nya tidak diam-diam lepas: `npm run verify:chat-moderation` (34 pemeriksaan
+statis, ikut jalan di CI Flutter) dan `npm run verify:chat-moderation-selftest`.
+- Bukti perilaku di database nyata: `npm run verify:chat-moderation-live` — menjalankan blokir,
+penyembunyian pesan, moderasi admin, dan laporan chat **di dalam transaksi yang di-rollback**
+(tanpa menyisakan data), dengan kontrol positif supaya penolakannya tidak palsu.
+
+> Catatan kejadian nyata (18 Okt 2026): bentuk pertama policy INSERT tampak benar dan lolos
+gate statis, tetapi saat pihak yang **diblokir** mengirim pesan, barisnya tidak cocok satu pun
+syarat sehingga pesannya tetap masuk. Yang menemukannya hanya `verify:chat-moderation-live`.
+Sebabnya: pada pemeriksaan INSERT, baris yang diperiksa hanya memuat PENGIRIM, jadi pasangan
+peserta harus diambil dari `bookings` — bukan dari `sender_id`.
+
+Tanpa pelaporan & blokir ini pengajuan produksi berisiko ditolak karena kebijakan UGC —
 **internal/closed testing tidak terpengaruh**, jadi Anda tetap bisa menguji sambil
 menyiapkannya.
 
@@ -266,7 +285,7 @@ menyiapkannya.
 - [ ] 12 tester ter-opt-in 14 hari (akun personal) + ajukan akses produksi
 - [ ] Akun peninjau uji dibuat & instruksinya ditulis
 - [ ] Umpan balik tester dijawab / perbaikan di-deploy
-- [ ] Pelaporan konten chat (§7) dikerjakan
+- [x] Fitur Laporkan/Blokir + migrasi `supabase/migrate-chat-moderation.sql` sudah diterapkan & diverifikasi live (§7)
 
 ---
 

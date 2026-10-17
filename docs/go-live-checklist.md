@@ -44,6 +44,8 @@ Isi dulu, karena banyak langkah teknis bergantung pada jawabannya.
       jalan) atau **Midtrans produksi**? Kalau Midtrans: isi `MIDTRANS_*` dan `MIDTRANS_IS_PRODUCTION=true`.
 - [ ] **Distribusi APK.** Cukup lewat halaman `/unduh` (APK langsung) atau juga **Google Play**?
       Play butuh Privacy Policy URL + keystore terdaftar (Play App Signing) — lihat §2.6.
+      **Runbook lengkap, aset (ikon/feature graphic/screenshot) & teks listing yang siap diunggah:
+      [play-store.md](./play-store.md)** · gate otomatis `npm run verify:play`.
 - [x] **Legal.** Halaman **Kebijakan Privasi** (`/privasi`) & **Syarat & Ketentuan** (`/syarat`)
       sudah tersedia dan ditautkan di footer. Wajib untuk pendaftaran platform & verifikasi OAuth
       Google — siapkan URL `/privasi` sebagai Privacy Policy URL di consent screen. Tinjau ulang isinya
@@ -105,6 +107,8 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
       waktu percobaan terakhir, dan barisnya tidak lagi dihapus saat kehabisan percobaan.
       Tanpa ini, email yang gagal hilang diam-diam dan antrean tampak kosong),
       `migrate-admin-notification-prefs.sql`, `migrate-push-scheduler.sql`, `migrate-history-retention.sql`,
+      `migrate-voucher-push.sql` (trigger voucher baru → antrean push; wajib setelah
+      `migrate-chat-moderation.sql` (**Laporkan & Blokir chat** — syarat kebijakan konten buatan
       `fix-balance-proofs-owner-read.sql`, `enforce-full-charge-balance.sql`
       (kebijakan uang yang berlaku: potongan **PENUH** = komisi + biaya app; saldo
       teknisi boleh minus dan nilai minus itu **piutang** teknisi — menambah kolom
@@ -211,7 +215,7 @@ Kalau gate `live-probe` gagal, build APK **tertahan** (mekanisme yang disengaja;
 - [ ] Tinjau ulang isi kedua halaman: ganti kontak `halo@fixify.id` dan detail badan hukum bila perlu, lalu pakai `https://<domain>/privasi` sebagai Privacy Policy URL di Google Cloud Console.
 - [ ] Halaman `tentang`, `panduan-pelanggan`, `panduan-teknisi` ditinjau ulang untuk publik.
 - [ ] Bila distribusi lewat Google Play: daftar Privacy Policy URL, isi Data Safety, dan daftarkan
-      keystore (Play App Signing).
+      akun personal, dan aset yang siap diunggah ada di [play-store.md](./play-store.md).
 
 ### 2.7 Monitoring & operasional
 
@@ -341,6 +345,11 @@ npm run verify:live
 # Daftar langkah gate + apa yang dijamin masing-masing
 node scripts/ci-probe-gate.mjs --list
 
+# Konten buatan pengguna: menu Laporkan & Blokir, policy chat_blocks, janji 2×24 jam
+npm run verify:chat-moderation
+npm run verify:chat-moderation-selftest # bukti gate di atas tidak hampa
+npm run verify:chat-moderation-live    # perilaku blokir di database nyata (transaksi di-rollback)
+
 # Kesiapan notifikasi produksi (read-only, tanpa rahasia)
 npm run verify:notif-env
 
@@ -373,6 +382,9 @@ npm run verify:legal-links
 npm run verify:apk-release
 npm run verify:released-apk
 npm run verify:apk-signin
+
+# Google Play: metadata Android + AAB bertanda tangan + aset & teks listing (§ play-store.md)
+npm run verify:play
 
 # Kualitas web & aplikasi
 npm run lint                      # ESLint (perintah yang dipakai CI)

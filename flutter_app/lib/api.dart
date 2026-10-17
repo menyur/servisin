@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'account_deletion.dart';
+import 'chat_moderation.dart';
 import 'config.dart';
 import 'models.dart';
 import 'register_http.dart';
@@ -503,6 +504,104 @@ class Api {
       'body': body.trim(),
     });
     unawaited(kickPushWorker());
+  }
+
+  /// Status blokir chat antara saya dan [peerId] (kedua arah).
+  ///
+  /// Gagal membaca (tabel `chat_blocks` belum ada karena migrasi belum
+  /// dijalankan, atau jaringan bermasalah) SELALU dianggap "tidak ada blokir":
+  /// mengunci chat karena kegagalan membaca status jauh lebih merugikan
+  /// pengguna daripada sekali menampilkan kotak pesan yang nanti ditolak RLS.
+  static Future<ChatBlockState> fetchChatBlockState(String peerId) async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null || uid.isEmpty || peerId.isEmpty || peerId == uid) {
+      return ChatBlockState.none;
+    }
+    try {
+      final rows = await db
+          .from('chat_blocks')
+          .select('blocker_id')
+          .or('and(blocker_id.eq.$uid,blocked_id.eq.$peerId),'
+              'and(blocker_id.eq.$peerId,blocked_id.eq.$uid)');
+      var byMe = false;
+      var byPeer = false;
+      for (final r in rows) {
+        if (r['blocker_id'] == uid) byMe = true;
+        if (r['blocker_id'] == peerId) byPeer = true;
+      }
+      return ChatBlockState(byMe: byMe, byPeer: byPeer);
+    } catch (_) {
+      return ChatBlockState.none;
+    }
+  }
+
+  /// Blokir [peerId] (idempoten — menekan dua kali tidak menggandakan baris).
+  ///
+  /// [bookingId] hanya jejak audit bagi admin; blokirnya sendiri berlaku di
+  /// semua percakapan dengan pengguna itu. RLS memaksa blocker = diri sendiri.
+  static Future<void> blockChatUser(
+    String peerId, {
+    String? bookingId,
+    String? reason,
+  }) async {
+    final uid = db.auth.currentUser!.id;
+    await db.from('chat_blocks').upsert({
+      'blocker_id': uid,
+      'blocked_id': peerId,
+      if (bookingId != null && bookingId.isNotEmpty) 'booking_id': bookingId,
+      if (reason != null && reason.isNotEmpty) 'reason': reason,
+    }, onConflict: 'blocker_id,blocked_id');
+  }
+
+  /// Buka blokir [peerId]. Hanya blokir milik sendiri yang bisa dihapus (RLS).
+  static Future<void> unblockChatUser(String peerId) async {
+    final uid = db.auth.currentUser!.id;
+    await db
+        .from('chat_blocks')
+        .delete()
+        .eq('blocker_id', uid)
+        .eq('blocked_id', peerId);
+  }
+
+  /// Laporkan percakapan chat ke admin (kebijakan UGC Google Play).
+  ///
+  /// Masuk ke tabel `reports` yang sama dengan laporan pesanan supaya admin
+  /// memprosesnya di satu tempat; kolom `kind` = 'chat' dan `reason` menandai
+  /// jenisnya. `target_id` = lawan bicara supaya panel admin bisa menyebut
+  /// siapa yang dilaporkan, dan `booking_id` supaya percakapannya bisa dibuka.
+  static Future<void> reportChat({
+    required String bookingId,
+    required String bookingCode,
+    required String peerId,
+    required ChatReportReason reason,
+    String? detail,
+  }) async {
+    final uid = db.auth.currentUser!.id;
+    // Peran pelapor menentukan bagaimana admin membaca laporan ini; diambil
+    // dari penetapan pada pesanan (paritas `createReport`).
+    String authorRole = 'customer';
+    final own = await db
+        .from('bookings')
+        .select('id')
+        .eq('id', bookingId)
+        .eq('technician_id', uid)
+        .maybeSingle();
+    if (own != null) authorRole = 'technician';
+
+    final inserted = await db.from('reports').insert({
+      'author_id': uid,
+      'author_role': authorRole,
+      'kind': 'chat',
+      'reason': reason.value,
+      'title': chatReportTitle(bookingCode),
+      'content': chatReportContent(reasonLabel: reason.label, detail: detail),
+      'booking_id': bookingId,
+      'target_id': peerId,
+    }).select('id');
+    if (inserted.isNotEmpty) {
+      unawaited(
+          notifyAdminEvent('new_report', inserted.first['id'] as String?));
+    }
   }
 
   /// URL worker push — origin diambil dari [AppConfig.webBaseUrl], sumber yang

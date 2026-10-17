@@ -1134,6 +1134,29 @@ const REPORT_STATUS_META = {
   resolved: { label: "Selesai", cls: "bg-mint-tint text-mint" },
 };
 
+// Alasan laporan chat (migrate-chat-moderation.sql). Nilai disimpan di
+// reports.reason; label di sini HARUS sama kata dengan yang dipilih pengguna di
+// aplikasi (flutter_app/lib/chat_moderation.dart) supaya admin membaca kalimat
+// yang sama dengan pelapor.
+const CHAT_REASON_LABELS = {
+  kasar: "Kata kasar, ancaman, atau pelecehan",
+  penipuan: "Penipuan atau minta bayar di luar aplikasi",
+  spam: "Spam, iklan, atau promosi",
+  tidak_pantas: "Konten tidak pantas (foto/tautan)",
+  lainnya: "Lainnya",
+};
+
+// Laporan dari menu "Laporkan percakapan" di aplikasi ditandai kind === 'chat';
+// laporan lama tidak punya kolom ini dan dibaca sebagai laporan umum.
+function isChatReport(r) {
+  return r.kind === "chat";
+}
+
+function chatReasonLabel(reason) {
+  if (!reason) return null;
+  return CHAT_REASON_LABELS[reason] || reason;
+}
+
 function ReportsView({ reports, onUpdate }) {
   const [filter, setFilter] = useState("open"); // open | reviewed | resolved | all
   const [expandedId, setExpandedId] = useState(null);
@@ -1193,6 +1216,11 @@ function ReportCard({ report: r, expanded, onToggle, onUpdate }) {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {isChatReport(r) && (
+            <span className="pill !px-2 !py-0.5 text-[10px] bg-coral-tint text-coral">
+              Laporkan chat
+            </span>
+          )}
           <span className={`pill !px-2 !py-0.5 text-[10px] ${meta.cls}`}>{meta.label}</span>
           <ChevronDown size={16} className={`text-ink-soft transition-transform ${expanded ? "rotate-180" : ""}`} />
         </div>
@@ -1200,6 +1228,12 @@ function ReportCard({ report: r, expanded, onToggle, onUpdate }) {
 
       {expanded && (
         <div className="mt-3 pt-3 border-t border-line space-y-3">
+          {isChatReport(r) && (
+            <p className="text-xs text-coral font-semibold">
+              Laporan chat{chatReasonLabel(r.reason) ? ` — ${chatReasonLabel(r.reason)}` : ""}
+              {r.target?.name ? ` · dilaporkan: ${r.target.name}` : ""}
+            </p>
+          )}
           <p className="text-sm text-ink-soft whitespace-pre-wrap">{r.content}</p>
 
           <div className="text-xs text-ink-soft space-y-1">

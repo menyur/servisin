@@ -104,9 +104,29 @@ export default function SyaratKetentuanPage() {
 
       <LegalSection id="konten" title="9. Konten pengguna">
         <p>
-          Kamu tetap memiliki konten yang kamu unggah (foto, ulasan, laporan). Dengan mengunggahnya,
-          kamu memberi Fixify izin untuk menampilkan dan memprosesnya sebatas keperluan layanan. Kamu
-          bertanggung jawab memastikan kontenmu tidak melanggar hak pihak lain.
+          Kamu tetap memiliki konten yang kamu unggah (foto, ulasan, laporan), termasuk pesan yang
+          kamu kirim di chat pesanan. Dengan mengunggahnya, kamu memberi Fixify izin untuk menampilkan
+          dan memprosesnya sebatas keperluan layanan. Kamu bertanggung jawab memastikan kontenmu tidak
+          melanggar hak pihak lain.
+        </p>
+        <p>
+          <strong>Konten yang dilarang di chat.</strong> Pesan dan lampiran di chat pesanan tidak
+          boleh memuat ujaran kebencian, ancaman, pelecehan, konten seksual, penipuan, permintaan
+          pembayaran di luar aplikasi, spam, atau tautan berbahaya. Pelanggaran dapat membuat akun
+          dinonaktifkan.
+        </p>
+        <p>
+          <strong>Laporkan &amp; blokir.</strong> Setiap percakapan punya menu <em>Laporkan
+          percakapan</em> dan <em>Blokir</em> di aplikasi. Melaporkan mengirim percakapan beserta
+          alasannya ke admin untuk diperiksa; memblokir menghentikan pesan dari pengguna tersebut dan
+          menyembunyikan pesannya dari chat ini. Blokir bisa dibuka kembali kapan saja oleh yang
+          memblokir.
+        </p>
+        <p>
+          <strong>Tindak lanjut.</strong> Kami meninjau setiap laporan maksimal <strong>2×24 jam</strong>.
+          Bila laporan terbukti benar, kami dapat menghapus konten, menonaktifkan akun pelanggar, dan —
+          untuk kasus yang melibatkan tindak pidana — menyerahkannya kepada pihak berwenang. Hasil
+          pemeriksaan dikirim lewat catatan admin di tab Laporan pelapor.
         </p>
       </LegalSection>
 
