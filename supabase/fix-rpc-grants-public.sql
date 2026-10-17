@@ -144,6 +144,7 @@ begin
       -- EXECUTE untuk trigger. PostgREST juga tidak mengekspos fungsi ber-return
       -- trigger; pencabutan ini murni pertahanan berlapis.
       ('notify_chat_message()', ''),
+      ('notify_voucher_created()', ''),
       ('queue_admin_email_account_deletion()', ''),
       ('queue_admin_email_booking()', ''),
       ('queue_admin_email_deposit()', ''),

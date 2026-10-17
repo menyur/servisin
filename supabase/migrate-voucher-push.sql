@@ -59,6 +59,11 @@ begin
 end;
 $fn$;
 
+-- Fungsi trigger tidak perlu EXECUTE bagi siapa pun (PostgreSQL tidak
+-- memeriksa izin EXECUTE untuk trigger), jadi cabut seluruh izin. Entri yang
+-- sama juga dicatat di supabase/fix-rpc-grants-public.sql bagian 2.
+revoke all on function public.notify_voucher_created() from public, anon, authenticated;
+
 drop trigger if exists trg_notify_voucher_created on public.vouchers;
 create trigger trg_notify_voucher_created
   after insert on public.vouchers
