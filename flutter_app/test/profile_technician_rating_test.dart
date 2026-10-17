@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:fixify_app/models.dart';
+import 'package:fixify_app/ui/common.dart';
 import 'package:fixify_app/ui/profile_screen.dart';
 
 /// Profil teknisi harus memperlihatkan reputasinya: jumlah rating + rata-ratanya.
@@ -57,9 +58,19 @@ void main() {
       expect(tester.takeException(), isNull);
 
       // Posisi: tepat di bawah email, di atas kartu formulir — bagian identitas.
-      final pill = tester.getCenter(find.byType(TechRatingPill)).dy;
+      final rectPill = tester.getRect(find.byType(TechRatingPill));
+      final pill = rectPill.center.dy;
       expect(pill, greaterThan(tester.getCenter(find.text('andi@example.com')).dy));
       expect(pill, lessThan(tester.getCenter(find.text('Ubah Data Diri')).dy));
+
+      // Kartu form mengapung 24 px ke atas. Lencana harus benar-benar terlihat:
+      // dulu dibungkus Transform.translate kedua (-46 px) sehingga tertutup
+      // hampir seluruhnya oleh kartu dan rating tak tampak di layar.
+      final kartu = tester.getRect(
+        find.descendant(of: find.byType(FloatingCard), matching: find.byType(Container)).first,
+      );
+      expect(kartu.top, greaterThanOrEqualTo(rectPill.bottom),
+          reason: 'kartu form tidak boleh menutupi lencana rating');
     });
 
     testWidgets('belum pernah dinilai: lencana tetap ada dengan kalimat jelas',

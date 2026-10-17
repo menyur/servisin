@@ -232,6 +232,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final initial = (_profile?.name.isNotEmpty ?? false) ? _profile!.name[0].toUpperCase() : '?';
+    // Lencana rating hanya untuk teknisi dan hanya bila datanya terbaca.
+    final tampilRating = _profile?.role == 'technician' && _rating != null;
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -345,18 +347,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     // + rata-rata rating. Hanya untuk teknisi, dan hanya bila
                     // datanya benar-benar terbaca (gagal baca → tidak ditampilkan,
                     // bukan "Belum ada rating" yang bisa menyesatkan).
-                    if (_profile?.role == 'technician' && _rating != null) ...[
+                    if (tampilRating) ...[
                       const SizedBox(height: 10),
                       TechRatingPill(ringkasan: _rating!),
                     ],
-                    const SizedBox(height: 20),
+                    // Kartu form di bawah mengapung 24 px ke atas. Saat lencana
+                    // rating ada, sisakan ruang lebih agar kartu tidak menutupi
+                    // lencana (dulu tertutup hampir seluruhnya sehingga rating
+                    // tak terlihat sama sekali).
+                    SizedBox(height: tampilRating ? 32 : 20),
                   ]),
                 ),
 
                 // ===== Kartu form melayang =====
-                Transform.translate(
-                  offset: const Offset(0, -22),
-                  child: FloatingCard(
+                // Jangan dibungkus Transform.translate lagi: FloatingCard sudah
+                // menggeser dirinya -24 px. Dua geseran bertumpuk (-46) membuat
+                // kartu menutupi lencana rating di header.
+                FloatingCard(
                     padding: const EdgeInsets.all(18),
                     child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -467,7 +474,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             onPressed: _save,
                           ),
                         ]),
-                  ),
                 ),
 
                 // ===== Info akun + keluar =====
