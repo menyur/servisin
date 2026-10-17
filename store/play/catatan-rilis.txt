@@ -1,0 +1,7 @@
+v1.4.0 (build 10)
+
+- Notifikasi chat kini membuka langsung percakapan pesanan yang dimaksud, bukan hanya daftar pesanan.
+- Lencana jumlah pesan belum dibaca dan jumlah pekerjaan baru di navigasi bawah.
+- Pengaturan notifikasi per peristiwa: pilih pemberitahuan yang ingin Anda terima.
+- Panduan singkat untuk pelanggan dan teknisi.
+- Perbaikan kedalaman tautan reset kata sandi dan pendaftaran, serta berbagai perbaikan kecil pada pesanan, garansi, dan saldo teknisi.

@@ -1,0 +1,34 @@
+Fixify adalah aplikasi layanan jasa rumah dan kendaraan: pesan teknisi AC, tukang rumah, dan servis kendaraan, lalu teknisi datang ke lokasi Anda.
+
+Cara kerjanya sederhana:
+1) Pilih layanan dan varian pekerjaan, tuliskan keluhan serta alamat.
+2) Tentukan jadwal kunjungan, lalu kirim pesanan.
+3) Unggah bukti pembayaran (transfer) bila diminta; admin memverifikasi.
+4) Teknisi yang ditugaskan datang sesuai jadwal. Anda bisa memantau posisinya saat sedang menuju lokasi.
+
+Apa yang bisa Anda lakukan sebagai pelanggan:
+- Pesan layanan dengan harga yang terlihat jelas sebelum memesan, termasuk biaya aplikasi.
+- Simpan beberapa alamat dan riwayat pesanan dalam satu tempat.
+- Kirim bukti pembayaran dari galeri atau kamera.
+- Mengobrol dengan teknisi langsung dari halaman pesanan.
+- Menerima notifikasi saat pembayaran dikonfirmasi, teknisi ditugaskan, pekerjaan dimulai, dan pekerjaan selesai.
+- Melacak posisi teknisi selama perjalanan menuju lokasi Anda (hanya selama perjalanan; posisi tidak disimpan sebagai riwayat).
+- Mengubah jadwal atau membatalkan pesanan sendiri sesuai ketentuan.
+- Memberi penilaian setelah pekerjaan selesai dan menerima voucher sebagai terima kasih.
+- Mengajukan klaim garansi pekerjaan pada masa garansi yang berlaku, tanpa biaya kunjungan ulang bila klaim disetujui.
+
+Untuk teknisi:
+- Lihat pekerjaan yang tersedia sesuai keahlian dan area layanan Anda, lengkap dengan jaraknya.
+- Ambil pekerjaan, lalu perbarui status: berangkat, mulai bekerja, dan selesaikan.
+- Bagikan posisi perjalanan supaya pelanggan tahu Anda sedang menuju lokasi.
+- Kelola saldo dan komisi, unggah bukti setor saldo, serta ajukan penarikan.
+
+Keamanan dan privasi:
+- Akun dilindungi verifikasi email, dan teknisi melewati persetujuan admin sebelum bisa mengambil pekerjaan.
+- Data dikirim terenkripsi (HTTPS) dan akses data dibatasi aturan keamanan di server, bukan hanya di aplikasi.
+- Anda dapat meminta penghapusan akun beserta data pribadi kapan saja dari dalam aplikasi atau halaman hapus akun.
+- Kebijakan privasi lengkap tersedia di situs kami.
+
+Butuh bantuan atau menemukan kendala? Hubungi kami di halo@fixify.id. Kami membaca setiap laporan dan memperbaiki secepat mungkin.
+
+Catatan: aplikasi ini memerlukan akun Fixify. Layanan tersedia untuk wilayah yang sudah kami jangkau — area layanan teknisi ditampilkan pada halaman pesanan.

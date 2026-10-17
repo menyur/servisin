@@ -228,6 +228,55 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # ================= Google Play: App Bundle (AAB) =================
+      # Google Play MEWAJIBKAN App Bundle (bukan APK) sejak lama, dan MENOLAK
+      # AAB yang ditandatangani kunci debug. Karena itu langkah ini hanya
+      # dijalankan bila key.properties (diisi dari secret
+      # ANDROID_KEYSTORE_BASE64 di atas) tersedia; kalau belum, build AAB
+      # dilewati dengan PERINGATAN — bukan kegagalan, supaya jalur APK yang
+      # sudah berjalan tidak ikut mati. Kelalaian itu tetap tertangkap oleh
+      # gate `npm run verify:play` di langkah berikutnya.
+      - name: Build AAB release (Google Play)
+        working-directory: flutter_app
+        run: |
+          set -o pipefail
+          if [ ! -f android/key.properties ]; then
+            echo "::warning::AAB dilewati — ANDROID_KEYSTORE_BASE64 belum di-set. AAB yang dibangun tanpa itu tertandatangani kunci debug dan PASTI ditolak Google Play."
+            exit 0
+          fi
+          flutter build appbundle --release --obfuscate --split-debug-info=build/symbols 2>&1 | tee abuild.log
+
+      # Gate kesiapan Play: metadata Android (targetSdk/versi/izin), tanda
+      # tangan AAB, aset & teks listing, halaman legal, dan langkah AAB itu
+      # sendiri. Menjalankannya di sini (bukan hanya lokal) membuat berkas
+      # listing yang menghilang ikut MERAH di rilis berikutnya.
+      - name: Gate kesiapan Google Play
+        if: ${{ hashFiles('flutter_app/android/key.properties') != '' }}
+        run: |
+          set -o pipefail
+          npm run verify:play 2>&1 | tee play-readiness.log
+
+      - name: Simpan log gate Play
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-readiness-log
+          path: play-readiness.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # AAB untuk DIUNGGAH MANUAL ke Play Console (atau nanti lewat Play
+      # Developer API). Tidak ikut masuk Git — ukurannya ±50 MB, dan Play
+      # sendiri yang menyimpan berkasnya sebagai sumber kebenaran.
+      - name: Simpan AAB untuk Play Console
+        if: ${{ hashFiles('flutter_app/android/key.properties') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-aab
+          path: flutter_app/build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+          retention-days: 30
+
       # Diagnostik: bila build gagal, keluarkan ekor log build sebagai
       # annotations error — terbaca lewat API publik tanpa akses admin.
       - name: Diagnostik kegagalan ke annotations

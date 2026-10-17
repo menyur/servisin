@@ -32,6 +32,8 @@
     "verify:fonts": "node scripts/verify-font-family.mjs",
     "verify:fcm": "node scripts/verify-fcm-init.mjs",
     "verify:notif-env": "node scripts/verify-notif-env.mjs",
+    "verify:uji-guard": "node scripts/verify-uji-guard.mjs",
+    "verify:play": "node scripts/verify-play-readiness.mjs",
     "verify:email-env": "node scripts/verify-email-env.mjs",
     "verify:email-send": "node scripts/verify-email-send.mjs",
     "verify:email-doctor": "node scripts/verify-email-doctor.mjs",
@@ -68,7 +70,8 @@
     "bersihkan:data-uji": "node scripts/bersihkan-data-uji.mjs",
     "verify:emulator": "node scripts/verify-emulator-ui.mjs",
     "apply:sql": "node scripts/apply-supabase-sql.mjs",
-    "apply:sql-selftest": "node scripts/apply-supabase-sql.mjs --selftest"
+    "apply:sql-selftest": "node scripts/apply-supabase-sql.mjs --selftest",
+    "verify:app-fee-setting": "node scripts/verify-app-fee-setting.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
