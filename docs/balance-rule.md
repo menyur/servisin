@@ -18,13 +18,20 @@ action web, aplikasi, dan probe tidak pernah berbeda lagi.
 Saat pesanan ditandai **`completed`**, saldo teknisi dipotong **PENUH** sebesar:
 
 ```
-potongan = komisi + biaya aplikasi
-komisi   = round( max(0, total_price − APP_FEE) × commission_rate% )
-APP_FEE  = 5000  (biaya aplikasi pelanggan, bookings.app_fee)
+potongan     = komisi + biaya aplikasi
+komisi       = round( max(0, total_price − biaya app pesanan) × commission_rate% )
+biaya app    = bookings.app_fee  (SNAPSHOT tarif saat pesanan dibuat)
+tarif aktif  = app_settings.app_fee  (diisi admin → panel tab "Biaya Aplikasi")
 ```
 
 * `commission_rate` = `profiles.commission_rate` per teknisi (default 10%, dijepit 0–100).
-* Dasar komisi = **total − APP_FEE** (bukan total penuh) — lihat `commissionBase()`.
+* Dasar komisi = **total − biaya app PESANAN ITU** (bukan total penuh, bukan tarif
+  yang berlaku sekarang) — lihat `commissionBase()`.
+* Biaya app **bukan konstanta**: admin menetapkannya di panel. Nilai bawaan
+  `APP_FEE = 5000` hanya jaring pengaman bila setelan belum ada/gagal dibaca —
+  tidak pernah jatuh ke 0. Mengubah tarif **hanya** berlaku untuk pesanan baru;
+  pesanan lama tetap memakai `bookings.app_fee` miliknya, karena itu bagian dari
+  tagihan yang disepakati pelanggan dan dasar komisi yang sudah dipotong.
 * Potongan **tidak** dibatasi saldo tersedia:
   `saldo_baru = saldo_lama − (komisi + biaya app)`.
 * `saldo_baru < 0` → **piutang teknisi** senilai `−saldo_baru`. Teknisi melihatnya
@@ -75,7 +82,10 @@ claim_job → {"ok": false, "kode": "saldo_habis", "balance": 0, "error": "..."}
 | Berkas | Peran |
 |---|---|
 | `supabase/enforce-full-charge-balance.sql` | Definisi `set_job_status` **yang berlaku** (komisi + biaya app, potongan PENUH, saldo boleh minus, penanda guard F8) + melepas trigger clamp lama. Jalankan **TERAKHIR**. |
-| `src/lib/pricing.js` | `APP_FEE`, `commissionBase()`, `computeSplit()`, `planBalanceCut()` (potongan penuh + `debt`), `penagihanPesanan()` (laporan tiga kolom) |
+| `src/lib/pricing.js` | `APP_FEE` (bawaan), `APP_FEE_MAKS`, `normalisasiAppFee()`, `commissionBase()`, `computeSplit()`, `planBalanceCut()` (potongan penuh + `debt`), `penagihanPesanan()` (laporan tiga kolom) |
+| `src/lib/app-fee.js` | **Satu pintu** pembacaan tarif biaya aplikasi untuk jalur server (harga booking, panduan, panel). Gagal baca → bawaan, bukan 0. |
+| `src/components/AppFeeSettingsTab.js` + `saveAppFeeAdmin()` | Tab admin **Biaya Aplikasi**: hanya admin, dijepit 0..`APP_FEE_MAKS`, menulis `app_settings.app_fee`. |
+| `supabase/migrate-app-fee-setting.sql` | Kolom `app_settings.app_fee`, fungsi `app_fee_efektif()`, dan RPC `create_booking_security_definer`/`set_job_status` yang memakai tarif setelan + snapshot `bookings.app_fee`. |
 | `src/lib/balance.js` | `debitTechnicianCommission()` — jalur server action web (admin/teknisi) |
 | `src/lib/monthly-report.js` | Laporan bulanan CSV: kolom ditagihkan / tertagih / piutang |
 | `src/app/actions/admin.js` → `getFinanceSummaryAdmin()` | Ringkasan keuangan: ditagihkan, tertagih, piutang, kewajiban vs piutang |
@@ -91,6 +101,7 @@ claim_job → {"ok": false, "kode": "saldo_habis", "balance": 0, "error": "..."}
 | `scripts/verify-e2e-lifecycle.mjs` | Asersi E2E: potongan penuh = komisi + biaya app, idempoten, saldo berkurang tepat sekali, tidak ada sisa tak tertagih |
 | `scripts/verify-e2e-technician-claim.mjs` | Bukti perilaku hidup: saldo 0 → klaim ditolak (`saldo_habis`); saldo terisi → klaim berhasil |
 | `scripts/verify-app-fee-split.mjs` | Invarian pembagian komisi vs biaya app di ledger (potongan penuh ⇒ porsi biaya app = `bookings.app_fee`) |
+| `scripts/verify-app-fee-setting.mjs` | Invarian **satu angka**: rumus harga/komisi memakai tarif pesanan, fallback bukan 0, tab + aksi simpan admin dijaga & dijepit, RPC memakai `app_fee_efektif()`, dan (live, read-only) `app_fee_efektif()` = `app_settings.app_fee` serta anon ditolak |
 
 ## Berkas USANG (jangan dijadikan acuan)
 
@@ -110,7 +121,8 @@ npm run verify:balance          # probe offline: rumus potongan penuh + alokasi 
 npm run verify:piutang          # probe offline: keranjang umur, pengingat idempoten, wiring penghapusan
 npm run verify:piutang-live     # bukti hidup: piutang berumur → pengingat idempoten → persetujuan penghapusan (data uji dibersihkan)
 npm run verify:balance-negative # bukti hidup: saldo minus = piutang → setoran menutupnya → klaim lolos lagi
-npm run verify:live             # gate penuh, termasuk ketiganya
+npm run verify:app-fee-setting  # offline + baca saja: satu angka biaya app di web, RPC, panel, dan komisi
+npm run verify:live             # gate penuh, termasuk keempatnya
 ```
 
 E2E memberi teknisi uji saldo awal yang cukup, lalu memastikan
