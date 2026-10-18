@@ -114,6 +114,10 @@ begin
       ('cabut_akses_pengguna(uuid)', 'service_role'),
 
       -- ===== RPC untuk PENGGUNA yang sudah masuk (aplikasi & halaman web) =====
+      -- Tarif biaya aplikasi efektif (migrate-app-fee-setting.sql). Dipanggil
+      -- dari DALAM RPC security definer, bukan klien; tetap didaftarkan supaya
+      -- grant bawaan PUBLIC ikut dicabut saat berkas ini dijalankan ulang.
+      ('app_fee_efektif()', 'authenticated, service_role'),
       ('available_jobs()', 'authenticated, service_role'),
       ('available_jobs_nearby(double precision, double precision)', 'authenticated, service_role'),
       ('booking_slot_start(date, text)', 'authenticated, service_role'),

@@ -12,7 +12,9 @@ import {
   Home,
   AlertTriangle,
 } from "lucide-react";
-import { formatRupiah, APP_FEE, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
+import { formatRupiah, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
+import { createClient } from "@/lib/supabase/server";
+import { bacaAppFee } from "@/lib/app-fee";
 
 export const metadata = {
   title: "Panduan Pelanggan — Fixify",
@@ -186,7 +188,13 @@ const FAQ = [
   },
 ];
 
-export default function PanduanPelangganPage() {
+export default async function PanduanPelangganPage() {
+  // Biaya aplikasi = tarif yang sedang berlaku (diatur admin di panel → tab
+  // "Biaya Aplikasi"). Halaman ini mengumumkan angka itu ke pelanggan, jadi
+  // tidak boleh memakai konstanta kode: yang diumumkan harus sama dengan yang
+  // ditagihkan. Gagal dibaca → bawaan, bukan Rp0.
+  const supabase = await createClient();
+  const biayaApp = await bacaAppFee(supabase);
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
       <div className="flex items-center gap-3 mb-2">
@@ -239,7 +247,7 @@ export default function PanduanPelangganPage() {
           <ul className="list-disc pl-5 space-y-1 text-ink-soft">
             <li>
               Transfer <strong className="text-navy">tidak sama jumlahnya</strong> dengan tagihan — verifikasi
-              jadi lambat. Tagihan = subtotal layanan + {formatRupiah(APP_FEE)} biaya aplikasi − diskon
+              jadi lambat. Tagihan = subtotal layanan + {formatRupiah(biayaApp)} biaya aplikasi − diskon
               voucher.
             </li>
             <li>Lupa mengunggah bukti transfer, sehingga pesanan tidak pernah maju dari status Menunggu.</li>

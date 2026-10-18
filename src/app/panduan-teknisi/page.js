@@ -14,7 +14,9 @@ import {
   Wrench,
   AlertTriangle,
 } from "lucide-react";
-import { computeSplit, commissionBase, formatRupiah, DEFAULT_COMMISSION_RATE, APP_FEE } from "@/lib/pricing";
+import { computeSplit, commissionBase, formatRupiah, DEFAULT_COMMISSION_RATE } from "@/lib/pricing";
+import { createClient } from "@/lib/supabase/server";
+import { bacaAppFee } from "@/lib/app-fee";
 
 export const metadata = {
   title: "Panduan Teknisi — Fixify",
@@ -121,7 +123,15 @@ const STEPS = [
   },
 ];
 
-const FAQ = [
+/**
+ * FAQ dibuat PER-RENDER, bukan dibekukan di modul: satu jawabannya menyebut
+ * TARIF biaya aplikasi yang sedang berlaku, dan tarif itu diatur admin di panel
+ * (app_settings.app_fee). Kalau daftarnya tetap konstanta modul, halaman ini
+ * akan terus mengumumkan angka lama setelah admin mengubah tarif — janji yang
+ * berbeda dari yang ditagihkan.
+ */
+function daftarFaq(biayaApp) {
+  return [
   {
     q: "Kenapa tugas baru tidak muncul di Tugas Saya?",
     a: "Pastikan akunmu sudah disetujui admin dan sudah login dengan email yang benar. Tugas hanya muncul setelah admin menugaskan kamu pada pesanan tertentu. Coba juga muat ulang halaman.",
@@ -136,7 +146,7 @@ const FAQ = [
   },
   {
     q: "Bagaimana cara kerja komisi?",
-    a: `Dari setiap pekerjaan selesai, platform memotong komisi (default ${DEFAULT_COMMISSION_RATE}%, bisa berbeda per teknisi — ditentukan admin, dihitung dari nilai pekerjaan setelah biaya aplikasi) plus biaya aplikasi ${formatRupiah(APP_FEE)} — keduanya langsung dari saldo. Sisanya adalah pendapatanmu, terlihat di tab Laporan. Contoh: pekerjaan ${formatRupiah(100000)} dengan komisi ${DEFAULT_COMMISSION_RATE}% → terpotong ${formatRupiah(computeSplit(commissionBase(100000)).commission + APP_FEE)} (komisi + biaya app), bersih ${formatRupiah(computeSplit(commissionBase(100000)).net)}.`,
+    a: `Dari setiap pekerjaan selesai, platform memotong komisi (default ${DEFAULT_COMMISSION_RATE}%, bisa berbeda per teknisi — ditentukan admin, dihitung dari nilai pekerjaan setelah biaya aplikasi) plus biaya aplikasi ${formatRupiah(biayaApp)} — keduanya langsung dari saldo. Sisanya adalah pendapatanmu, terlihat di tab Laporan. Contoh: pekerjaan ${formatRupiah(100000)} dengan komisi ${DEFAULT_COMMISSION_RATE}% → terpotong ${formatRupiah(computeSplit(commissionBase(100000, biayaApp)).commission + biayaApp)} (komisi + biaya app), bersih ${formatRupiah(computeSplit(commissionBase(100000, biayaApp)).net)}.`,
   },
   {
     q: "Apakah pelanggan bisa melihat ulasan untuk saya?",
@@ -146,9 +156,16 @@ const FAQ = [
     q: "Pesanan saya dibatalkan — apakah tetap dibayar?",
     a: "Pesanan yang dibatalkan sebelum dikerjakan tidak dihitung sebagai pendapatan. Bila pembatalan terjadi karena hal di luar kendalimu, sampaikan lewat Laporan Pekerjaan agar admin meninjau.",
   },
-];
+  ];
+}
 
-export default function PanduanTeknisiPage() {
+export default async function PanduanTeknisiPage() {
+  // Tarif biaya aplikasi yang sedang berlaku (diatur admin di panel → tab
+  // "Biaya Aplikasi"). Gagal dibaca → bawaan APP_FEE, jadi halaman tidak pernah
+  // menampilkan Rp0 karena gangguan pembacaan.
+  const supabase = await createClient();
+  const biayaApp = await bacaAppFee(supabase);
+  const FAQ = daftarFaq(biayaApp);
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
       <div className="flex items-center gap-3 mb-2">

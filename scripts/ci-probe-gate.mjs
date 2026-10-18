@@ -10,7 +10,8 @@
 //   node scripts/ci-probe-gate.mjs --only=realtime-rls,audit-f3-f6
 //   node scripts/ci-probe-gate.mjs --list   # daftar langkah tanpa menjalankan
 //
-// Enam belas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
+// Tujuh belas langkah: biaya aplikasi satu angka (offline + baca saja),
+// kebijakan saldo tidak negatif (offline/read-only — tanpa
 // kredensial), E2E
 // pengingat setor admin sampai ke aplikasi (penanda terbaca
 // sesi teknisi), RLS bucket bukti setor (pemilik saja, tidak bocor ke teknisi
@@ -28,7 +29,7 @@
 // Total ±3 menit di jaringan normal.
 //
 // PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`,
-// `notif-env`, dan `akun-aman` — ketiganya murni baca).
+// `notif-env`, `app-fee-setting`, dan `akun-aman` — keempatnya murni baca).
 // Mereka membuat baris/akun uji sementara di Supabase produksi (termasuk saldo
 // & voucher pada langkah E2E), memverifikasi perilaku nyata, lalu menghapusnya
 // lagi — dan setiap langkah melaporkan sisa data uji (harus 0). Kredensial
@@ -46,6 +47,13 @@ import { loadEnv } from "./lib/probe-env.mjs";
 const STEP_TIMEOUT_MS = 240_000;
 
 const STEPS = [
+  {
+    id: "app-fee-setting",
+    label: "Biaya aplikasi satu angka: setelan admin → harga booking → RPC → dasar komisi (offline + baca saja)",
+    args: ["scripts/verify-app-fee-setting.mjs"],
+    guards:
+      "rumus harga/komisi memakai tarif pesanan (bukan konstanta), pembacaan gagal jatuh ke bawaan bukan 0, tab admin & aksi simpan dijaga admin + dijepit 0..1.000.000, RPC memakai app_fee_efektif() dan snapshot bookings.app_fee, app_fee_efektif() = setelan, anon tidak bisa memanggilnya",
+  },
   {
     id: "balance-debt",
     label: "Kebijakan saldo: potongan PENUH (komisi + biaya app); saldo boleh minus = piutang teknisi (offline)",

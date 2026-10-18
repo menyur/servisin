@@ -71,7 +71,7 @@ export default function OrderReport({ bookings, role = "customer", commissionRat
       const d = new Date(b.booking_date || b.created_at);
       if (Number.isNaN(d.getTime())) continue;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-      const split = computeSplit(commissionBase(b.total_price), commissionRate);
+      const split = computeSplit(commissionBase(b.total_price, b.app_fee), commissionRate);
       const entry = map.get(key) || { key, count: 0, value: 0, commission: 0, net: 0 };
       entry.count += 1;
       entry.value += Number(b.total_price) || 0;

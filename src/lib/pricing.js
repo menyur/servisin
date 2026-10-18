@@ -1,4 +1,39 @@
+/**
+ * Biaya aplikasi BAWAAN (rupiah) — dipakai saat setelan admin belum terbaca
+ * (migrasi belum dijalankan, env kosong, atau query gagal).
+ *
+ * Nilai yang BENAR-BENAR berlaku datang dari `app_settings.app_fee` (diisi admin
+ * di panel → tab "Biaya Aplikasi", dibaca lewat src/lib/app-fee.js dan
+ * `public.app_fee_efektif()` di database). Setiap pesanan juga MENYIMPAN tarif
+ * yang ditagihkan padanya (`bookings.app_fee`), jadi mengubah tarif hanya
+ * berlaku untuk pesanan BARU — pesanan lama tetap memakai angka saat ia dibuat
+ * (itu bagian dari tagihan yang sudah disepakati pelanggan dan dasar komisi
+ * teknisi). Konstanta ini bukan "tarif yang berlaku", melainkan jaring
+ * pengaman supaya harga tidak pernah jatuh ke 0 karena gangguan pembacaan.
+ */
 export const APP_FEE = 5000;
+
+/** Batas tarif biaya aplikasi yang boleh disetel admin (0 = dimatikan). */
+export const APP_FEE_MAKS = 1000000;
+
+/**
+ * Jepit nilai tarif ke bilangan bulat 0..APP_FEE_MAKS.
+ *
+ * Dipakai BAIK oleh pembaca setelan (src/lib/app-fee.js) maupun UI admin, jadi
+ * angka yang ditampilkan, disimpan, dan ditagihkan tidak pernah berbeda. Nilai
+ * tak masuk akal (NaN, negatif, teks) jatuh ke `bawaan`, bukan ke 0 — kalau
+ * tidak, salah ketik sekali di panel bisa membuat biaya aplikasi hilang senyap
+ * dari semua pesanan berikutnya.
+ */
+export function normalisasiAppFee(nilai, bawaan = APP_FEE) {
+  const n = Number(nilai);
+  if (!Number.isFinite(n)) {
+    const b = Number(bawaan);
+    return Number.isFinite(b) ? Math.max(0, Math.min(APP_FEE_MAKS, Math.round(b))) : APP_FEE;
+  }
+  return Math.max(0, Math.min(APP_FEE_MAKS, Math.round(n)));
+}
+
 
 // Komisi platform default (% yang dipotong dari nilai pekerjaan selesai teknisi).
 // Per-teknisi bisa dioverride lewat kolom profiles.commission_rate.
@@ -9,8 +44,8 @@ export const DEFAULT_COMMISSION_RATE = 10;
  * aplikasi — SATU SUMBER untuk web, RPC DB, dan aplikasi agar angka
  * komisi di laporan selalu sama dengan yang benar-benar dipotong.
  */
-export function commissionBase(totalPrice) {
-  return Math.max(0, Number(totalPrice) - APP_FEE);
+export function commissionBase(totalPrice, appFee = APP_FEE) {
+  return Math.max(0, Number(totalPrice) - normalisasiAppFee(appFee));
 }
 
 /**
@@ -24,14 +59,23 @@ export function computeSplit(grossValue, rate = DEFAULT_COMMISSION_RATE) {
   return { gross, commission, net: gross - commission };
 }
 
-export function calculateTotal(subtotal, discount = 0) {
+/**
+ * Rincian tagihan satu pesanan: subtotal layanan + biaya aplikasi − diskon.
+ *
+ * `appFee` WAJIB diisi tarif yang sedang berlaku (src/lib/app-fee.js) di jalur
+ * yang menagihkan (booking web & tampilan harga). Tanpa argumen, nilainya
+ * kembali ke APP_FEE — perilaku lama, aman untuk pemanggil yang belum sempat
+ * diperbarui, tetapi JANGAN diandalkan di jalur yang benar-benar menagih.
+ */
+export function calculateTotal(subtotal, discount = 0, appFee = APP_FEE) {
   const s = Number(subtotal) || 0;
-  const disc = Math.max(0, Math.min(Number(discount) || 0, s + APP_FEE)); // diskon tak melebihi total
+  const fee = normalisasiAppFee(appFee);
+  const disc = Math.max(0, Math.min(Number(discount) || 0, s + fee)); // diskon tak melebihi total
   return {
     subtotal: s,
-    appFee: APP_FEE,
+    appFee: fee,
     discount: disc,
-    total: s + APP_FEE - disc,
+    total: s + fee - disc,
   };
 }
 

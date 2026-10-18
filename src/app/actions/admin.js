@@ -1,6 +1,8 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { APP_FEE_MAKS } from "@/lib/pricing";
+import { bacaAppFeeRinci } from "@/lib/app-fee";
 import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail, sendTechnicianBalanceReminderEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
@@ -1218,7 +1220,7 @@ export async function getCompletedBookingsCsvAdmin() {
     const fee = Number(b.app_fee) || 0;
     const total = Number(b.total_price) || 0;
     // Dasar komisi = total − biaya app — paritas dengan debitTechnicianCommission.
-    const split = computeSplit(commissionBase(total), b.technician?.commission_rate ?? undefined);
+    const split = computeSplit(commissionBase(total, fee), b.technician?.commission_rate ?? undefined);
     totalRevenue += total;
     totalCommission += split.commission;
 
@@ -2692,6 +2694,97 @@ export async function saveWarrantySettingsAdmin({ enabled, days } = {}) {
 
   revalidatePath("/admin");
   return { ok: true, enabled: aktif, days: n };
+}
+
+/* ========================= PENGATURAN BIAYA APLIKASI ========================= */
+
+/**
+ * Tarif BIAYA APLIKASI yang sedang berlaku (tabel app_settings; kolomnya
+ * ditambahkan supabase/migrate-app-fee-setting.sql).
+ *
+ * Dipakai tab "Biaya Aplikasi" di panel admin. Nilai yang ditampilkan di sini
+ * adalah nilai yang BENAR-BENAR ditagihkan: jalur penagihan (createBooking web
+ * dan RPC create_booking_security_definer untuk aplikasi) membaca setelan yang
+ * sama, jadi tidak ada dua angka yang bisa berbeda.
+ *
+ * `sumber` dibedakan dengan sengaja: "setelan" berarti angka ini datang dari
+ * database, "bawaan" berarti kolomnya belum ada/kosong sehingga yang berlaku
+ * adalah tarif bawaan kode. Tanpa pembedaan itu, admin bisa mengira setelannya
+ * tersimpan padahal migrasinya belum dijalankan.
+ */
+export async function getAppFeeAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const rinci = await bacaAppFeeRinci(supabase);
+  return { fee: rinci.fee, sumber: rinci.sumber, alasan: rinci.alasan, maks: APP_FEE_MAKS };
+}
+
+/**
+ * Simpan tarif biaya aplikasi (dipanggil tab "Biaya Aplikasi").
+ *
+ * ATURAN YANG DIJAGA DI SINI:
+ *   - Kosong / bukan angka DITOLAK, bukan diartikan 0. `Number("")` bernilai 0,
+ *     jadi tanpa pemeriksaan ini satu kali kolom dikosongkan akan mematikan
+ *     biaya aplikasi untuk SEMUA pesanan berikutnya tanpa ada yang menyadari.
+ *   - 0 tetap BOLEH, tetapi harus diketik sengaja ("0") — dipakai untuk masa
+ *     promo biaya aplikasi gratis.
+ *   - Batas atas APP_FEE_MAKS (1.000.000) menahan salah ketik seperti "50000"
+ *     untuk "5000" yang akan menagih pelanggan sepuluh kali lipat.
+ *
+ * Yang TIDAK diubah: pesanan yang sudah ada. Tarif disimpan sebagai snapshot di
+ * `bookings.app_fee` saat pesanan dibuat, sehingga tagihan & komisi pesanan lama
+ * tetap seperti saat disepakati (lihat supabase/migrate-app-fee-setting.sql).
+ */
+export async function saveAppFeeAdmin({ fee } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const teks = String(fee ?? "").trim();
+  if (!teks) {
+    return { error: "Biaya aplikasi wajib diisi. Isi 0 hanya bila memang ingin menggratiskannya." };
+  }
+  if (!/^\d+$/.test(teks.replace(/[.\s]/g, ""))) {
+    return { error: "Biaya aplikasi harus angka rupiah tanpa tanda lain, contoh: 5000." };
+  }
+  const n = Number.parseInt(teks.replace(/[.\s]/g, ""), 10);
+  if (!Number.isFinite(n) || n < 0 || n > APP_FEE_MAKS) {
+    return { error: `Biaya aplikasi harus antara Rp0 dan Rp${APP_FEE_MAKS.toLocaleString("id-ID")}.` };
+  }
+
+  const { data, error } = await supabase
+    .from("app_settings")
+    .update({ app_fee: n, updated_at: new Date().toISOString() })
+    .eq("id", 1)
+    .select("app_fee")
+    .maybeSingle();
+
+  if (error) {
+    if (/relation|does not exist|Could not find the table|schema cache|column/i.test(error.message || "")) {
+      return {
+        error:
+          "Setelan biaya aplikasi belum ada — jalankan supabase/migrate-app-fee-setting.sql di Supabase SQL Editor dulu.",
+      };
+    }
+    return { error: error.message };
+  }
+  // Tidak ada baris id = 1 yang berubah → setelan belum siap; jangan bilang sukses.
+  if (data?.app_fee == null) {
+    return {
+      error:
+        "Setelan biaya aplikasi belum bisa disimpan (baris app_settings id = 1 tidak ditemukan). Jalankan supabase/migrate-app-fee-setting.sql dulu.",
+    };
+  }
+
+  // Halaman yang menampilkan tarif ikut disegarkan supaya pelanggan & teknisi
+  // tidak melihat angka lama setelah admin menyimpan.
+  revalidatePath("/admin");
+  revalidatePath("/booking");
+  revalidatePath("/panduan-teknisi");
+  revalidatePath("/panduan-pelanggan");
+  return { ok: true, fee: Number(data.app_fee) };
 }
 
 /* ============== JEJAK EMAIL ADMIN YANG GAGAL TERKIRIM ============== */

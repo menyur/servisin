@@ -96,7 +96,7 @@ export function buildMonthlyReportCsv(rows, { year, month, ledgerByBooking = new
     const total = Number(b.total_price) || 0;
     // Dasar komisi = total − biaya aplikasi — sama dengan yang benar-benar
     // ditagihkan sistem (debitTechnicianCommission / RPC set_job_status).
-    const split = computeSplit(commissionBase(total), b.technician?.commission_rate ?? undefined);
+    const split = computeSplit(commissionBase(total, b.app_fee), b.technician?.commission_rate ?? undefined);
     // Biaya aplikasi yang DITAGIHKAN diambil dari pesanan (bukan dari ledger):
     // kolom ini harus tetap benar walau potongannya belum/baru sebagian tertagih.
     const charged = penagihanPesanan({

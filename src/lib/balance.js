@@ -46,7 +46,7 @@ export async function debitTechnicianCommission(supabase, bookingId) {
       .maybeSingle();
     if (!tech) return { ok: false, skipped: true };
 
-    const gross = commissionBase(b.total_price);
+    const gross = commissionBase(b.total_price, b.app_fee);
     const split = computeSplit(gross, Number(tech.commission_rate ?? 10));
     // Aturan platform: potongan saldo = komisi + biaya aplikasi pelanggan.
     const fee = Math.max(0, Number(b.app_fee ?? 0));

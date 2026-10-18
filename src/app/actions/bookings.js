@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { calculateTotal, genBookingCode } from "@/lib/pricing";
+import { bacaAppFee } from "@/lib/app-fee";
 import { createPaymentTransaction } from "@/lib/payment";
 import { sendBookingConfirmationEmail, sendAdminNewBookingEmail, sendAdminPaymentProofEmail } from "@/lib/email";
 import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
@@ -95,9 +96,16 @@ export async function createBooking(input) {
     voucher = v;
   }
 
+  // Biaya aplikasi = tarif yang SEDANG berlaku (diatur admin di panel → tab
+  // "Biaya Aplikasi"), bukan angka tetap di kode. Nilainya dibaca tepat di sini
+  // dan DIBEKUKAN ke kolom `app_fee` pesanan, sehingga mengubah tarif nanti tidak
+  // mengubah tagihan pesanan ini (dan dasar komisi teknisi tetap sesuai yang
+  // ditagihkan — lihat supabase/migrate-app-fee-setting.sql).
+  const appFeeEfektif = await bacaAppFee(supabase);
   const { subtotal, appFee, total } = calculateTotal(
     unitPrice,
-    voucher?.amount || 0
+    voucher?.amount || 0,
+    appFeeEfektif
   );
   const code = genBookingCode();
 
@@ -476,4 +484,19 @@ export async function getTransferAccount() {
     number: (data.transfer_account_number || "").trim(),
     name: (data.transfer_account_name || "").trim(),
   };
+}
+
+/**
+ * Biaya aplikasi yang SEDANG berlaku, untuk ditampilkan sebelum pesanan dibuat
+ * (wizard booking web). Ini pembacaan yang sama dengan yang dipakai saat
+ * menagihkan (createBooking → src/lib/app-fee.js), jadi angka di layar tidak
+ * mungkin berbeda dari angka di tagihan.
+ *
+ * Sengaja tidak butuh login: tarifnya diumumkan di halaman panduan dan harus
+ * terlihat sebelum pengguna masuk. Yang perlu dijaga hanya JANGAN memakainya
+ * untuk menulis apa pun — setelan hanya bisa diubah admin (RLS).
+ */
+export async function getAppFee() {
+  const supabase = await createClient();
+  return { fee: await bacaAppFee(supabase) };
 }

@@ -313,6 +313,9 @@ const ARG = {
   "eksekusi_hapus_akun(uuid, text)": { p_request: TIDAK_ADA, p_catatan: "cek izin" },
 
   // --- RPC bersesi pengguna ---
+  // Tarif biaya aplikasi efektif (migrate-app-fee-setting.sql): hanya dibaca,
+  // tidak menulis apa pun. anon harus ditolak.
+  "app_fee_efektif()": {},
   "available_jobs()": {},
   "available_jobs_nearby(double precision, double precision)": { p_lat: 0, p_lng: 0 },
   "booking_slot_start(date, text)": { p_date: HARI_INI, p_time: "00:00" },

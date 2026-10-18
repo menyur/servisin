@@ -15,6 +15,7 @@ import {
   getAccountDeletionSummaryAdmin,
 } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
+import { bacaAppFeeRinci } from "@/lib/app-fee";
 import Link from "next/link";
 
 export default async function AdminPage() {
@@ -32,7 +33,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes, boardRes, accountDeletionRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes, boardRes, accountDeletionRes, appFeeRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
@@ -50,6 +51,11 @@ export default async function AdminPage() {
     // Hanya hitungan untuk lencana tab. Tabel yang belum dimigrasikan bukan
     // kegagalan halaman — tabnya sendiri yang menjelaskannya.
     getAccountDeletionSummaryAdmin().catch(() => ({ error: "Gagal memuat antrean hapus akun." })),
+    // Tarif biaya aplikasi yang BERLAKU SEKARANG, untuk membandingkan dengan
+    // tarif yang dibekukan di tiap pesanan (bookings.app_fee). Kartu pesanan
+    // memakainya hanya sebagai keterangan; angka yang ditagihkan tetap milik
+    // pesanan itu sendiri. Gagal baca → tarif bawaan (bukan 0).
+    bacaAppFeeRinci(supabase),
   ]);
 
   if (bookingsRes.error) {
@@ -66,6 +72,7 @@ export default async function AdminPage() {
   return (
     <AdminDashboard
       initialBookings={bookingsRes.bookings}
+      appFeeBerlaku={appFeeRes.fee}
       initialServices={servicesRes.services || []}
       initialUsers={usersRes.users || []}
       initialReports={reportsRes.error ? [] : reportsRes.reports}

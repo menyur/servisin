@@ -27,7 +27,7 @@ import {
 } from "@/app/actions/admin";
 import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, ShieldCheck } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, ShieldCheck, Coins } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import LocationPickerMap from "@/components/LocationPickerMap";
@@ -37,6 +37,7 @@ import TechnicianReviewsTab from "@/components/TechnicianReviewsTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import PaymentSettingsTab from "@/components/PaymentSettingsTab";
+import AppFeeSettingsTab from "@/components/AppFeeSettingsTab";
 import AdminNotifyRecipientsTab from "@/components/AdminNotifyRecipientsTab";
 import DailyOpsBoardTab from "@/components/DailyOpsBoardTab";
 import WarrantyClaimsAdminTab from "@/components/WarrantyClaimsAdminTab";
@@ -54,7 +55,7 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialPiutangUmur = null, piutangAmbangHari = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null, accountDeletionSummary = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialPiutangUmur = null, piutangAmbangHari = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null, accountDeletionSummary = null, appFeeBerlaku = null }) {
   // Tab pembuka = papan harian: pertanyaan pertama admin adalah "hari ini apa
   // yang perlu saya kerjakan?", bukan "lihat semua pesanan".
   const [tab, setTab] = useState("today");
@@ -502,6 +503,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
         <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
+        <TabButton active={tab === "app-fee"} onClick={() => setTab("app-fee")} icon={Coins} label="Biaya Aplikasi" />
         <TabButton active={tab === "notify-recipients"} onClick={() => setTab("notify-recipients")} icon={Mail} label="Notif Email Admin" />
       </div>
 
@@ -614,6 +616,11 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           {sortedBookings.map((b) => {
             const unassigned = !b.technician_id && b.status !== "cancelled";
             const needsPayConfirm = b.status === "pending" && b.payment_method !== "cod";
+            // Tarif yang dibekukan di pesanan ini (bookings.app_fee) berbeda dari
+            // tarif yang berlaku sekarang → sebutkan apa adanya. Pesanan lama TIDAK
+            // ditagih ulang, jadi selisihnya bukan kesalahan, melainkan riwayat.
+            const tarifBerbeda =
+              appFeeBerlaku != null && Number(b.app_fee) !== Number(appFeeBerlaku);
             return (
             <div key={b.id} className={`card ${unassigned ? "!border-amber ring-2 ring-amber/20" : ""} ${needsPayConfirm ? "!border-coral/60" : ""}`}>
               <div className="flex justify-between items-start flex-wrap gap-3 mb-3">
@@ -674,8 +681,28 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                     </span>
                   );
                 })()}
-                <span>Total: {formatRupiah(b.total_price)}</span>
                 <span>Metode bayar: {b.payment_method}</span>
+                {/* Rincian tagihan apa adanya: biaya aplikasi di sini adalah tarif
+                    yang DITAGIHKAN pada pesanan ini (bookings.app_fee, dibekukan
+                    saat pesanan dibuat), bukan tarif yang berlaku sekarang —
+                    itulah dasar komisi teknisi untuk pekerjaan ini. */}
+                <span className="sm:col-span-2">
+                  Layanan {formatRupiah(b.subtotal_price)}
+                  {" + "}biaya aplikasi{" "}
+                  <strong
+                    className="text-navy"
+                    title={`bookings.app_fee — tarif biaya aplikasi yang ditagihkan saat pesanan ${b.code} dibuat`}
+                  >
+                    {formatRupiah(b.app_fee)}
+                  </strong>
+                  {Number(b.discount_amount) > 0 && <> − diskon {formatRupiah(b.discount_amount)}</>}
+                  {" = "}total <strong className="text-navy">{formatRupiah(b.total_price)}</strong>
+                  {tarifBerbeda && (
+                    <span className="text-[11px] text-ink-soft">
+                      {" · "}tarif berlaku sekarang {formatRupiah(appFeeBerlaku)} — pesanan ini tetap memakai tarif saat dibuat
+                    </span>
+                  )}
+                </span>
                 <span className="sm:col-span-2">
                   Alamat: {b.address}
                   {b.lat != null && b.lng != null && (
@@ -1053,6 +1080,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       {tab === "banners" && <BannerAdminTab banners={initialBanners} bannersError={bannersError} />}
 
       {tab === "pay-settings" && <PaymentSettingsTab />}
+      {tab === "app-fee" && <AppFeeSettingsTab />}
 
       {tab === "notify-recipients" && <AdminNotifyRecipientsTab />}
     </div>
@@ -1473,7 +1501,7 @@ function HistoryView({ bookings, mode, expandedId, onToggle, users = [] }) {
       // pemotongan saldo riil), lalu dijumlahkan — bukan di-split dari
       // agregat (fee hanya boleh dikurangi sekali per pesanan).
       const rate = commissionById.get(id) ?? 10;
-      const splits = completed.map((b) => computeSplit(commissionBase(b.total_price), rate));
+      const splits = completed.map((b) => computeSplit(commissionBase(b.total_price, b.app_fee), rate));
       const last = sorted[0];
       return {
         id,
