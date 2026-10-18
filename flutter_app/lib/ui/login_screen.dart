@@ -46,12 +46,31 @@ class _LoginScreenState extends State<LoginScreen> {
       // masih kosong) langsung dibawa ke Profil supaya tahu apa yang harus
       // diisi. Pelanggan & teknisi yang profilnya lengkap tetap ke Beranda.
       Profile? profil;
+      var gagalBaca = false;
       try {
         profil = await Api.myProfile();
       } catch (_) {
-        profil = null; // gagal baca profil → jalur normal, jangan tahan login
+        gagalBaca = true; // gagal baca profil → jalur normal, jangan tahan login
       }
       if (!mounted) return;
+      // Sesi sah tetapi baris profilnya TIDAK ada: jangan teruskan. Tanpa profil,
+      // peran terbaca kosong, Beranda menyapa "Kawan", dan permintaan hapus akun
+      // ditolak DB ('profil_tidak_ada') — lihat docs/security.md §8.3.
+      if (!gagalBaca && profil == null) {
+        try {
+          await Api.signOut();
+        } catch (_) {
+          // sudah tidak ada sesi / jaringan bermasalah — tetap beri tahu
+        }
+        if (mounted) {
+          showSnack(
+            context,
+            'Akun ini belum punya data profil — hubungi admin, lalu masuk lagi setelah diperbaiki.',
+            error: true,
+          );
+        }
+        return;
+      }
       if (dataProfilKurang(profil).isNotEmpty) {
         mainTabIndex.value = kProfileTabIndex;
         Navigator.pushAndRemoveUntil(

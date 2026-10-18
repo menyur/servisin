@@ -30,6 +30,10 @@ import {
   KODE_KELAYAKAN_RAGU,
   RENCANA_HAPUS,
   JANJI_HARI,
+  daftarPencabutanGagal,
+  cobaUlangPencabutan,
+  kelasPencabutan,
+  pesanPencabutan,
 } from "@/lib/account-deletion";
 
 // Nama ikon yang boleh dipakai layanan baru (validasi server-side).
@@ -3326,7 +3330,82 @@ export async function getAccountDeletionRequestsAdmin(status = "diminta") {
     });
   }
 
-  return { requests: permintaan, janjiHari: JANJI_HARI, rencana: RENCANA_HAPUS };
+  // Pencabutan yang belum beres, dari kolom jejak di baris permintaan.
+  //
+  // Kenapa ditampilkan di sini: kegagalan pencabutan dulu hanya terlihat SEKALI
+  // di layar saat penghapusan dijalankan, lalu hilang — padahal akunnya masih
+  // bisa masuk dengan kata sandi lama. "Tidak ada catatan" (permintaan lama,
+  // sebelum kolom jejaknya ada) sengaja TIDAK dianggap beres.
+  let pencabutan = { baris: [], error: null, perluMigrasi: false };
+  try {
+    const gagal = await daftarPencabutanGagal({ admin: klien, limit: 200 });
+    pencabutan = {
+      baris: gagal.map((r) => {
+        const kelas = kelasPencabutan(r);
+        return {
+          id: r.id,
+          userId: r.user_id,
+          email: r.email,
+          decidedAt: r.decided_at,
+          dicabutPada: r.dicabut_pada,
+          catatan: r.catatan_pencabutan,
+          kelas,
+          pesan: pesanPencabutan(kelas),
+        };
+      }),
+      error: null,
+      perluMigrasi: false,
+    };
+  } catch (err) {
+    pencabutan = { baris: [], error: err.message, perluMigrasi: Boolean(err.perluMigrasi) };
+  }
+
+  return { requests: permintaan, janjiHari: JANJI_HARI, rencana: RENCANA_HAPUS, pencabutan };
+}
+
+/**
+ * CABUT ULANG akses untuk permintaan yang sudah 'selesai' tetapi pencabutannya
+ * belum beres (kolom jejak) — tindakan yang menutup celah "akun sudah dihapus,
+ * tapi masih bisa masuk". Hanya menyentuh pencabutan; data yang sudah
+ * dianonimkan tidak diubah lagi, jadi aman ditekan berkali-kali.
+ */
+export async function retryAccountRevocationAdmin(requestId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(requestId || "").trim();
+  if (!UUID_RE.test(id)) return { error: "ID permintaan tidak valid." };
+
+  const klien = klienHapusAkun();
+  if (!klien) {
+    return { error: "Kunci layanan (SUPABASE_SERVICE_ROLE_KEY) belum tersedia di server ini." };
+  }
+
+  const hasil = await cobaUlangPencabutan({ requestId: id, admin: klien });
+  if (!hasil.ok) {
+    const pesan =
+      hasil.error === "permintaan_tanpa_akun"
+        ? "Permintaan ini tidak punya akun — tidak ada yang perlu dicabut."
+        : hasil.error === "status_bukan_selesai"
+          ? `Permintaan ini berstatus "${hasil.status}" — jalur cabut ulang hanya untuk yang sudah dijalankan.`
+          : `Gagal mencabut ulang: ${hasil.error}`;
+    return { error: pesan };
+  }
+
+  revalidatePath("/admin");
+  return {
+    ok: true,
+    userId: hasil.userId,
+    akunAda: hasil.akunAda,
+    aksesDicabut: hasil.aksesDicabut,
+    galatAkses: hasil.galatAkses ?? null,
+    sesiDicabut: hasil.sesiDicabut,
+    identitasDilepas: hasil.identitasDilepas ?? 0,
+    galatPemutusan: hasil.galatPemutusan ?? null,
+    jejakDicatat: hasil.jejakDicatat,
+    galatJejak: hasil.galatJejak ?? null,
+  };
 }
 
 /**

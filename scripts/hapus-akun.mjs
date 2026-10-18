@@ -11,10 +11,22 @@
 //   node scripts/hapus-akun.mjs --status=ditolak      → daftar dengan status lain
 //   node scripts/hapus-akun.mjs --eksekusi=<id>        → RENCANA saja (dry-run)
 //   node scripts/hapus-akun.mjs --eksekusi=<id> --ya   → jalankan sungguhan
+//   node scripts/hapus-akun.mjs --belum-dicabut       → permintaan SELESAI yang
+//                                                      aksesnya belum tercabut
+//   node scripts/hapus-akun.mjs --cabut=<id>           → rencana cabut ulang
+//   node scripts/hapus-akun.mjs --cabut=<id> --ya      → cabut ulang sungguhan
 //
 // Kenapa `--ya` wajib: penghapusan tidak bisa dibatalkan. Tanpa `--ya` skrip
 // hanya menampilkan rencana (akun siapa, apa yang dihapus, apa yang disimpan) —
 // jadi selalu ada satu langkah sadar sebelum data hilang.
+//
+// PENCABUTAN ULANG (`--belum-dicabut` / `--cabut=<id>`) menjawab kegagalan yang
+// paling sulit terlihat: permintaan sudah ditutup 'selesai' dan datanya sudah
+// dianonimkan, TETAPI akses masuknya (atau sesinya) belum tercabut — jadi akun
+// "yang sudah dihapus" masih bisa masuk dengan kredensial lamanya. Keadaan itu
+// tersimpan di kolom jejak pada account_deletion_requests (lihat
+// supabase/migrate-account-revocation.sql). Jalur ini HANYA mencabut akses;
+// data yang sudah dianonimkan tidak diubah lagi, jadi aman diulang berkali-kali.
 //
 // Yang DIHAPUS vs DISIMPAN dijelaskan di docs/account-deletion.md; ringkasnya:
 // identitas + konten pribadi dihapus, catatan keuangan/audit tetap ada tanpa nama
@@ -24,7 +36,14 @@
 // Tidak pernah mencetak nilai rahasia. Jalankan: npm run hapus-akun
 // ============================================================================
 import { loadEnv, makeAdminClient } from "./lib/probe-env.mjs";
-import { daftarPermintaanHapus, eksekusiHapusAkun } from "../src/lib/account-deletion.js";
+import {
+  daftarPermintaanHapus,
+  eksekusiHapusAkun,
+  daftarPencabutanGagal,
+  cobaUlangPencabutan,
+  kelasPencabutan,
+  pesanPencabutan,
+} from "../src/lib/account-deletion.js";
 
 const argv = process.argv.slice(2);
 const nilaiArg = (nama) => {
@@ -34,8 +53,10 @@ const nilaiArg = (nama) => {
 };
 const YA = argv.includes("--ya");
 const EKSEKUSI = nilaiArg("eksekusi");
+const CABUT = nilaiArg("cabut");
+const BELUM_DICABUT = argv.includes("--belum-dicabut");
 const LIHAT = argv.includes("--daftar");
-const STATUS = nilaiArg("status") || (EKSEKUSI ? null : "diminta");
+const STATUS = nilaiArg("status") || (EKSEKUSI || CABUT || BELUM_DICABUT ? null : "diminta");
 
 function gagal(pesan) {
   console.error(`❌ ${pesan}`);
@@ -146,11 +167,25 @@ async function jalankan(requestId) {
   console.log("✅ Penghapusan dijalankan.");
   console.log(`   user_id           : ${hasil.userId}`);
   console.log(`   akses dicabut     : ${hasil.aksesDicabut ? "YA (surel tombstone + banned)" : "TIDAK"}`);
+  console.log(
+    `   sesi diputus      : ${hasil.sesiDicabut ? "YA" : "TIDAK"}` +
+      (hasil.sesiDicabut ? ` (identitas provider dilepas: ${hasil.identitasDilepas ?? 0})` : "")
+  );
+  console.log(`   jejak pencabutan  : ${hasil.jejakDicatat ? "tercatat" : `GAGAL — ${hasil.galatJejak || "sebab tidak diketahui"}`}`);
   if (!hasil.aksesDicabut) {
     // Ini kegagalan yang serius: data sudah dianonimkan tetapi akun masih bisa
     // dipakai masuk. Jangan pernah disembunyikan.
     console.error(`❗ Akses TIDAK berhasil dicabut: ${hasil.galatAkses || "sebab tidak diketahui"}`);
-    console.error("   Ulangi pencabutan sekarang: buka Supabase → Authentication → cari pengguna itu → ban.");
+    console.error(`   Ulangi sekarang: npm run hapus-akun -- --cabut=${hasil.requestId} --ya`);
+    process.exitCode = 1;
+  } else if (!hasil.sesiDicabut) {
+    // Lebih ringan (jalur masuk sudah tertutup), tetapi sesi lama masih hidup
+    // sampai tokennya kedaluwarsa — jadi tetap tidak boleh dibiarkan senyap.
+    console.error(`⚠️  Sesi yang berjalan belum diputus: ${hasil.galatPemutusan || "sebab tidak diketahui"}`);
+    console.error(`   Ulangi sekarang: npm run hapus-akun -- --cabut=${hasil.requestId} --ya`);
+    if (hasil.perluMigrasiPencabutan) {
+      console.error("   Jalankan dulu: supabase/migrate-account-revocation.sql");
+    }
     process.exitCode = 1;
   }
   for (const b of hasil.berkasDihapus) {
@@ -166,12 +201,101 @@ async function jalankan(requestId) {
   return 0;
 }
 
+/**
+ * Permintaan 'selesai' yang pencabutannya belum tercatat / gagal sebagian.
+ * Read-only; menyebutkan perintah perbaikannya supaya tidak perlu diingat.
+ */
+async function daftarBelumDicabut() {
+  let baris;
+  try {
+    baris = await daftarPencabutanGagal({ admin, limit: 200 });
+  } catch (err) {
+    gagal(err.message);
+  }
+
+  console.log(`Pencabutan yang perlu diperiksa — ${baris.length} baris`);
+  console.log("=".repeat(96));
+  if (!baris.length) {
+    console.log("(kosong) — setiap permintaan 'selesai' sudah tercabut aksesnya.");
+    return;
+  }
+  for (const r of baris) {
+    const kelas = kelasPencabutan(r);
+    console.log(`${r.id}  ${kolom(r.email, 34)} ${kolom(new Date(r.decided_at || r.dicabut_pada || Date.now()).toISOString().slice(0, 19), 20)} ${kelas}`);
+    const pesan = pesanPencabutan(kelas);
+    if (pesan) console.log(`   ${pesan}`);
+    if (r.catatan_pencabutan) console.log(`   catatan: ${r.catatan_pencabutan}`);
+    console.log(`   cabut ulang: npm run hapus-akun -- --cabut=${r.id} --ya`);
+  }
+  console.log("=".repeat(96));
+  console.log("Pemeriksaan menyeluruh keadaan akunnya: npm run verify:akun-aman");
+}
+
+/**
+ * Cabut ULANG akses sebuah permintaan yang sudah 'selesai'. Tanpa `--ya` hanya
+ * menampilkan rencana. Data yang sudah dianonimkan tidak disentuh lagi.
+ */
+async function cabutUlang(requestId) {
+  const { data: baris, error } = await admin
+    .from("account_deletion_requests")
+    .select("id, user_id, email, status, decided_at, akses_dicabut, sesi_dicabut, catatan_pencabutan")
+    .eq("id", requestId)
+    .maybeSingle();
+
+  if (error) gagal(`Gagal membaca permintaan: ${error.message}`);
+  if (!baris) gagal(`Permintaan ${requestId} tidak ditemukan.`);
+  if (baris.status !== "selesai") {
+    gagal(`Status permintaan ini "${baris.status}" — jalur cabut ulang hanya untuk yang berstatus "selesai".`);
+  }
+  if (!baris.user_id) gagal("Permintaan ini tidak punya akun (surel tanpa pendaftar) — tidak ada yang dicabut.");
+
+  console.log(`Permintaan : ${baris.id}`);
+  console.log(`Akun       : ${baris.user_id}`);
+  console.log(`Surel      : ${baris.email}`);
+  console.log(`Selesai    : ${baris.decided_at ? new Date(baris.decided_at).toISOString() : "-"}`);
+  console.log(`Keadaan    : akses_dicabut=${baris.akses_dicabut ?? "null"} sesi_dicabut=${baris.sesi_dicabut ?? "null"}`);
+  if (baris.catatan_pencabutan) console.log(`Catatan    : ${baris.catatan_pencabutan}`);
+  console.log("");
+  console.log("Rencana cabut ulang (hanya pencabutan — data yang sudah dianonimkan tidak disentuh):");
+  console.log("  • surel auth diganti tombstone + email_confirm + ban ~100 tahun");
+  console.log("  • baris sesi pengguna dihapus (token refresh ikut mati)");
+  console.log("  • identitas provider non-surel (mis. Google) dilepas");
+  console.log("  • hasilnya ditulis kembali ke kolom jejak permintaan");
+  console.log("");
+
+  if (!YA) {
+    console.log("Ini baru RENCANA. Tambahkan --ya untuk benar-benar mencabutnya:");
+    console.log(`  npm run hapus-akun -- --cabut=${baris.id} --ya`);
+    return 0;
+  }
+
+  const hasil = await cobaUlangPencabutan({ requestId: baris.id, admin });
+  if (!hasil.ok) gagal(`Gagal mencabut ulang: ${hasil.error}${hasil.status ? ` (status: ${hasil.status})` : ""}`);
+
+  console.log("✅ Pencabutan ulang dijalankan.");
+  console.log(`   akun masih ada    : ${hasil.akunAda ? "ya" : "tidak (tidak ada yang perlu dicabut)"}`);
+  console.log(`   akses dicabut     : ${hasil.aksesDicabut ? "YA (surel tombstone + banned)" : `TIDAK — ${hasil.galatAkses || "sebab tidak diketahui"}`}`);
+  console.log(`   sesi diputus      : ${hasil.sesiDicabut ? `YA (identitas provider dilepas: ${hasil.identitasDilepas ?? 0})` : `TIDAK — ${hasil.galatPemutusan || "sebab tidak diketahui"}`}`);
+  console.log(`   jejak tercatat    : ${hasil.jejakDicatat ? "ya" : `GAGAL — ${hasil.galatJejak || "sebab tidak diketahui"}`}`);
+
+  if (!hasil.aksesDicabut || !hasil.sesiDicabut) {
+    console.error("❗ Masih ada yang belum tercabut — periksa pesan di atas, lalu jalankan lagi bila penyebabnya sudah beres.");
+    process.exitCode = 1;
+  }
+  return 0;
+}
+
 console.log("Alat operasional hapus akun Fixify");
 console.log("==================================");
 
 if (EKSEKUSI) {
   process.exit(await jalankan(EKSEKUSI));
-} else if (LIHAT || !EKSEKUSI) {
+} else if (CABUT) {
+  process.exit(await cabutUlang(CABUT));
+} else if (BELUM_DICABUT) {
+  await daftarBelumDicabut();
+  process.exit(0);
+} else {
   await daftar();
   process.exit(0);
 }

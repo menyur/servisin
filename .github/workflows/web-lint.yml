@@ -96,6 +96,16 @@ jobs:
       - name: Verifikasi izin EXECUTE RPC
         run: npm run verify:rpc-grants-offline
 
+      # Siklus hidup akun (pendaftaran → penghapusan) diperiksa di sini karena
+      # kegagalannya SENYAP dan justru terlihat normal di layar: akun auth tanpa
+      # baris profil membuat aplikasi menyapa "Halo, Kawan" sementara pengguna itu
+      # tidak punya peran, dan permintaan hapus berstatus 'selesai' yang
+      # aksesnya belum tercabut membuat akun "yang sudah dihapus" masih bisa
+      # masuk dengan kata sandi lama. Statis, tanpa jaringan — yang diuji adalah
+      # aturan penilainya (mode live-nya jalan di gate probe mingguan).
+      - name: Verifikasi aturan siklus hidup akun
+        run: npm run verify:akun-aman-offline
+
       # Penjaga PENDAFTARAN diperiksa di sini karena kegagalannya tidak terlihat
       # sama sekali: jeda yang hanya hidup di memori proses tetap membuat
       # pendaftaran massal lolos dari instance lain, dan Turnstile yang salah

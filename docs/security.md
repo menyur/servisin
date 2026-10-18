@@ -190,3 +190,219 @@ npm run verify:rpc-grants-offline
 ```
 
 Kebocoran yang pernah ketemu (pelajaran): policy `for select using (true)` di tabel bookings membuka seluruh data pelanggan meski UI tidak pernah menampilkannya; bucket bukti transfer yang publik membuat bukti transfer bisa dilihat siapa pun dengan URL; dan grant `EXECUTE` bawaan PUBLIC membuat 23 RPC — termasuk penghapusan akun, penghapusan riwayat, dan pembuatan bucket — bisa dipanggil tanpa login. Ketiganya sudah ditutup — jangan dibuka lagi, dan jangan menganggap `revoke ... from anon` cukup untuk fungsi.
+
+---
+
+## 8. Siklus hidup akun — surel yang dipakai lagi & akun "terhapus" yang masih bisa masuk
+
+Audit 18 Okt 2026. Seluruh isi bagian ini **senyap**: tidak ada error, tidak ada tes
+merah, dan di layar tampak normal. Alat periksanya:
+
+```bash
+npm run verify:akun-aman            # LIVE, baca saja — tidak menulis apa pun
+npm run verify:akun-aman -- --detail  # + fakta tiap akun yang bermasalah
+npm run verify:akun-aman-offline     # aturan penilainya, tanpa jaringan (ikut CI)
+```
+
+Aturan penilainya dijaga dua tempat: `npm run verify:akun-aman-offline` di
+[web-lint.yml](../.github/workflows/web-lint.yml) (setiap PR) dan langkah
+`akun-aman` di gate probe mingguan ([ci-probe-gate.mjs](../scripts/ci-probe-gate.mjs)).
+
+### 8.1 Temuan pada database produksi (18 Okt 2026)
+
+`7 akun auth vs 4 baris profiles` — **3 akun tanpa baris profil**, semuanya dibuat
+16 Okt 2026 (satu di antaranya pengguna Google yang **sudah masuk hari itu** dan
+disapa "Halo, Kawan 👋"). Akun yang dibuat 18 Okt memperoleh profilnya normal,
+jadi bukan "pendaftaran rusak sekarang": ini baris lama yang tidak pernah
+ditambal, karena tidak ada satu pun pemeriksaan yang melihat keadaan itu.
+
+Penyebabnya struktural: profil dibuat oleh trigger `on_auth_user_created` yang
+**hanya berjalan pada INSERT** ke `auth.users` ([schema.sql](../supabase/schema.sql)).
+Akun auth bisa lahir tanpa baris profil **tanpa ada yang gagal di sisi pengguna** —
+jalur pendaftaran memakai Admin API (`admin.generateLink`), yang tidak meminta
+konfirmasi UI apa pun. Setelah itu tidak ada yang menyentuh akun tersebut lagi.
+
+Perbaikan + pencegahan: [supabase/fix-profil-hilang.sql](../supabase/fix-profil-hilang.sql)
+(trigger idempoten + tambalan akun lama; idempoten, aman diulang).
+
+**✅ Dijalankan 18 Okt 2026** (apply:sql ke produksi): `7 akun auth / 7 baris
+profiles`, probe kembali **0 kritis**. Hasil tambalannya bisa dibaca:
+`Suhendi` & `Agusalif` masuk sebagai pendaftar teknisi `pending` (mereka memang
+mendaftar), dan pengguna Google-nya menjadi pelanggan `approved` bernama
+`Hafizun Asri Gusrianto (Fhie)` — dialah yang sebelumnya disapa "Kawan".
+
+### 8.2 "Sudah dihapus, kok masih bisa masuk?" — tiga sebab berbeda
+
+Ketiganya menghasilkan gejala yang sama dan tidak bisa dibedakan dari layar:
+
+| Sebab | Bukti di kode | Akibat nyata |
+|---|---|---|
+| **Pencabutan akses gagal, lalu tidak pernah diulang** | `aksesDicabut:false` hanya dilaporkan sebagai "bahaya" di panel; permintaan sudah ditutup `'selesai'` oleh `eksekusi_hapus_akun` (SQL) | surel + kata sandi lama **tetap bisa masuk**; tidak ada lagi yang menunggu diperiksa |
+| **Sesi yang sudah terbit tidak mati oleh ban** | `updateUserById({ ban_duration })` di [account-deletion.js](../src/lib/account-deletion.js) | ban menolak **masuk & refresh**, tetapi access token (JWT) yang sudah terbit tetap sah sampai kedaluwarsa — bawaan Supabase **1 jam** |
+| **Identitas provider (Google) tetap menempel** | surel auth diganti tombstone, tautan `auth.identities` tidak disentuh | bila pencabutan pernah gagal, akun "terhapus" hidup lagi lewat **Masuk dengan Google** — tanpa surel asli sama sekali |
+
+Rekomendasi, urut dampak — **ketiganya sudah dikerjakan 18 Okt 2026**
+([migrate-account-revocation.sql](../supabase/migrate-account-revocation.sql) +
+[account-deletion.js](../src/lib/account-deletion.js)):
+
+1. **Beri jejak & jalur ulang untuk pencabutan.** Kolom
+   `akses_dicabut boolean` + `dicabut_pada timestamptz` pada
+   `account_deletion_requests`, isi dari hasil `eksekusiHapusAkun`, dan sediakan
+   daftar "pencabutan gagal" (panel admin + `npm run hapus-akun -- --belum-dicabut`).
+   Tanpa itu, kejadian yang sudah ditutup `'selesai'` tidak akan pernah terlihat lagi —
+   inilah kelas kegagalan yang seharusnya gagal-tertutup, bukan dilaporkan sekali.
+2. **Hapus sesi pengguna saat penghapusan.** Lewat RPC `security definer`
+   `public.cabut_akses_pengguna(uuid)` (service role saja) — dipanggil
+   `cabutAksesPengguna()` di [account-deletion.js](../src/lib/account-deletion.js).
+   Batasnya jujur ditulis di kode dan dokumen: JWT yang sudah terbit tetap sah
+   sampai `exp`; pemutusan seketika menuntut pemeriksaan `session_id` di sisi
+   server untuk operasi sensitif.
+   Catatan: `auth.admin.signOut(jwt, scope)` menerima **JWT sesi pengguna**, bukan
+   user id — jadi tidak bisa dipakai di jalur hapus yang tidak memegang JWT pengguna.
+   Karena itu jalurnya RPC, bukan Admin API.
+3. **Lepas identitas provider** — dilakukan dalam RPC yang sama (identitas
+   non-surel dihapus), supaya "hapus akun" tidak bisa dibatalkan sendiri lewat
+   "Masuk dengan Google".
+4. **Jangan anggap ini urusan database saja.** Semua di atas hanya bisa dibuktikan
+   dengan probe ke data nyata — itulah kenapa `verify:akun-aman` memeriksa
+   per-akun, bukan hanya kontrak kode.
+
+### 8.3 Sesi tanpa profil = sapaan "Kawan" (dan akun yang tak bisa dihapus)
+
+Cadangan `'Kawan'` di [home_screen.dart](../flutter_app/lib/ui/home_screen.dart)
+mengubah kegagalan identitas menjadi kalimat yang ramah. Yang membuatnya berbahaya
+adalah jalur kelanjutannya: `dataProfilKurang(null)` mengembalikan daftar kosong
+([models.dart](../flutter_app/lib/models.dart)), sehingga [login_screen.dart](../flutter_app/lib/ui/login_screen.dart)
+meneruskan pengguna ke Beranda sebagai **sesi sah tanpa identitas**.
+
+Akibat yang perlu diperhitungkan:
+- role terbaca kosong → semua gerbang peran (teknisi/admin) mati, dan
+- pengguna **tidak bisa menghapus akunnya sendiri**: `hapus_akun_blokir` menjawab
+  `profil_tidak_ada` — padahal hapus-dari-dalam-aplikasi adalah syarat Google Play.
+
+**✅ Dikerjakan 18 Okt 2026** — penjaganya ada di tiga tempat, dan keberadaannya
+dijaga uji offline (`npm run verify:akun-aman-offline`):
+
+1. **Aplikasi:** profil `null` padahal sesi ada = sesi tidak sah → shell menampilkan
+   layar `_SesiTanpaProfilScreen` ("Akunmu belum punya data profil"), dan
+   [login_screen.dart](../flutter_app/lib/ui/login_screen.dart) berhenti + keluar
+   bila profil tidak ada. Perhatikan bedanya dengan **gagal baca** (jaringan):
+   yang itu tetap lewat, karena kegagalan membaca bukan bukti profilnya hilang.
+2. **Web:** [middleware](../src/lib/supabase/middleware.js) menolak sesi tanpa baris
+   `profiles` untuk `/dashboard`, `/technician`, `/admin`, `/profile`, `/booking`;
+   sesinya dibuang (bukan hanya dialihkan) dan pengguna diarahkan ke
+   `/login?alasan=profil-tidak-ada` yang menjelaskan sebabnya. Halaman publik
+   (beranda, `/track`, `/hapus-akun`, `/unduh`, halaman hukum) tidak ikut dijaga —
+   pengunjung tanpa akun memang tidak boleh dipaksa punya profil.
+3. **Database:** trigger idempoten + tambalan ([fix-profil-hilang.sql](../supabase/fix-profil-hilang.sql)).
+
+### 8.4 Pendaftaran dengan surel yang sama
+
+Surel akun yang sudah dihapus **memang langsung bebas dipakai lagi** — itu akibat
+desain tombstone (`dihapus+…@fixify.invalid`), dan menurut privasi memang benar.
+Yang perlu diputuskan secara sadar:
+
+| Keadaan | Kenyataan sekarang | Rekomendasi |
+|---|---|---|
+| Satu surel, dua akun | tidak bisa di `auth.users`; `profiles.email` **tidak unik** | indeks unik parsial untuk surel non-tombstone; pencarian `.ilike(...).maybeSingle()` di [account-deletion.js](../src/lib/account-deletion.js) bisa gagal diam-diam saat ada dua baris → ambil `.limit(1)` berurutan, jangan andalkan `maybeSingle()` |
+| Pendaftaran ulang surel bekas akun terhapus | ✅ **ditandai** sejak 18 Okt 2026 (`profiles.bekas_akun_terhapus_at`, §8.6) | selesai; tanda hanya terlihat admin, jawaban ke pendaftar tidak berubah |
+| Pendaftaran massal | ✅ **pembatas laju persisten** (tabel `signup_attempts` + RPC `pendaftaran_izin`) **+ Turnstile** di formulir web (§8.6) | selesai — kecuali kunci Turnstile yang masih harus diisi di Vercel |
+| Surel milik orang lain | verifikasi surel membuktikan **kepemilikan kotak masuk**, bukan identitas | teknisi (yang terdampak penilaian & pembayaran) sebaiknya punya verifikasi tambahan (nomor HP/WhatsApp) sebelum disetujui admin |
+
+Jangan diubah: kontrak **jawaban seragam** untuk akun ada maupun tidak di
+[signup-verification.js](../src/lib/signup-verification.js) dan
+[password-reset.js](../src/lib/password-reset.js) (dijaga `npm run verify:signup-endpoint`
+dan `npm run verify:reset-endpoint`). Menambahkan pesan "surel sudah terdaftar"
+mengubah kedua endpoint menjadi alat pemeriksa alamat — lebih merugikan daripada
+manfaat pesan yang lebih jelas.
+
+### 8.5 Keadaan & sisa pekerjaan
+
+Sudah dikerjakan dan dibuktikan 18 Okt 2026:
+
+| Langkah | Bukti |
+|---|---|
+| Tambal baris profil yang hilang ([fix-profil-hilang.sql](../supabase/fix-profil-hilang.sql)) | `npm run verify:akun-aman` → 0 kritis (7 akun / 7 profil) |
+| Jejak pencabutan + alat cabut ulang (§8.2 p.1) | `npm run hapus-akun -- --belum-dicabut`; panel admin tab **Hapus Akun** |
+| Putuskan sesi & lepas identitas provider (§8.2 p.2–3) | `npm run verify:hapus-akun` → bagian F hijau, termasuk "pengguna tidak bisa masuk lagi" |
+| Tolak sesi tanpa profil di aplikasi & web (§8.3) | `flutter analyze` bersih, tes navigasi hijau, 4 kontrak statis di `verify:akun-aman-offline` |
+| Pembatas laju persisten + Turnstile (§8.4 baris 3) | `npm run verify:signup-endpoint -- --selftest` → 114 lulus; RPC hidup diuji: coba ke-4 ditolak `batas_tercapai`, `anon` ditolak `permission denied` |
+| Tanda surel bekas akun terhapus (§8.4 baris 2) | dibuktikan hidup dengan baris permintaan hapus buatan: `pernah: true`, dan baris berumur 120 hari **tidak** ditandai (jendela 90 hari); baris uji dihapus lagi |
+
+Sisa pekerjaan:
+
+1. **Kunci Turnstile belum ada di Vercel.** Kodenya siap dan gagal-terbuka dengan
+   laporan (`modeTurnstile`) — sampai `TURNSTILE_SECRET_KEY` +
+   `NEXT_PUBLIC_TURNSTILE_SITE_KEY` diisi lalu di-redeploy, formulir web hanya
+   dijaga pembatas laju persisten. Jalur aplikasi (`/api/auth/register`) belum
+   dijaga Turnstile karena aplikasi tidak bisa menampilkan tantangan; nyalakan
+   `TURNSTILE_WAJIB_API` hanya setelah ada solusinya (mis. Play Integrity).
+2. **Indeks unik parsial** untuk `profiles.email` (kecuali tombstone) + ganti
+   `.ilike(...).maybeSingle()` menjadi pencarian yang tahan duplikat.
+3. **Verifikasi nomor HP/WhatsApp** untuk teknisi sebelum disetujui admin.
+
+Satu hal yang tetap tidak bisa ditutup oleh kode: JWT yang sudah terbit sah
+sampai `exp` (bawaan 1 jam). Pemutusan seketika menuntut pemeriksaan `session_id`
+di sisi server pada operasi sensitif — itu keputusan berikutnya, bukan bug.
+
+### 8.6 Penjaga pendaftaran, tanda surel bekas akun, dan antrean pendaftar
+
+Dikerjakan 18 Okt 2026. Tiga hal yang sebelumnya "tercatat sebagai rekomendasi"
+sekarang punya kode, migrasi, dan bukti — tetapi **satu di antaranya masih
+menunggu kunci** (lihat akhir bagian ini).
+
+**1. Pembatas laju yang berdiri di seluruh deployment.** Jeda lama hidup di
+memori proses: di serverless setiap instance punya petanya sendiri dan instance
+datang-pergi, sementara jalur pendaftaran memakai Admin API sehingga batas
+pendaftaran bawaan Supabase **tidak ikut berlaku**. Sekarang batasnya ada di
+database — tabel `public.signup_attempts` + RPC `pendaftaran_izin(kunci, batas,
+jendela_detik)` ([migrate-signup-guard.sql](../supabase/migrate-signup-guard.sql),
+**diterapkan ke produksi 18 Okt 2026**, HTTP 201) — dipakai lewat
+[signup-guard.js](../src/lib/signup-guard.js): 8 per IP/15 menit, 25 per IP/hari,
+dan 5 per alamat/jam. Izin RPC dicabut dari `PUBLIC`, `anon`, dan `authenticated`,
+lalu hanya `service_role` yang boleh memanggilnya (pola §2.1). Gangguan database
+**tidak memblokir pendaftaran**: hasilnya menyebut `tersedia:false` +
+`perluMigrasi` supaya degradasinya terlihat, bukan diam.
+
+**2. Turnstile di formulir web.** Token dari widget ([TurnstileField.js](../src/components/TurnstileField.js))
+diverifikasi **di server** (`verifikasiTurnstile`) dan tidak pernah menggantikan
+pembatas — token sah masih bisa dipakai berulang dalam masa berlakunya, sedangkan
+pembatas saja tidak menahan bot terdistribusi. Jalur aplikasi sengaja belum
+diwajibkan (`modeTurnstile`: `asal:"api"` → dilewati) karena aplikasi tidak bisa
+menampilkan tantangan; penahannya pembatas per IP & per alamat.
+
+**3. Tanda "surel bekas akun terhapus".** Pendaftaran dengan surel yang pernah
+dipakai akun terhapus tetap **dibolehkan** (privasi memang membebaskan alamatnya),
+tetapi barisnya diberi `profiles.bekas_akun_terhapus_at` (jendela 90 hari, dibaca
+dari `account_deletion_requests` yang menyimpan snapshot alamat aslinya) dan panel
+admin menampilkan lencana **“surel bekas akun terhapus”**. Jawaban ke pendaftar
+tidak berubah sama sekali — jadi ini bukan alat enumerasi. Tujuannya mencegah
+"reset reputasi": hapus akun lalu daftar ulang tidak boleh menghapus riwayat
+penilaian dari pandangan operator.
+
+**4. Antrean pendaftar yang menggantung.** Tab **Pendaftar Teknisi** kini
+menampilkan **“surel belum dikonfirmasi”** beserta tombol **Kirim ulang
+verifikasi** ([kirimUlangVerifikasiPendaftaran](../src/lib/signup-verification.js)).
+Ini menutup jebakan yang nyata: pendaftar yang tidak pernah mengklik tautan
+verifikasi **tidak bisa masuk sama sekali**, jadi KTP dan datanya tidak akan
+pernah bisa dinilai admin — antreannya menggantung tanpa sebab yang terlihat.
+Fungsi kirim ulang sengaja **tidak menyentuh kata sandi** siapa pun (Admin API
+mengembalikan tautan baru untuk akun yang belum terkonfirmasi walau tanpa
+`password`), menolak akun yang sudah terkonfirmasi, dan menahan klik ganda.
+
+**Yang dijalankan pada data nyata (18 Okt 2026).** Dua pendaftar teknisi 16 Okt
+(`Suhendi`, `Agusalif`) — keduanya **pendaftar sungguhan** dengan foto KTP di
+bucket privat — sebelumnya menggantung karena belum mengonfirmasi surel. Keduanya
+dikirimi **tautan verifikasi baru** lewat fungsi di atas (Resend menerima keduanya,
+`surel terkirim: true`); status persetujuannya tetap `pending` karena penilaian KTP
+adalah keputusan admin, bukan efek samping pembersihan. Mereka **tidak dihapus**:
+untuk itu ada penjaga baru di [hapus-akun-uji.mjs](../scripts/hapus-akun-uji.mjs)
+(`npm run hapus:akun-uji -- --id=<uuid>`; dry-run bawaan) yang **menolak** akun
+ber-KTP, berjejak (pesanan/saldo/chat), atau berperan admin — supaya pembersihan
+akun uji tidak pernah menyentuh pendaftar nyata.
+
+**Yang belum: kunci Turnstile.** `.env.local` (dan Vercel) belum berisi
+`TURNSTILE_SECRET_KEY` maupun `NEXT_PUBLIC_TURNSTILE_SITE_KEY`, jadi widget belum
+tampil dan verifikasinya belum berjalan — keadaan ini **dicatat di log**, bukan
+disembunyikan. Isi keduanya di Cloudflare → Turnstile, tambahkan ke Vercel, lalu
+redeploy; jalur pendaftaran tetap dijaga pembatas persisten selama itu.

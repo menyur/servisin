@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   executeAccountDeletionAdmin,
   getAccountDeletionRequestsAdmin,
+  retryAccountRevocationAdmin,
 } from "@/app/actions/admin";
 import {
   AlertTriangle,
@@ -35,6 +36,10 @@ import {
  *   2. Bila pencabutan akses masuk gagal, hasilnya BUKAN sukses: panel menahan
  *      pesannya sebagai keadaan bahaya, karena datanya sudah dianonimkan tetapi
  *      akun masih bisa dipakai masuk.
+ *   3. Kegagalan pencabutan TIDAK berhenti di pesan sesaat. Permintaan yang
+ *      sudah 'selesai' tetapi akses/sesinya belum tercabut didaftarkan di
+ *      bagian atas tab, lengkap dengan tombol "Cabut ulang" — sebab kalau tidak,
+ *      satu-satunya jejaknya hilang begitu layar ditutup.
  */
 
 /** Kata yang harus diketik admin sebelum tombol hapus aktif. */
@@ -83,6 +88,9 @@ export default function AccountDeletionAdminTab() {
   const [catatan, setCatatan] = useState({}); // id → catatan admin
   const [busyId, setBusyId] = useState(null);
   const [pesan, setPesan] = useState(null); // { tingkat, text }
+  // Pencabutan yang belum beres (dari kolom jejak di baris permintaan).
+  const [pencabutan, setPencabutan] = useState({ baris: [], error: null });
+  const [busyCabut, setBusyCabut] = useState(null);
 
   /** Muat ulang seluruh daftar (semua status; penyaringan terjadi di layar). */
   async function muat() {
@@ -97,6 +105,7 @@ export default function AccountDeletionAdminTab() {
     setRequests(res.requests || []);
     if (res.janjiHari) setJanjiHari(res.janjiHari);
     if (res.rencana) setRencana(res.rencana);
+    setPencabutan(res.pencabutan || { baris: [], error: null });
   }
 
   // Muat pertama: pola yang sama dengan tab antrian lain — IIFE async dengan
@@ -115,6 +124,7 @@ export default function AccountDeletionAdminTab() {
         setRequests(res.requests || []);
         if (res.janjiHari) setJanjiHari(res.janjiHari);
         if (res.rencana) setRencana(res.rencana);
+        setPencabutan(res.pencabutan || { baris: [], error: null });
       }
       setLoading(false);
     })();
@@ -157,6 +167,32 @@ export default function AccountDeletionAdminTab() {
     setOpenId(null);
     setKetik((prev) => ({ ...prev, [r.id]: "" }));
     setCatatan((prev) => ({ ...prev, [r.id]: "" }));
+    await muat();
+  }
+
+  /** Cabut ULANG akses sebuah permintaan yang pencabutannya belum beres. */
+  async function cabutUlang(p) {
+    setBusyCabut(p.id);
+    setPesan(null);
+    const res = await retryAccountRevocationAdmin(p.id);
+    setBusyCabut(null);
+
+    if (res.error) {
+      setPesan({ tingkat: "gagal", text: res.error });
+      return;
+    }
+
+    const rincian = [];
+    if (!res.akunAda) rincian.push("akun sudah tidak ada");
+    rincian.push(res.aksesDicabut ? "akses masuk dicabut" : `akses masuk GAGAL — ${res.galatAkses || "?"}`);
+    if (res.sesiDicabut) rincian.push(`sesi diputus (identitas dilepas: ${res.identitasDilepas})`);
+    else rincian.push(`sesi GAGAL diputus — ${res.galatPemutusan || "?"}`);
+    if (!res.jejakDicatat) rincian.push(`jejak gagal dicatat — ${res.galatJejak || "?"}`);
+
+    setPesan({
+      tingkat: res.aksesDicabut && res.sesiDicabut ? "sukses" : "bahaya",
+      text: `Pencabutan ulang: ${rincian.join(" · ")}`,
+    });
     await muat();
   }
 
@@ -205,14 +241,18 @@ export default function AccountDeletionAdminTab() {
           className={`card text-sm ${
             pesan.tingkat === "bahaya" || pesan.tingkat === "gagal"
               ? "text-coral !border-coral"
-              : pesan.tingkat === "sukses"
-                ? "text-mint"
-                : "text-ink-soft"
+              : pesan.tingkat === "perhatian"
+                ? "text-amber !border-amber"
+                : pesan.tingkat === "sukses"
+                  ? "text-mint"
+                  : "text-ink-soft"
           }`}
         >
           <p className="flex items-start gap-1.5">
             {pesan.tingkat === "bahaya" || pesan.tingkat === "gagal" ? (
               <ShieldAlert size={15} className="mt-0.5 shrink-0" />
+            ) : pesan.tingkat === "perhatian" ? (
+              <AlertTriangle size={15} className="mt-0.5 shrink-0" />
             ) : pesan.tingkat === "sukses" ? (
               <Check size={15} className="mt-0.5 shrink-0" />
             ) : (
@@ -220,6 +260,76 @@ export default function AccountDeletionAdminTab() {
             )}
             <span>{pesan.text}</span>
           </p>
+        </div>
+      )}
+
+      {/*
+        Pencabutan yang belum beres. Ditempatkan paling atas — di atas filter —
+        karena inilah satu-satunya bagian yang menuntut tindakan, bukan sekadar
+        daftar: permintaan yang sudah 'selesai' tetapi akunnya masih bisa masuk.
+      */}
+      {pencabutan.baris.length > 0 && (
+        <div className="card !p-4 !border-coral space-y-3">
+          <div className="flex items-start gap-2">
+            <ShieldAlert size={16} className="text-coral mt-0.5 shrink-0" />
+            <div>
+              <p className="text-sm font-bold text-coral">
+                Pencabutan akses belum beres ({pencabutan.baris.length})
+              </p>
+              <p className="text-xs text-ink-soft mt-0.5">
+                Datanya sudah dianonimkan dan permintaannya sudah ditutup, tetapi akses masuk atau sesi
+                pengguna itu belum terputus — akun seperti ini masih bisa dipakai masuk. Cabut ulang hanya
+                menyentuh pencabutannya; data yang sudah dianonimkan tidak diubah lagi.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {pencabutan.baris.map((p) => (
+              <div key={p.id} className="rounded-xl border border-line px-3 py-2">
+                <div className="flex items-start justify-between gap-2 flex-wrap">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-navy break-all">{p.email}</p>
+                    <p className="text-xs text-ink-soft mt-0.5">
+                      {p.kelas === "belum_dicatat"
+                        ? "tanpa catatan pencabutan"
+                        : p.kelas === "akses_gagal"
+                          ? "akses masuk gagal dicabut"
+                          : p.kelas === "sesi_gagal"
+                            ? "sesi belum diputus"
+                            : p.kelas}
+                      {p.decidedAt ? ` · selesai ${waktuSingkat(p.decidedAt)}` : ""}
+                    </p>
+                    {p.pesan && <p className="text-xs text-ink mt-1">{p.pesan}</p>}
+                    {p.catatan && <p className="text-xs text-coral mt-1">{p.catatan}</p>}
+                  </div>
+                  <button
+                    onClick={() => cabutUlang(p)}
+                    disabled={busyCabut === p.id}
+                    className="btn-outline !py-2 !px-3 text-xs flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                  >
+                    {busyCabut === p.id ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <ShieldAlert size={13} />
+                    )}
+                    Cabut ulang
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] text-ink-soft">
+            Versi terminal (bisa dijalankan kapan pun): npm run hapus-akun -- --belum-dicabut
+          </p>
+        </div>
+      )}
+
+      {pencabutan.error && (
+        <div className="card text-xs text-amber space-y-1">
+          <p className="font-semibold flex items-center gap-1.5">
+            <AlertTriangle size={14} /> Daftar pencabutan belum bisa dibaca
+          </p>
+          <p>{pencabutan.error}</p>
         </div>
       )}
 

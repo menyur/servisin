@@ -28,6 +28,19 @@ export default function LoginPage({ searchParams }) {
         <h1 className="font-display text-2xl text-navy mb-1.5 text-center">Masuk ke Fixify</h1>
         <p className="text-sm text-ink-soft mb-6 text-center">Belum punya akun? <Link href="/register" className="text-brand font-semibold">Daftar di sini</Link></p>
 
+        {/* Dikirim oleh middleware (src/lib/supabase/middleware.js) ketika sesi
+            lama ditolak karena akunnya tidak punya baris profil. Tanpa penjelasan
+            ini, pengguna hanya melihat dirinya terlempar ke halaman masuk. */}
+        {params?.alasan === "profil-tidak-ada" && (
+          <div className="rounded-xl bg-amber-tint border border-amber/40 px-3 py-2 text-xs text-amber mb-6">
+            <p className="font-semibold">Akunmu belum punya data profil</p>
+            <p className="mt-1">
+              Karena itu peran dan datamu tidak bisa dibaca. Hubungi admin agar profilnya dipulihkan, lalu
+              masuk lagi dengan akun yang sama.
+            </p>
+          </div>
+        )}
+
         <form action={formAction} className="space-y-4">
           {nextHidden && <input type="hidden" name="next" value={nextHidden} />}
           <div>

@@ -6,10 +6,13 @@ menjalankannya.
 
 Berkas terkait: [privasi](https://fixify.id/privasi) ·
 [migrate-account-deletion.sql](../supabase/migrate-account-deletion.sql) ·
+[migrate-account-revocation.sql](../supabase/migrate-account-revocation.sql) ·
 [src/lib/account-deletion.js](../src/lib/account-deletion.js) ·
 [scripts/hapus-akun.mjs](../scripts/hapus-akun.mjs) ·
 [scripts/verify-account-deletion.mjs](../scripts/verify-account-deletion.mjs) ·
-[go-live-checklist.md](./go-live-checklist.md) · [history-retention.md](./history-retention.md)
+[scripts/verify-account-security.mjs](../scripts/verify-account-security.mjs) ·
+[go-live-checklist.md](./go-live-checklist.md) · [history-retention.md](./history-retention.md) ·
+[security.md](./security.md) §8 (siklus hidup akun)
 
 ---
 
@@ -81,6 +84,15 @@ konfirmasi — jadi jangan diubah tanpa memperbarui keduanya.
   `ON DELETE CASCADE`, jadi menghapus baris auth **menghapus seluruh riwayat
   pesanan** pengguna itu. Penghapusan karena itu = anonimkan + cabut akses, bukan
   `delete from auth.users`.
+
+**Satu hal yang sengaja TIDAK hilang: alamat asli di jejak permintaan.**
+`account_deletion_requests.email` berisi snapshot alamat saat permintaan dibuat
+(baris profilnya sudah dianonimkan). Isinya dipakai satu-satunya hal berikut —
+jika surel itu mendaftar lagi, pendaftarannya **diberi tanda untuk admin**
+(`profiles.bekas_akun_terhapus_at`, jendela 90 hari): bukan penolakan, dan
+pendaftar tidak diberi tahu sesuatu yang berbeda. Alasannya ada di
+[docs/security.md](./security.md) §8.4 — tanpa tanda ini "hapus akun lalu daftar
+ulang" menjadi cara mereset riwayat penilaian dari pandangan operator.
 
 ---
 
@@ -230,6 +242,40 @@ dijaga `npm run verify:rpc-grants`. **Jalankan ulang `supabase/migrate-account-d
 database; tanpa itu `npm run verify:hapus-akun` tetap gagal di dua uji anon.
 Kalau kelak menambah fungsi baru di jalur ini, ulangi pola yang sama.
 
+### Pencabutan akses: DUA lapis — dan kalau gagal, jejaknya tertinggal
+
+Satu langkah pencabutan tidak cukup, dan itu ditemukan dari keluhan nyata
+("akun sudah dihapus, kok masih bisa masuk"). Lihat [security.md §8](./security.md):
+
+1. **Jalur masuk** — surel auth diganti tombstone (`dihapus+…@fixify.invalid`) +
+   akun di-ban ~100 tahun. Ini menolak masuk DAN menolak refresh token.
+2. **Sesi & identitas** — access token yang sudah terbit tetap sah sampai
+   kedaluwarsa (bawaan Supabase 1 jam), dan tautan identitas Google tidak
+   dilepas oleh penggantian surel. Keduanya ditutup
+   `public.cabut_akses_pengguna(uuid)` (service role saja) dari
+   [migrate-account-revocation.sql](../supabase/migrate-account-revocation.sql):
+   baris `auth.sessions` dihapus (token refresh ikut mati) dan identitas
+   provider non-surel dilepas.
+
+Hasil kedua lapis itu **dicatat di baris permintaan** (`akses_dicabut`,
+`sesi_dicabut`, `dicabut_pada`, `catatan_pencabutan`). Sebelum ini, kegagalan
+pencabutan hanya terlihat sekali di layar admin saat itu juga, sementara
+permintaannya sudah ditutup `'selesai'` — tidak ada lagi yang menunggu diperiksa.
+
+Kalau ada yang belum beres:
+
+```bash
+npm run hapus-akun -- --belum-dicabut        # daftar + perintah perbaikannya
+npm run hapus-akun -- --cabut=<id> --ya      # cabut ulang (data dianonimkan TIDAK disentuh)
+npm run verify:akun-aman                     # periksa keadaan akunnya, bukan hanya kolomnya
+```
+
+Panel admin juga menampilkan daftarnya di tab **Hapus Akun** (paling atas) dengan
+tombol **Cabut ulang**; alat terminalnya tetap ada untuk dipakai kapan pun tanpa
+membuka panel. Batas yang jujur diingat: JWT yang SUDAH terbit tetap sah sampai
+`exp` — pemutusan seketika menuntut pemeriksaan `session_id` di sisi server untuk
+operasi sensitif.
+
 ---
 
 ## 8. Pemetaan ke Google Play
@@ -254,7 +300,9 @@ terlihat, dan sisa harinya terlihat di tiap baris.
 
 ```
 supabase/migrate-account-deletion.sql     tabel + RPC + penjaga + trigger notifikasi admin
-src/lib/account-deletion.js              token, permintaan web, konfirmasi, eksekusi
+supabase/migrate-account-revocation.sql   jejak pencabutan + RPC cabut sesi/identitas
+src/lib/account-deletion.js              token, permintaan web, konfirmasi, eksekusi,
+                                         pencabutan (akses + sesi) & jejaknya
 src/lib/email-templates/account-deletion.js  3 surel (konfirmasi, pengingat, selesai)
 src/lib/email.js                         sendAccountDeletionConfirmEmail / DoneEmail / AdminAccountDeletionEmail
 src/lib/admin-email.js                   event antrean "account_deletion" (notifikasi admin)
@@ -266,7 +314,11 @@ src/components/AccountDeletionAdminTab.js  tab panel: tinjau + jalankan (ketik H
 src/app/actions/admin.js                 getAccountDeletionRequestsAdmin / executeAccountDeletionAdmin
 flutter_app/lib/account_deletion.dart    model & aturan tampilan aplikasi
 flutter_app/lib/api.dart                 myAccountDeletion / requestAccountDeletion / cancelAccountDeletion
-scripts/hapus-akun.mjs                   alat operasional (daftar · rencana · eksekusi)
+scripts/hapus-akun.mjs                   alat operasional (daftar · rencana · eksekusi ·
+                                         --belum-dicabut · --cabut=<id>)
+scripts/hapus-akun-uji.mjs               buang akun UJI bertarget (dry-run bawaan); menolak
+                                         akun ber-KTP / berjejak / admin
 scripts/verify-account-deletion.mjs      probe live + selftest offline
+scripts/verify-account-security.mjs      probe siklus hidup akun (baca saja) + selftest
 scripts/lib/fake-supabase.mjs            klien tiruan untuk selftest
 ```

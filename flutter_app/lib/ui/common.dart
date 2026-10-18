@@ -886,6 +886,15 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// indeks tab Laporan bergantung pada peran.
   bool _peranTerbaca = false;
 
+  /// Sesi ada, tetapi baris `profiles`-nya TIDAK ada.
+  ///
+  /// Ini bukan "profil lengkap" dan bukan pula "gagal memuat": tanpa baris
+  /// profil, peran terbaca kosong, sapaan Beranda jatuh ke "Kawan", dan
+  /// permintaan hapus akun ditolak DB ('profil_tidak_ada'). Jadi shell
+  /// menampilkan layar penjelasan, bukan aplikasi yang tampak normal.
+  /// (docs/security.md §8.3)
+  bool _sesiTanpaProfil = false;
+
   /// Ketukan notifikasi yang sudah diterapkan shell INI. Mencegah listener
   /// yang sama menerapkannya berulang, tanpa menghalangi shell baru.
   NotificationTap? _notificationTapTerpakai;
@@ -992,7 +1001,16 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   Future<void> _detectRole() async {
     try {
       final p = await Api.myProfile();
-      if (!mounted || p == null) return;
+      if (!mounted) return;
+      if (p == null) {
+        // null = baris profilnya memang tidak ada (bukan kegagalan jaringan:
+        // yang itu masuk ke catch di bawah). Yang dijaga di sini adalah SESI:
+        // tanpa sesi (mis. shell dibuka karena kesalahan alur) tidak ada
+        // identitas yang hilang, jadi halaman dibiarkan seperti biasa.
+        if (Api.session == null) return;
+        if (!_sesiTanpaProfil) setState(() => _sesiTanpaProfil = true);
+        return;
+      }
       _myProfile = p;
       final kurang = dataProfilKurang(p);
       profilPerluDilengkapi.value = kurang.isNotEmpty;
@@ -1263,6 +1281,10 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // Sesi tanpa profil = sesi tidak sah. Ditampilkan sebagai layar penjelasan
+    // (bukan Beranda yang menyapa "Kawan") supaya pengguna tahu harus apa, dan
+    // supaya tidak ada pekerjaan/pesanan yang dibuat atas nama identitas kosong.
+    if (_sesiTanpaProfil) return const _SesiTanpaProfilScreen();
     return Scaffold(
       backgroundColor: AppColors.paper,
       body: AnimatedSwitcher(
@@ -1293,6 +1315,77 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         currentIndex: _index,
         onTabSelected: _select,
         isTechnician: _isTechnician,
+      ),
+    );
+  }
+}
+
+/// Layar untuk sesi yang TIDAK punya baris `profiles` (lihat
+/// `_MainShellState._sesiTanpaProfil`).
+///
+/// Sengaja TIDAK memuat tab: seluruh layar aplikasi mengasumsikan peran dari
+/// profil (teknisi vs pelanggan), jadi menampilkannya hanya menyembunyikan
+/// masalah. Tombolnya mengeluarkan pengguna — masuk ulang baru berguna setelah
+/// admin memulihkan baris profilnya (trigger handle_new_user / fix-profil-hilang.sql).
+class _SesiTanpaProfilScreen extends StatelessWidget {
+  const _SesiTanpaProfilScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.paper,
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.person_off_outlined, size: 46, color: AppColors.inkSoft),
+                const SizedBox(height: 14),
+                const Text(
+                  'Akunmu belum punya data profil',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 17),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Karena itu peran dan datamu tidak bisa dibaca, sehingga aplikasi '
+                  'belum bisa dipakai (termasuk mengajukan hapus akun). Hubungi admin '
+                  'lewat halaman Panduan, lalu masuk kembali setelah akunmu diperbaiki.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.inkSoft, fontSize: 13, height: 1.5),
+                ),
+                const SizedBox(height: 18),
+                // FilledButton bawaan tema — sengaja bukan GradientButton milik
+                // layar auth: itu ada di auth_widgets.dart, dan menariknya ke
+                // sini hanya untuk satu tombol menambah ketergantungan antar layar.
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.brand,
+                    minimumSize: const Size(200, 50),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                  icon: const Icon(Icons.logout_rounded, size: 19),
+                  label: const Text('Keluar',
+                      style: TextStyle(fontWeight: FontWeight.w800)),
+                  onPressed: () async {
+                    try {
+                      await Api.signOut();
+                    } catch (_) {
+                      // sudah tidak ada sesi / jaringan bermasalah — tetap lanjut
+                    }
+                    if (!context.mounted) return;
+                    Navigator.of(context)
+                        .pushNamedAndRemoveUntil('/login', (r) => false);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

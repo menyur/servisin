@@ -92,6 +92,10 @@ begin
       ('ensure_bucket(text, boolean)', 'service_role'),
       -- Menjalankan penghapusan akun: panel admin & `npm run hapus-akun`.
       ('eksekusi_hapus_akun(uuid, text)', 'service_role'),
+      -- Mencabut sesi & melepas identitas provider akun yang dihapus
+      -- (migrate-account-revocation.sql). HANYA server: memanggilnya berarti
+      -- mengeluarkan orang itu dari semua perangkatnya — bukan aksi klien.
+      ('cabut_akses_pengguna(uuid)', 'service_role'),
 
       -- ===== RPC untuk PENGGUNA yang sudah masuk (aplikasi & halaman web) =====
       ('available_jobs()', 'authenticated, service_role'),

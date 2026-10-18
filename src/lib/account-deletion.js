@@ -25,6 +25,16 @@
  *   justru disimpan. Jadi penghapusan = anonimkan identitas + hapus konten
  *   pribadi + cabut akses masuk (surel auth diganti tombstone & akun di-banned).
  *
+ * KENAPA PENCABUTANNYA BUTUH DUA LANGKAH (`cabutAksesPengguna`)
+ *   Ban menolak MASUK dan REFRESH, tetapi access token yang sudah terbit tetap
+ *   sah sampai kedaluwarsa — dan surel tombstone tidak melepas tautan identitas
+ *   Google. Jadi akun "yang sudah dihapus" masih bisa dipakai (paling lama
+ *   sampai token kedaluwarsa) atau hidup lagi lewat "Masuk dengan Google" bila
+ *   pencabutannya pernah gagal. Karena itu sesi & identitas provider diputus
+ *   lewat RPC service-role (supabase/migrate-account-revocation.sql), dan
+ *   HASILNYA DITULIS ke baris permintaan supaya kegagalan separuh jalan bisa
+ *   diperiksa dan diulang — bukan dilaporkan sekali lalu hilang.
+ *
  * Modul ini sengaja ditulis TANPA alias `@/…` supaya bisa diimpor skrip
  * `verify:*`/alat operasional yang berjalan di Node polos (tanpa bundler Next).
  */
@@ -43,6 +53,12 @@ export const JANJI_HARI = 7;
 /** Bucket & penanda URL untuk mengambil path berkas pribadi yang harus dibuang. */
 const BUCKET_KTP = "ktp-documents";
 const BUCKET_AVATAR = "profile-media";
+
+/** Durasi ban akun yang sudah dihapus (~100 tahun: permanen secara praktis). */
+export const BAN_DURASI = "876000h";
+
+/** Domain surel tombstone (RFC 2606 — sengaja tidak bisa menerima surel). */
+const DOMAIN_TOMBSTONE = "@fixify.invalid";
 
 /** Riwayat jeda per alamat (email → ms permintaan web terakhir DITERIMA). */
 const riwayat = new Map();
@@ -377,6 +393,262 @@ export async function daftarPermintaanHapus({ admin, status = "diminta", limit =
  * — jangan pernah menutupi kegagalan ini, karena berarti akun masih bisa dipakai
  * masuk padahal datanya sudah dianonimkan.
  */
+/**
+ * Nama surel tombstone untuk sebuah akun — deterministik, jadi bisa dipakai
+ * jalur pencabutan ULANG yang tidak memegang nilai balikan SQL. Murni.
+ * Bentuknya harus sama dengan `v_tombstone` di migrate-account-deletion.sql.
+ */
+export function tombstoneUntuk(userId) {
+  const bersih = String(userId ?? "").replace(/-/g, "").slice(0, 12);
+  if (bersih.length !== 12) return null;
+  return `dihapus+${bersih}${DOMAIN_TOMBSTONE}`;
+}
+
+/**
+ * Lepaskan sesi yang sedang berjalan & identitas provider NON-surel.
+ *
+ * Kenapa lewat RPC: menghapus baris `auth.sessions`/`auth.identities` hanya bisa
+ * lewat SQL (skema `auth` tidak diekspos PostgREST), dan `auth.admin.signOut()`
+ * bukan penggantinya karena parameternya JWT sesi pengguna — bukan user id.
+ * Tidak pernah melempar; kegagalannya dilaporkan apa adanya.
+ *
+ * @returns {Promise<{ok:boolean, sesi?:number, identitas?:number, error?:string, perluMigrasi?:boolean}>}
+ */
+export async function cabutSesiDanIdentitas({ userId, admin } = {}) {
+  if (!userId) return { ok: false, error: "pengguna_kosong" };
+  let klien = admin;
+  try {
+    klien = klien || createAdminClient();
+  } catch (err) {
+    return { ok: false, error: err?.message ?? "env" };
+  }
+
+  try {
+    const { data, error } = await klien.rpc("cabut_akses_pengguna", { p_user: userId });
+    if (error) {
+      const migrasi = /does not exist|schema cache|could not find the function|permission denied/i.test(
+        error.message || ""
+      );
+      return { ok: false, error: error.message, perluMigrasi: migrasi };
+    }
+    if (!data?.ok) return { ok: false, error: data?.error || "gagal" };
+    return { ok: true, sesi: data.sesi ?? 0, identitas: data.identitas ?? 0 };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? "gagal" };
+  }
+}
+
+/**
+ * Cabut SEMUA jalan masuk sebuah akun: (a) jalur masuk ditutup dengan surel
+ * tombstone + ban, (b) sesi berjalan & identitas provider diputus.
+ *
+ * Dipakai jalur eksekusi MAUPUN pencabutan ulang supaya keduanya tidak pernah
+ * berbeda perlakukan. Tidak pernah melempar.
+ */
+export async function cabutAksesPengguna({ userId, tombstone = null, akunAda = true, admin } = {}) {
+  const klien = admin || createAdminClient();
+
+  let aksesDicabut = false;
+  let galatAkses = null;
+  if (!akunAda) {
+    // Akunnya sudah tidak ada (mis. dihapus langsung di dashboard): tidak ada
+    // yang perlu dicabut, dan itu bukan kegagalan.
+    aksesDicabut = true;
+  } else {
+    try {
+      const { error } = await klien.auth.admin.updateUserById(userId, {
+        email: tombstone || tombstoneUntuk(userId),
+        // `email_confirm: true` mencegah GoTrue menuntut verifikasi ke alamat
+        // tombstone yang memang tidak bisa menerima surat.
+        email_confirm: true,
+        ban_duration: BAN_DURASI,
+      });
+      if (error) galatAkses = error.message;
+      else aksesDicabut = true;
+    } catch (err) {
+      galatAkses = err?.message ?? "gagal";
+    }
+  }
+
+  // Dipanggil walau ban gagal: memutuskan sesi tetap berguna justru saat jalur
+  // masuk belum berhasil ditutup.
+  const sesi = akunAda ? await cabutSesiDanIdentitas({ userId, admin: klien }) : { ok: true, sesi: 0, identitas: 0 };
+
+  return {
+    aksesDicabut,
+    galatAkses,
+    sesiDicabut: sesi.ok === true,
+    identitasDilepas: sesi.ok ? sesi.identitas ?? 0 : null,
+    galatPemutusan: sesi.ok ? null : sesi.error ?? "gagal",
+    perluMigrasi: Boolean(sesi.perluMigrasi),
+  };
+}
+
+/**
+ * Tulis jejak pencabutan ke baris permintaan.
+ *
+ * `dicabut_pada` diisi HANYA bila keduanya berhasil — kolom itu berarti
+ * "selesai dicabut", bukan "pernah dicoba".
+ */
+export async function catatPencabutan({
+  requestId,
+  aksesDicabut,
+  sesiDicabut,
+  catatan = null,
+  admin,
+  sekarangMs = Date.now(),
+} = {}) {
+  if (!requestId) return { ok: false, error: "permintaan_kosong" };
+  let klien = admin;
+  try {
+    klien = klien || createAdminClient();
+  } catch (err) {
+    return { ok: false, error: err?.message ?? "env" };
+  }
+
+  const sukses = Boolean(aksesDicabut && sesiDicabut);
+  const { error } = await klien
+    .from("account_deletion_requests")
+    .update({
+      akses_dicabut: Boolean(aksesDicabut),
+      sesi_dicabut: Boolean(sesiDicabut),
+      dicabut_pada: sukses ? new Date(sekarangMs).toISOString() : null,
+      catatan_pencabutan: String(catatan ?? "").trim() || null,
+      updated_at: new Date(sekarangMs).toISOString(),
+    })
+    .eq("id", requestId);
+
+  if (error) {
+    return {
+      ok: false,
+      error: error.message,
+      perluMigrasi: /does not exist|schema cache|find the column|column .* does not exist/i.test(error.message || ""),
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Kelas keadaan pencabutan satu baris permintaan. Murni (tanpa database) supaya
+ * panel, alat operasional, dan probe memakai penilaian yang sama persis.
+ *
+ * "Tidak ada catatan" SENGAJA dibedakan dari "aman": permintaan yang dijalankan
+ * sebelum kolom jejaknya ada tidak bisa dianggap beres hanya karena tidak ada
+ * galat yang tercatat.
+ */
+export function kelasPencabutan(baris = {}) {
+  if (baris.status && baris.status !== "selesai") return "bukan_selesai";
+  if (baris.user_id === null) return "tiada_akun"; // tidak ada yang perlu dicabut
+  if (baris.akses_dicabut === false) return "akses_gagal";
+  if (baris.akses_dicabut == null) return "belum_dicatat";
+  if (baris.sesi_dicabut !== true) return "sesi_gagal";
+  return "aman";
+}
+
+/** Kalimat untuk tiap kelas pencabutan; null bila tidak ada yang perlu dikatakan. */
+export const PESAN_PENCABUTAN = {
+  belum_dicatat: "Tidak ada catatan pencabutan — permintaan ini dijalankan sebelum jejaknya dicatat; periksa keadaan akunnya.",
+  akses_gagal: "Akses masuk TIDAK tercabut — akun ini masih bisa masuk dengan surel & kata sandi lamanya.",
+  sesi_gagal: "Akses masuk sudah dicabut, tetapi sesi yang sedang berjalan belum diputus (berlaku paling lama sampai access token-nya kedaluwarsa).",
+};
+
+export function pesanPencabutan(kode) {
+  return PESAN_PENCABUTAN[kode] || null;
+}
+
+/**
+ * Permintaan 'selesai' yang pencabutannya belum tercatat atau gagal sebagian.
+ * Melempar galat yang jelas bila migrasi jejak pencabutan belum dijalankan.
+ */
+export async function daftarPencabutanGagal({ admin, limit = 200 } = {}) {
+  const klien = admin || createAdminClient();
+  const { data, error } = await klien
+    .from("account_deletion_requests")
+    .select(
+      "id, user_id, email, sumber, status, decided_at, akses_dicabut, sesi_dicabut, dicabut_pada, catatan_pencabutan"
+    )
+    .eq("status", "selesai")
+    .order("decided_at", { ascending: true })
+    .limit(limit);
+
+  if (error) {
+    const migrasi = /does not exist|schema cache|column .* does not exist|find the column/i.test(error.message || "");
+    const err = new Error(
+      migrasi
+        ? "Migrasi jejak pencabutan belum dijalankan: supabase/migrate-account-revocation.sql"
+        : error.message
+    );
+    err.perluMigrasi = migrasi;
+    throw err;
+  }
+
+  return (data ?? []).filter((r) => !["aman", "tiada_akun", "bukan_selesai"].includes(kelasPencabutan(r)));
+}
+
+/**
+ * CABUT ULANG akses sebuah permintaan yang sudah 'selesai'.
+ *
+ * Hanya menyentuh pencabutan (surel tombstone + ban + sesi/identitas) — data
+ * yang sudah dianonimkan TIDAK diubah lagi, jadi aman dijalankan berkali-kali.
+ */
+export async function cobaUlangPencabutan({ requestId, admin } = {}) {
+  const klien = admin || createAdminClient();
+
+  const { data: baris, error } = await klien
+    .from("account_deletion_requests")
+    .select("id, user_id, email, status")
+    .eq("id", requestId)
+    .maybeSingle();
+
+  if (error) return { ok: false, error: error.message };
+  if (!baris) return { ok: false, error: "permintaan_tidak_ada" };
+  if (baris.status !== "selesai") {
+    return { ok: false, error: "status_bukan_selesai", status: baris.status };
+  }
+  if (!baris.user_id) return { ok: false, error: "permintaan_tanpa_akun" };
+
+  // Akunnya mungkin sudah tidak ada (dihapus langsung di dashboard) — itu bukan
+  // kegagalan, tetapi harus dibedakan di laporan.
+  let akunAda = true;
+  try {
+    const { data: detail } = await klien.auth.admin.getUserById(baris.user_id);
+    akunAda = Boolean(detail?.user);
+  } catch {
+    akunAda = true; // ragu = perlakukan sebagai ada, supaya pencabutannya dicoba
+  }
+
+  const hasil = await cabutAksesPengguna({
+    userId: baris.user_id,
+    tombstone: tombstoneUntuk(baris.user_id),
+    akunAda,
+    admin: klien,
+  });
+
+  const jejak = await catatPencabutan({
+    requestId: baris.id,
+    aksesDicabut: hasil.aksesDicabut,
+    sesiDicabut: hasil.sesiDicabut,
+    catatan: [
+      hasil.galatAkses && `akses masuk: ${hasil.galatAkses}`,
+      hasil.galatPemutusan && `sesi/identitas: ${hasil.galatPemutusan}`,
+      !akunAda && "akun sudah tidak ada — tidak ada yang perlu dicabut",
+    ]
+      .filter(Boolean)
+      .join(" · ") || null,
+    admin: klien,
+  });
+
+  return {
+    ok: true,
+    requestId: baris.id,
+    userId: baris.user_id,
+    akunAda,
+    ...hasil,
+    jejakDicatat: jejak.ok,
+    galatJejak: jejak.error ?? null,
+  };
+}
+
 export async function eksekusiHapusAkun({ requestId, catatan = null, admin, kirimEmail = sendAccountDeletionDoneEmail } = {}) {
   const klien = admin || createAdminClient();
 
@@ -392,23 +664,32 @@ export async function eksekusiHapusAkun({ requestId, catatan = null, admin, kiri
   const surelAsli = hasil.surel_asli || null;
   const tombstone = hasil.tombstone;
 
-  // (1) Cabut akses masuk: alamat auth diganti tombstone (identitas surel hilang
-  //     dari auth.users) dan akun di-banned supaya kata sandi lama tidak bisa
-  //     dipakai lagi. `email_confirm: true` mencegah GoTrue menuntut verifikasi
-  //     ke alamat tombstone yang memang tidak bisa menerima surat.
-  let aksesDicabut = false;
-  let galatAkses = null;
-  try {
-    const { error: errAkses } = await klien.auth.admin.updateUserById(userId, {
-      email: tombstone,
-      email_confirm: true,
-      ban_duration: "876000h", // ~100 tahun: permanen secara praktis
-    });
-    if (errAkses) galatAkses = errAkses.message;
-    else aksesDicabut = true;
-  } catch (err) {
-    galatAkses = err?.message;
-  }
+  // (1) Cabut akses masuk DAN putuskan sesi yang sudah terbit.
+  //
+  //     `aksesDicabut` menutup JALUR MASUK (surel tombstone + ban), tetapi ia
+  //     TIDAK mematikan sesi yang sedang berjalan: access token yang sudah
+  //     terbit tetap sah sampai kedaluwarsa, dan tautan identitas Google tetap
+  //     menunjuk user yang sama. Keduanya ditutup `cabutAksesPengguna`.
+  const cabut = await cabutAksesPengguna({ userId, tombstone, admin: klien });
+  const { aksesDicabut, galatAkses, sesiDicabut, identitasDilepas, galatPemutusan } = cabut;
+
+  // (1b) Jejaknya ditulis ke baris permintaan. Tanpa ini, kegagalan pencabutan
+  //      hanya terlihat sekali di layar admin saat itu juga — padahal
+  //      permintaannya sudah ditutup 'selesai', jadi tidak ada lagi yang
+  //      menunggu diperiksa (dan akunnya tetap bisa masuk dengan sandi lama).
+  const jejak = await catatPencabutan({
+    requestId,
+    aksesDicabut,
+    sesiDicabut,
+    catatan:
+      [
+        galatAkses && `akses masuk: ${galatAkses}`,
+        galatPemutusan && `sesi/identitas: ${galatPemutusan}`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null,
+    admin: klien,
+  });
 
   // (2) Berkas pribadi (KTP & foto profil) — best-effort, dilaporkan apa adanya.
   const berkasDihapus = [];
@@ -445,6 +726,12 @@ export async function eksekusiHapusAkun({ requestId, catatan = null, admin, kiri
     userId,
     aksesDicabut,
     galatAkses,
+    sesiDicabut,
+    identitasDilepas,
+    galatPemutusan,
+    jejakDicatat: jejak.ok,
+    galatJejak: jejak.error ?? null,
+    perluMigrasiPencabutan: Boolean(cabut.perluMigrasi || jejak.perluMigrasi),
     berkasDihapus,
     terhapus: hasil.terhapus ?? {},
     surel,
@@ -577,12 +864,34 @@ export function ringkasEksekusi(hasil = {}) {
       tingkat: "bahaya",
       pesan:
         "Data sudah dianonimkan, TETAPI akses masuk belum berhasil dicabut — akun masih bisa " +
-        `dipakai masuk. Ban akun itu sekarang di Supabase → Authentication. (${hasil.galatAkses || "sebab tidak diketahui"})`,
+        `dipakai masuk. Coba ulang sekarang: npm run hapus-akun -- --cabut=<id> --ya, atau ban ` +
+        `akunnya manual di Supabase → Authentication. (${hasil.galatAkses || "sebab tidak diketahui"})`,
+    };
+  }
+  // Akses masuk sudah ditutup, tetapi sesi/identitas belum: pengguna itu masih
+  // bisa memakai sesi lamanya paling lama sampai access token kedaluwarsa.
+  // Dibedakan dari "bahaya" karena jalur masuknya SUDAH tertutup, tetapi tetap
+  // tidak boleh lewat begitu saja. `undefined` (pemanggil lama) = tidak diperiksa.
+  if (hasil.sesiDicabut === false) {
+    return {
+      tingkat: "perhatian",
+      pesan:
+        "Penghapusan dijalankan dan akses masuk sudah dicabut, TETAPI sesi yang sedang berjalan " +
+        `belum diputus — sesi lama masih bisa dipakai sampai tokennya kedaluwarsa. ` +
+        `Coba ulang: npm run hapus-akun -- --belum-dicabut (${hasil.galatPemutusan || "sebab tidak diketahui"})`,
+    };
+  }
+  if (hasil.jejakDicatat === false) {
+    return {
+      tingkat: "perhatian",
+      pesan:
+        "Penghapusan dijalankan dan akses sudah dicabut, TETAPI jejaknya gagal dicatat — " +
+        `periksa kolom pencabutan (jalankan supabase/migrate-account-revocation.sql). (${hasil.galatJejak || "sebab tidak diketahui"})`,
     };
   }
   return {
     tingkat: "sukses",
-    pesan: "Penghapusan dijalankan dan akses masuk sudah dicabut.",
+    pesan: "Penghapusan dijalankan: akses masuk dicabut dan sesi yang berjalan sudah diputus.",
   };
 }
 
