@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { APP_FEE_MAKS } from "@/lib/pricing";
+import { APP_FEE_MAKS, formatRupiah } from "@/lib/pricing";
 import { bacaAppFeeRinci } from "@/lib/app-fee";
 import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail, sendTechnicianBalanceReminderEmail } from "@/lib/email";
@@ -1586,6 +1586,17 @@ export async function approveBalanceDepositAdmin(depositId) {
     .eq("status", "pending"); // guard race: hanya pending yang bisa disetujui
   if (upErr) return { error: upErr.message };
 
+  // Teknisi harus tahu setorannya diterima tanpa membuka aplikasi — saldo
+  // sudah bertambah di server, tetapi tanpa push ini satu-satunya jejaknya
+  // adalah angka yang berubah diam-diam.
+  await sendPushToUser(dep.technician_id, {
+    title: "Setoran saldo disetujui ✅",
+    event: "deposit_approved",
+    body: `Setoran ${formatRupiah(dep.amount)} sudah masuk ke saldo aktifmu.`,
+    url: "/technician",
+    tag: `deposit-${dep.id}`,
+  });
+
   revalidatePath("/admin");
   revalidatePath("/technician");
   return { ok: true, balance: res.balance };
@@ -1602,12 +1613,30 @@ export async function rejectBalanceDepositAdmin(depositId, reason) {
   const clean = (reason || "").trim();
   if (clean.length < 5) return { error: "Tulis alasan penolakan (minimal 5 karakter)." };
 
+  const { data: dep } = await supabase
+    .from("balance_deposits")
+    .select("id, technician_id, amount")
+    .eq("id", depositId)
+    .single();
+
   const { error } = await supabase
     .from("balance_deposits")
     .update({ status: "rejected", rejection_reason: clean, reviewed_at: new Date().toISOString() })
     .eq("id", depositId)
     .eq("status", "pending");
   if (error) return { error: error.message };
+
+  // Alasan penolakan dikirim sekalian: teknisi bisa langsung memperbaiki bukti
+  // dan mengirim ulang tanpa menebak apa yang salah.
+  if (dep?.technician_id) {
+    await sendPushToUser(dep.technician_id, {
+      title: "Setoran saldo ditolak ❌",
+      event: "deposit_rejected",
+      body: `Setoran ${formatRupiah(dep.amount)} ditolak: ${clean}`.slice(0, 180),
+      url: "/technician",
+      tag: `deposit-${dep.id}`,
+    });
+  }
 
   revalidatePath("/admin");
   return { ok: true };
@@ -1632,6 +1661,15 @@ export async function addTechnicianBalanceAdmin(technicianId, amount, note) {
     note?.trim() || "Ditambahkan manual oleh admin"
   );
   if (!res.ok) return { error: res.error };
+
+  await sendPushToUser(technicianId, {
+    title: "Saldo ditambahkan admin 💰",
+    event: "balance_credited",
+    body: `${formatRupiah(amt)} masuk ke saldo aktifmu${note?.trim() ? `: ${note.trim()}` : "."}`
+      .slice(0, 180),
+    url: "/technician",
+    tag: `balance-${technicianId}`,
+  });
 
   revalidatePath("/admin");
   revalidatePath("/technician");
@@ -1673,7 +1711,7 @@ export async function approveWithdrawalAdmin(withdrawalId) {
 
   const { data: wd } = await supabase
     .from("balance_withdrawals")
-    .select("id, status")
+    .select("id, status, technician_id, amount, bank_name, account_number")
     .eq("id", withdrawalId)
     .single();
   if (!wd) return { error: "Pengajuan tidak ditemukan." };
@@ -1685,6 +1723,14 @@ export async function approveWithdrawalAdmin(withdrawalId) {
     .eq("id", withdrawalId)
     .eq("status", "pending");
   if (error) return { error: error.message };
+
+  await sendPushToUser(wd.technician_id, {
+    title: "Penarikan saldo disetujui ✅",
+    event: "withdrawal_approved",
+    body: `Penarikan ${formatRupiah(wd.amount)} disetujui — dana ditransfer ke ${wd.bank_name || "rekening"} ${wd.account_number || ""}`.trim(),
+    url: "/technician",
+    tag: `withdrawal-${wd.id}`,
+  });
 
   revalidatePath("/admin");
   revalidatePath("/technician");
@@ -1748,6 +1794,16 @@ export async function rejectWithdrawalAdmin(withdrawalId, reason) {
     .eq("id", withdrawalId)
     .eq("status", "pending");
   if (error) return { error: error.message };
+
+  // Saldo sudah dikembalikan di server; kabari teknisi supaya ia tidak
+  // mengira penarikan masih menggantung atau dananya hilang.
+  await sendPushToUser(wd.technician_id, {
+    title: "Penarikan saldo ditolak ❌",
+    event: "withdrawal_rejected",
+    body: `Penarikan ${formatRupiah(wd.amount)} ditolak: ${clean}. Saldo sudah dikembalikan.`.slice(0, 190),
+    url: "/technician",
+    tag: `withdrawal-${wd.id}`,
+  });
 
   revalidatePath("/admin");
   revalidatePath("/technician");
@@ -3289,6 +3345,15 @@ export async function decideWarrantyClaimAdmin(claimId, decision, note = null, d
   if (!admin) return { error: "Akses ditolak." };
   if (!["approved", "rejected"].includes(decision)) return { error: "Keputusan tidak valid." };
 
+  // Dibaca SEBELUM RPC: setelah diputuskan, statusnya berubah dan pesanan
+  // kunjungan ulang bisa langsung tampil, tetapi data penerima notifikasi
+  // (pelanggan/teknisi) tetap perlu diketahui untuk mengabari mereka.
+  const { data: claim } = await supabase
+    .from("warranty_claims")
+    .select("id, customer_id, technician_id, booking:bookings!warranty_claims_booking_id_fkey(code, address, service_id, services(name))")
+    .eq("id", claimId)
+    .maybeSingle();
+
   const { data, error } = await supabase.rpc("decide_warranty_claim", {
     p_claim: claimId,
     p_status: decision,
@@ -3304,6 +3369,41 @@ export async function decideWarrantyClaimAdmin(claimId, decision, note = null, d
     return { error: error.message };
   }
   if (!data?.ok) return { error: data?.error || "Klaim gagal diputuskan." };
+
+  // Kabari pelanggan (dan teknisi bila kunjungan ulang ditugaskan). Sebelumnya
+  // keputusan klaim hanya mengubah daftar admin — pelanggan baru tahu setelah
+  // membuka aplikasi sendiri.
+  if (claim?.customer_id) {
+    await sendPushToUser(claim.customer_id, {
+      title: decision === "approved" ? "Klaim garansi disetujui ✅" : "Klaim garansi ditolak ❌",
+      event: "warranty_update",
+      body:
+        decision === "approved"
+          ? `Kunjungan ulang ${data.revisit_code || "garansi"} dijadwalkan ${data.revisit_date || ""} ${data.revisit_time || ""}.`.trim()
+          : `Klaim untuk pesanan ${claim.booking?.code || ""} ditolak${note?.trim() ? `: ${note.trim()}` : "."}`.trim(),
+      url: "/dashboard",
+      tag: `warranty-${claimId}`,
+    });
+  }
+
+  if (decision === "approved" && data.revisit_booking_id) {
+    if (claim?.technician_id) {
+      await sendPushToUser(claim.technician_id, {
+        title: "Kunjungan garansi baru 🛠️",
+        event: "technician_assigned",
+        body: `${data.revisit_code || "Kunjungan ulang"} — ${claim.booking?.services?.name || "Layanan"}, ${data.revisit_date || ""} ${data.revisit_time || ""}.`,
+        url: "/jobs",
+        tag: `assign-${data.revisit_booking_id}`,
+      });
+    } else if (claim?.booking) {
+      // Belum ada teknisi asal → kunjungan garansi masuk daftar pekerjaan
+      // tersedia; tanpa broadcast ini tidak ada yang tahu pesanan itu ada.
+      await sendNewJobPushToTechnicians(
+        { id: data.revisit_booking_id, code: data.revisit_code, address: claim.booking.address },
+        { serviceName: claim.booking.services?.name, serviceId: claim.booking.service_id }
+      );
+    }
+  }
 
   revalidatePath("/admin");
   return { ok: true, result: data };
