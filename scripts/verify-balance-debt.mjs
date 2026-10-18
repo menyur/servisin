@@ -324,7 +324,12 @@ check("layar setor mempratinjau pembagian setoran", depositUi.includes("_pratinj
 console.log("\nDokumen terkunci ikut diperbarui");
 const aturanDoc = readFileSync(join(root, "docs/balance-rule.md"), "utf8");
 check("dokumen aturan menunjuk migrasi pelunasan", aturanDoc.includes("migrate-piutang-recovery.sql"));
-check("aturan mengunci POTONGAN PENUH", /potongan = komisi \+ biaya aplikasi/.test(aturanDoc) && /PENUH/.test(aturanDoc));
+// Jarak putih di sekitar `=` ditoleransi: blok rumus dirapikan dengan spasi
+// sejajar, dan pemeriksaan ini tidak boleh merah hanya karena pemformatan.
+check(
+  "aturan mengunci POTONGAN PENUH",
+  /potongan\s*=\s*komisi \+ biaya aplikasi/.test(aturanDoc) && /PENUH/.test(aturanDoc)
+);
 check("aturan menjelaskan setoran menutup piutang lebih dulu", /tertua dulu|setoran menutup/i.test(aturanDoc));
 check("aturan menyebut piutang teknisi", /piutang/i.test(aturanDoc));
 check("aturan menunjuk berkas SQL yang berlaku", aturanDoc.includes("enforce-full-charge-balance.sql"));

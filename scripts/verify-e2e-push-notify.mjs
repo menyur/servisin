@@ -211,6 +211,11 @@ async function main() {
     process.env.VAPID_PRIVATE_KEY = vapid.privateKey;
     process.env.VAPID_SUBJECT = subject;
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"; // terima sertifikat self-signed server uji
+    // Akun uji memang TIDAK boleh dikirimi push sungguhan (gerbang kuota), tetapi
+    // probe ini membuktikan transport ke endpoint TIRUAN di localhost — bukan ke
+    // perangkat siapa pun. Gerbang yang sama di email dipakai untuk keperluan ini,
+    // jadi dinyalakan hanya selama proses probe ini hidup.
+    process.env.EMAIL_UJI_DIIZINKAN = "1";
 
     // Import SETELAH env diset: inilah broadcast asli yang dipanggil admin.
     const { sendNewJobPushToTechnicians } = await import("../src/lib/notify.js");

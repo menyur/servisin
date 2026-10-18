@@ -60,10 +60,11 @@ export function saringAlamatUji(to) {
  *
  * Hanya skrip diagnostik yang membutuhkannya: `verify:email-send` /
  * `verify:email-doctor` sengaja mengirim ke `delivered@resend.dev` (alamat uji
- * resmi Resend) untuk membuktikan jalur kirim produksi bekerja TANPA mengirimi
- * inbox siapa pun. Di produksi variabel ini tidak pernah diisi, jadi gerbangnya
- * selalu aktif. Nilai apa pun selain 1/true/ya/yes dianggap tidak diizinkan —
- * salah ketik tidak membuka gerbang.
+ * resmi Resend), dan `verify:e2e-push-notify` mengirim push ke endpoint TIRUAN di
+ * localhost, untuk membuktikan jalur kirim produksi bekerja TANPA menghubungi
+ * inbox atau perangkat siapa pun. Di produksi variabel ini tidak pernah diisi,
+ * jadi gerbangnya selalu aktif. Nilai apa pun selain 1/true/ya/yes dianggap tidak
+ * diizinkan — salah ketik tidak membuka gerbang.
  */
 export function alamatUjiDiizinkan() {
   return /^(1|true|ya|yes)$/i.test(String(process.env.EMAIL_UJI_DIIZINKAN ?? "").trim());

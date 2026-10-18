@@ -10,7 +10,7 @@
 import webpush from "web-push";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { selectJobTargets } from "./skill-match.js";
-import { alamatUji } from "./email-uji.js";
+import { alamatUji, alamatUjiDiizinkan } from "./email-uji.js";
 
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -110,7 +110,9 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
       // Dipasang di sini juga (bukan hanya di notify.js/worker) karena
       // src/app/actions/admin.js memanggil fungsi ini langsung.
       const profil = await getProfil(admin, userId);
-      if (alamatUji(profil?.email)) {
+      // `alamatUjiDiizinkan()` hanya menyala di skrip diagnostik yang mengirim ke
+      // endpoint TIRUAN (verify:e2e-push-notify); di produksi selalu mati.
+      if (!alamatUjiDiizinkan() && alamatUji(profil?.email)) {
         console.warn(`[push] dilewati — akun uji (${profil.email})`);
         return 0;
       }

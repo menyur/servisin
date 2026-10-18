@@ -12,7 +12,7 @@
  */
 import { sendPushToUser as sendWebPush, sendNewJobPushToTechnicians as webNewJobBroadcast } from "./push.js";
 import { sendFcmToUser, sendFcmToTechniciansNewJob } from "./fcm.js";
-import { akunUji } from "./email-uji.js";
+import { akunUji, alamatUjiDiizinkan } from "./email-uji.js";
 import { createAdminClient } from "./supabase/admin.js";
 
 /** Klien service role (bila env lengkap) — untuk gerbang akun uji. */
@@ -39,7 +39,9 @@ export async function sendPushToUser(userId, { url = "/dashboard", ...rest }) {
   // mudah lupa di satu jalur saja (worker, cron, tawaran pekerjaan, admin), jadi
   // gerbangnya di sini: satu tempat untuk web-push DAN FCM sekaligus.
   const uji = await akunUji(klien(), userId);
-  if (uji) {
+  // `alamatUjiDiizinkan()` hanya menyala di skrip diagnostik yang mengirim ke
+  // endpoint TIRUAN (verify:e2e-push-notify); di produksi selalu mati.
+  if (uji && !alamatUjiDiizinkan()) {
     console.warn(`[notify] push dilewati — akun uji (${uji})`);
     return { web: 0, fcm: 0, total: 0, skipped: "sumber-uji", email: uji };
   }

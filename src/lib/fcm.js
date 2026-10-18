@@ -25,7 +25,7 @@
  */
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { selectJobTargets } from "./skill-match.js";
-import { alamatUji } from "./email-uji.js";
+import { alamatUji, alamatUjiDiizinkan } from "./email-uji.js";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -190,7 +190,8 @@ export async function sendFcmToUser(userId, { title, body, route = "/orders", ta
   } catch {
     /* profil tak terbaca → tetap kirim (fail-open) */
   }
-  if (alamatUji(profile?.email)) {
+  // `alamatUjiDiizinkan()` hanya menyala di skrip diagnostik (endpoint tiruan).
+  if (!alamatUjiDiizinkan() && alamatUji(profile?.email)) {
     console.warn(`[fcm] dilewati — akun uji (${profile.email})`);
     lastSendError = "akun-uji";
     return 0;

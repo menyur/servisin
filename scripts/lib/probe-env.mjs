@@ -94,6 +94,28 @@ export async function createTempUser(admin, role, label = "probe") {
   });
   if (error) throw new Error(`createUser(${label}) gagal: ${error.message}`);
   await sleep(300); // beri waktu trigger handle_new_user menulis profiles
+
+  // Trigger `handle_new_user` SENGAJA tidak memberi peran admin dari metadata:
+  // metadata diklaim sendiri oleh pendaftar, jadi mempercayainya berarti siapa
+  // pun bisa mendaftar sebagai admin. Probe yang memang butuh sesi admin
+  // menaikkan perannya di sini lewat service role — hak istimewa diberikan oleh
+  // alat uji, bukan oleh klaim pengguna.
+  const { data: profil, error: bacaErr } = await admin
+    .from("profiles")
+    .select("id, role")
+    .eq("id", data.user.id)
+    .maybeSingle();
+  if (bacaErr) throw new Error(`baca profil ${label} gagal: ${bacaErr.message}`);
+  if (!profil) {
+    throw new Error(
+      `akun uji ${label} dibuat tetapi baris profiles-nya tidak ada — trigger handle_new_user bermasalah (lihat supabase/fix-profil-hilang.sql)`
+    );
+  }
+  if (profil.role !== role) {
+    const { error: promErr } = await admin.from("profiles").update({ role }).eq("id", data.user.id);
+    if (promErr) throw new Error(`menaikkan peran ${label} ke ${role} gagal: ${promErr.message}`);
+  }
+
   return { id: data.user.id, email, password, role, label, cleanup: "pending" };
 }
 
