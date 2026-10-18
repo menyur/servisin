@@ -329,6 +329,22 @@ Sudah dikerjakan dan dibuktikan 18 Okt 2026:
 | Pembatas laju persisten + Turnstile (§8.4 baris 3) | `npm run verify:signup-endpoint -- --selftest` → 114 lulus; RPC hidup diuji: coba ke-4 ditolak `batas_tercapai`, `anon` ditolak `permission denied` |
 | Tanda surel bekas akun terhapus (§8.4 baris 2) | dibuktikan hidup dengan baris permintaan hapus buatan: `pernah: true`, dan baris berumur 120 hari **tidak** ditandai (jendela 90 hari); baris uji dihapus lagi |
 
+**Kambuh 18 Okt 2026 — baris profil yang sama-sama hilang, bukan tambalan baru.**
+Saat gate `live-probe` dijalankan ulang di CI, langkah akun-aman kembali merah:
+7 akun auth vs 6 baris `profiles`, satu-satunya yang hilang adalah akun Google
+`03c9ea5c-78fb-49c5-bf39-f713a93e5bbd` (dibuat 16 Okt 16:41, masuk terakhir
+18 Okt 04:33, 0 pesanan dan 0 laporan). Trigger `on_auth_user_created` **ada dan
+aktif**, fungsi `handle_new_user()` ada, dan tidak ada kode aplikasi yang
+menghapus `profiles` — penghapusan akun justru menyimpan barisnya (§8.2). Jadi
+ini bukan akun yang lahir tanpa profil seperti kejadian pertama, melainkan baris
+lama yang hilang; penyebabnya **belum terbukti** dan tidak bisa disimpulkan dari
+data yang tersimpan. Barisnya ditambal lewat service role (nama dari metadata
+Google, peran `customer`), lalu `npm run verify:akun-aman` → 0 kritis
+(7 akun / 7 profil). Bila terulang, periksa penulisan langsung ke database di
+luar aplikasi (SQL Editor / dashboard) sebelum menambah tambalan lain — gerbang
+ini sudah menangkapnya setiap push, jadi yang perlu dicari adalah pelakunya,
+bukan tambalannya.
+
 Sisa pekerjaan:
 
 1. **Kunci Turnstile belum ada di Vercel.** Kodenya siap dan gagal-terbuka dengan
