@@ -111,6 +111,17 @@ jobs:
           node scripts/verify-email-send.mjs --selftest
           node scripts/verify-email-doctor.mjs --selftest
 
+      # Gerbang DATA UJI: membuktikan akun probe dilewati di SELURUH jalur
+      # notifikasi (email & push) dan bahwa penolakan permanen (bounce keras)
+      # tidak diulang. Seluruhnya OFFLINE — tanpa kredensial, tanpa jaringan,
+      # tanpa menyentuh baris data — jadi aman di CI, dan justru inilah yang
+      # melindungi kuota produksi dari probe: kalau ada jalur notifikasi baru
+      # yang lupa dipasangi gerbang, CI yang menolaknya, bukan kuota harian yang
+      # habis (kejadian 16 Okt 2026: 149 dari 195 email hari itu dari data uji,
+      # lalu email pelanggan yang tidak sampai).
+      - name: Gerbang data uji di semua jalur notifikasi (tanpa jaringan)
+        run: npm run verify:uji-guard
+
       # Jalur lupa kata sandi: kontrak statis + alur kirim dengan admin & email
       # TIRUAN. Seluruhnya tanpa jaringan dan tanpa kredensial, jadi aman di CI;
       # yang dijaga adalah keseragaman jawaban akun-ada vs akun-tidak-ada

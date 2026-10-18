@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { debitTechnicianCommission } from "@/lib/balance";
 import { sendAdminNewDepositEmail, sendAdminNewWithdrawalEmail } from "@/lib/email";
 import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
+import { alamatUji } from "@/lib/email-uji";
 
 const TECHNICIAN_ALLOWED_STATUSES = ["in_progress", "completed"];
 
@@ -80,6 +81,12 @@ export async function updateJobStatus(bookingId, status) {
  * PENARIKAN belum punya trigger di antrean, jadi selalu dikirim langsung.
  */
 async function notifyAdminsBalanceRequest(supabase, kind, payload) {
+  // Sumber akun uji → tidak ada kiriman sama sekali (kuota harian hanya untuk
+  // pengajuan sungguhan; aturan bersama di src/lib/email-uji.js).
+  if (alamatUji(payload?.tech_email)) {
+    console.warn(`[saldo] email admin dilewati — sumber akun uji (${payload.tech_email})`);
+    return "uji";
+  }
   const direct = async () => {
     try {
       const adminEmails = await adminEmailsForEvent(
@@ -93,7 +100,8 @@ async function notifyAdminsBalanceRequest(supabase, kind, payload) {
       console.error("Gagal notifikasi saldo ke admin:", err?.message);
     }
   };
-  if (kind === "deposit") return notifyAdminsOrDirect(supabase, direct);
+  // Setoran sudah punya trigger antrean; penarikan selalu langsung.
+  if (kind === "deposit") return notifyAdminsOrDirect(supabase, direct, { sumberEmail: payload?.tech_email });
   return direct();
 }
 

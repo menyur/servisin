@@ -10,6 +10,7 @@
 import webpush from "web-push";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { selectJobTargets } from "./skill-match.js";
+import { alamatUji } from "./email-uji.js";
 
 const PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
 const PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
@@ -46,14 +47,17 @@ export const PUSH_EVENTS = {
   chat_message: "Pesan chat baru",
 };
 
-/** Baca preferensi user dari profiles.notification_prefs (aman bila kolom belum ada). */
-async function getPrefs(admin, userId) {
+/**
+ * Baca profil penerima SEKALI untuk dua gerbang: emailnya (akun uji?) dan
+ * preferensi peristiwa. Aman bila kolom `notification_prefs` belum ada.
+ */
+async function getProfil(admin, userId) {
   const { data } = await admin
     .from("profiles")
-    .select("notification_prefs")
+    .select("email, notification_prefs")
     .eq("id", userId)
-    .single();
-  return data?.notification_prefs || {};
+    .maybeSingle();
+  return data || null;
 }
 
 /** Ambil semua subscription milik satu user. */
@@ -89,11 +93,16 @@ export async function sendPushToUser(userId, { title, body, url = "/dashboard", 
   try {
     if (SERVICE_URL && SERVICE_KEY) {
       const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
-      // hormati preferensi user — peristiwa dimatikan → jangan kirim
-      if (event) {
-        const prefs = await getPrefs(admin, userId);
-        if (prefs[event] === false) return 0;
+      // GERBANG DATA UJI: akun probe tidak dikirimi push sama sekali.
+      // Dipasang di sini juga (bukan hanya di notify.js/worker) karena
+      // src/app/actions/admin.js memanggil fungsi ini langsung.
+      const profil = await getProfil(admin, userId);
+      if (alamatUji(profil?.email)) {
+        console.warn(`[push] dilewati — akun uji (${profil.email})`);
+        return 0;
       }
+      // hormati preferensi user — peristiwa dimatikan → jangan kirim
+      if (event && profil?.notification_prefs?.[event] === false) return 0;
     }
     subs = await getSubscriptions(userId);
   } catch (err) {

@@ -126,7 +126,7 @@ export async function signUp(prevState, formData) {
     } else {
       await sendAdminNewCustomerEmail(adminEmails, { name, email, phone, address });
     }
-  });
+  }, { sumberEmail: email });
 
   redirect(nextPath || "/dashboard");
 }

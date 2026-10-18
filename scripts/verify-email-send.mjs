@@ -32,7 +32,20 @@
 // Alamat uji, pembacaan .env.local, dan penilaian hasil kirim tinggal di
 // scripts/lib/email-health.mjs supaya verify:email-doctor memakai logika yang
 // PERSIS sama (bukan salinan yang bisa menyimpang).
-import { ALAMAT_UJI_DEFAULT, POLA_ALAMAT_UJI, bacaEnvLokal, nilaiKirim, parseWait } from "./lib/email-health.mjs";
+import {
+  ALAMAT_UJI_DEFAULT,
+  POLA_ALAMAT_UJI,
+  bacaEnvLokal,
+  nilaiKirim,
+  parseWait,
+  pesanKuotaHarian,
+} from "./lib/email-health.mjs";
+
+// Gerbang data uji (src/lib/email-uji.js) membuang alamat uji dari daftar
+// penerima — dan alamat uji resend.dev MEMANG alamat uji. Skrip ini satu-satunya
+// tempat yang menyalakannya: tujuannya justru membuktikan jalur kirim produksi
+// bekerja dengan alamat simulasi Resend, tanpa mengirimi inbox siapa pun.
+process.env.EMAIL_UJI_DIIZINKAN = "1";
 
 const argv = process.argv.slice(2);
 const arg = (nama) => {
@@ -87,7 +100,25 @@ if (SELFTEST) {
     console.log(`${ok ? "lulus" : "GAGAL"}  ${nama}${ok ? "" : ` — harap ${harap}, dapat ${dapat}`}`);
   }
 
-  const total = kasus.length + 1 + kasusWait.length;
+  // Kegagalan kuota harus DIKATAKAN sebagai kuota, bukan disamarkan sebagai
+  // "kunci salah / domain belum terverifikasi" (kejadian 16 Okt 2026: seluruh
+  // kiriman `failed` karena kuota harian, tetapi petunjuknya menunjuk kunci).
+  const kasusKuota = [
+    [
+      "kuota harian dikenali & disebut sebagai kuota (bukan kunci/domain)",
+      pesanKuotaHarian("daily_quota_exceeded: You have reached your daily email sending quota."),
+      /BUKAN masalah kunci\/domain/,
+    ],
+    ["kegagalan domain TIDAK disebut kuota", pesanKuotaHarian("validation_error: domain is not verified"), null],
+    ["kunci tidak sah TIDAK disebut kuota", pesanKuotaHarian("API key is invalid"), null],
+  ];
+  for (const [nama, dapat, harap] of kasusKuota) {
+    const ok = harap ? harap.test(String(dapat)) : dapat === null;
+    if (!ok) gagalSelftest += 1;
+    console.log(`${ok ? "lulus" : "GAGAL"}  ${nama}${ok ? "" : ` — dapat: ${dapat}`}`);
+  }
+
+  const total = kasus.length + 1 + kasusWait.length + kasusKuota.length;
   console.log("=".repeat(72));
   console.log(`${gagalSelftest === 0 ? "LULUS" : "GAGAL"}: selftest ${total - gagalSelftest}/${total}`);
   process.exit(gagalSelftest === 0 ? 0 : 1);
@@ -178,8 +209,16 @@ if (hasil.gagal.length) {
   console.log(`GAGAL: ${hasil.gagal.length} masalah pengiriman email:`);
   for (const g of hasil.gagal) console.log(`  - ${g}`);
   console.log("");
-  console.log("Petunjuk: kunci dari https://resend.com/api-keys ; domain pengirim harus");
-  console.log("terverifikasi di https://resend.com/domains lalu di-set sebagai EMAIL_FROM.");
+  const kuota = pesanKuotaHarian(res?.error);
+  if (kuota) {
+    // Jangan menuding kunci/domain saat sebabnya kuota — itu membuat orang
+    // memperbaiki hal yang salah (lihat src/lib/email-antrean.js).
+    console.log(`Sebab: ${kuota}`);
+    console.log("Menunggu reset kuota adalah satu-satunya tindakan yang perlu; percobaan ulang sebelum reset akan gagal juga.");
+  } else {
+    console.log("Petunjuk: kunci dari https://resend.com/api-keys ; domain pengirim harus");
+    console.log("terverifikasi di https://resend.com/domains lalu di-set sebagai EMAIL_FROM.");
+  }
   process.exit(1);
 }
 console.log("LULUS: Resend benar-benar MENERIMA pesan (dibuktikan dengan id pesan).");

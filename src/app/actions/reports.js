@@ -154,7 +154,7 @@ async function notifyAdminsNewReport(supabase, payload) {
     const adminEmails = await adminEmailsForEvent(supabase, "new_report");
     if (!adminEmails?.length) return;
     await sendAdminNewReportEmail(adminEmails, payload);
-  });
+  }, { sumberEmail: payload?.author_email });
 }
 
 /**

@@ -25,6 +25,7 @@
  */
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { selectJobTargets } from "./skill-match.js";
+import { alamatUji } from "./email-uji.js";
 
 const SERVICE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -176,18 +177,25 @@ export async function sendFcmToUser(userId, { title, body, route = "/orders", ta
   if (!bundle) return 0; // fitur mati / init gagal — no-op, tanpa kirim
 
   const admin = createSupabaseClient(SERVICE_URL, SERVICE_KEY);
+  // Satu pembacaan untuk dua gerbang: akun uji (tidak dikirimi sama sekali —
+  // lihat src/lib/email-uji.js) dan preferensi per peristiwa.
+  let profile = null;
   try {
-    if (event) {
-      const { data: profile } = await admin
-        .from("profiles")
-        .select("notification_prefs")
-        .eq("id", userId)
-        .single();
-      if (profile?.notification_prefs?.[event] === false) return 0;
-    }
+    const { data } = await admin
+      .from("profiles")
+      .select("email, notification_prefs")
+      .eq("id", userId)
+      .maybeSingle();
+    profile = data;
   } catch {
-    /* preferensi tak terbaca → tetap kirim */
+    /* profil tak terbaca → tetap kirim (fail-open) */
   }
+  if (alamatUji(profile?.email)) {
+    console.warn(`[fcm] dilewati — akun uji (${profile.email})`);
+    lastSendError = "akun-uji";
+    return 0;
+  }
+  if (event && profile?.notification_prefs?.[event] === false) return 0;
 
   let tokens = [];
   try {

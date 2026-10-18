@@ -25,6 +25,16 @@
  *        kunci Resend yang tidak sah bisa mematikan SEMUA email admin tanpa
  *        jejak apa pun di panel maupun database.
  *
+ * KAPAN SEBUAH PERCOBAAN DIBUANG (kejadian 16 Okt 2026, lihat
+ * supabase/fix-admin-email-macet-dan-kuota.sql): percobaan TIDAK lagi dibuang
+ * hanya karena penyedia email menolak. Kuota harian / rate limit adalah
+ * penolakan SEMENTARA — kalau tiap ping (trigger pg_net, cron tiap menit,
+ * aplikasi, panel) mengklaim ulang baris yang sama, lima percobaan habis dalam
+ * hitungan detik dan gangguan sementara berubah menjadi email yang hilang.
+ * Kebijakannya ada di src/lib/email-retry.js dan dikirim ke database lewat
+ * `defer_admin_email` (tunda, claim dibatalkan) atau `fail_admin_email`
+ * (gagal, dengan jeda bertingkat).
+ *
  * Dengan begitu email admin terkirim untuk SEMUA jalur sekaligus — web maupun
  * aplikasi — tanpa email ganda dan tanpa mempercayai isi payload dari klien:
  * baris antrean hanya menyimpan id referensi, konteksnya dibaca di sini.
@@ -37,8 +47,18 @@
  * membaca tabel `admin_notification_optouts`
  * (supabase/migrate-admin-notification-prefs.sql). Diatur admin di panel → tab
  * "Notif Email Admin".
+ *
+ * SUMBER UJI DILEWATI: peristiwa yang SUMBER-nya akun uji (`@example.invalid` —
+ * konvensi akun sementara di scripts/lib/probe-env.mjs) tidak dikirim ke admin
+ * sama sekali (lihat src/lib/email-uji.js). Kejadian 16 Okt 2026: skrip uji yang
+ * membuat pesanan/laporan/pendaftaran menghabiskan kuota harian Resend —
+ * belasan email nyata ke inbox admin dalam beberapa detik untuk data `Probe …`.
+ * Baris antreannya tetap dibereskan (tanpa kiriman), jadi kuota tersisa untuk
+ * notifikasi sungguhan.
  */
 import { createAdminClient } from "@/lib/supabase/admin";
+import { alasanUntukPanel, kebijakanUlang } from "@/lib/email-retry";
+import { alamatUji } from "@/lib/email-uji";
 import {
   sendAdminNewBookingEmail,
   sendAdminNewReportEmail,
@@ -124,11 +144,24 @@ export async function adminEmailsForEvent(client, event) {
  * tetap utuh sebelum migrasi dijalankan.
  *
  * Selalu fire-and-forget: kegagalan email tidak boleh menggagalkan aksi utama.
+ *
+ * @param supabase klien pemanggil (dipakai memeriksa keberadaan antrean)
  * @param directSend fungsi yang mengirim email langsung (dipanggil hanya bila
- *   antrean belum ada).
- * @returns {"outbox"|"direct"} jalur yang dipakai.
+ *   antrean belum ada)
+ * @param {{sumberEmail?: string}} opsi email SUMBER peristiwa. Bila itu akun uji
+ *   (`@example.invalid`, lihat src/lib/email-uji.js), emailnya TIDAK dikirim
+ *   sama sekali: penerimanya admin asli, jadi menyaring penerima tidak cukup —
+ *   yang menghabiskan kuota harian adalah peristiwa dari data uji (149 dari 195
+ *   email pada 16 Okt 2026). Gerbang yang sama sudah ada di antrean; dipasang di
+ *   sini juga supaya jalur LANGSUNG (sebelum migrasi antrean dijalankan, dan
+ *   peristiwa yang tidak punya trigger antrean) tidak jadi celah.
+ * @returns {"outbox"|"direct"|"uji"} jalur yang dipakai.
  */
-export async function notifyAdminsOrDirect(supabase, directSend) {
+export async function notifyAdminsOrDirect(supabase, directSend, opsi = {}) {
+  if (alamatUji(opsi.sumberEmail)) {
+    console.warn(`[admin-email] dilewati — sumber akun uji (${opsi.sumberEmail})`);
+    return "uji";
+  }
   let ready = false;
   try {
     ready = await adminEmailOutboxReady(supabase);
@@ -224,12 +257,31 @@ export async function drainAdminEmailOutbox(limit = 20) {
 
   let sent = 0;
   let pending = 0;
+  let dilewati = 0;
   await Promise.all(
     batch.map(async (item) => {
       try {
         // Penerima ditentukan PER PERISTIWA di dalam deliver() (pengaturan panel
         // admin): admin yang mematikan jenis peristiwa ini tidak dikirimi.
         const res = await deliver(admin, item);
+        // Sumber uji (akun probe tanpa inbox) → tidak ada yang perlu dikirim.
+        // Barisnya tetap dibereskan supaya antrean bersih, TANPA memakai kuota
+        // email dan tanpa menambah email data uji ke inbox admin.
+        if (res !== "skip" && res?.skipped === "sumber-uji") {
+          dilewati += 1;
+          console.warn("[admin-email] dilewati (sumber akun uji):", item.event, res.email);
+          const { error: hapusUjiErr } = await admin.rpc("complete_admin_email", { p_id: item.id });
+          if (hapusUjiErr) {
+            // Barisnya bukan email yang perlu dikirim; kalau penghapusannya gagal
+            // jangan biarkan percobaannya terpakai sampai "menyerah" — tandai
+            // berhenti sekarang, alasannya jelas, dan admin bisa membuangnya.
+            await catatKegagalan(admin, item, `Peristiwa dari akun uji — baris antrean gagal dihapus (${hapusUjiErr.message}).`, {
+              aksi: "menyerah",
+              sementara: false,
+            });
+          }
+          return;
+        }
         // "Tidak ada penerima" BUKAN sukses: emailnya tidak sampai ke siapa pun
         // dan penyebabnya adalah pilihan di tab "Notif Email Admin". Dulu baris
         // seperti ini dihapus ("terkirim"), sehingga setelan yang mematikan
@@ -240,15 +292,38 @@ export async function drainAdminEmailOutbox(limit = 20) {
           const alasan = gagalKirim
             ? res.error
             : "Tidak ada admin yang menerima peristiwa ini — periksa tab \"Notif Email Admin\".";
+          const kebijakan = kebijakanUlang(alasan, item.attempts, {
+            maksPercobaan: item.max_attempts,
+          });
           pending += 1;
-          console.warn("[admin-email] kirim gagal, dicoba ulang:", item.event, alasan);
-          await catatKegagalan(admin, item, alasan);
+          console.warn(
+            "[admin-email] kirim gagal:",
+            item.event,
+            alasan,
+            kebijakan.sementara
+              ? `→ SEMENTARA: ditunda ±${Math.round(kebijakan.jedaDetik / 60)} menit (percobaan tidak dihitung)`
+              : `→ jeda ±${Math.round(kebijakan.jedaDetik / 60)} menit sebelum percobaan berikutnya`
+          );
+          await catatKegagalan(admin, item, alasan, kebijakan);
           return;
         }
         if (res?.simulated) {
           console.warn("[admin-email] email disimulasikan (RESEND_API_KEY belum diisi):", item.event);
         }
-        await admin.rpc("complete_admin_email", { p_id: item.id });
+        // Baris dihapus HANYA bila penghapusannya benar-benar berhasil. Dulu
+        // galatnya tidak diperiksa: email terkirim, barisnya tetap tinggal, lalu
+        // ping berikutnya mengirim ulang dan menaikkan `attempts` sampai
+        // antreannya macet (11 baris seperti itu di produksi 16 Okt 2026).
+        const { error: hapusErr } = await admin.rpc("complete_admin_email", { p_id: item.id });
+        if (hapusErr) {
+          pending += 1;
+          const alasan =
+            `Email SUDAH terkirim tetapi baris antrean gagal dihapus (${hapusErr.message}). ` +
+            "JANGAN kirim ulang tanpa memeriksa kotak masuk admin — bisa jadi email dobel.";
+          console.warn("[admin-email]", alasan, item.event);
+          await catatKegagalan(admin, item, alasan, { aksi: "menyerah", sementara: false });
+          return;
+        }
         sent += 1;
       } catch (err) {
         pending += 1;
@@ -258,7 +333,7 @@ export async function drainAdminEmailOutbox(limit = 20) {
     })
   );
 
-  return { ok: true, sent, pending };
+  return { ok: true, sent, pending, dilewati };
 }
 
 /**
@@ -269,13 +344,38 @@ export async function drainAdminEmailOutbox(limit = 20) {
  * Aman kalau migrasi belum dijalankan: RPC-nya belum ada, dan kegagalan
  * pencatatan tidak boleh menggagalkan (atau menghentikan) alur pengiriman —
  * perilaku lama tetap berlaku, hanya tanpa jejak.
+ *
+ * @param kebijakan hasil kebijakanUlang() (src/lib/email-retry.js): "tunda"
+ *   memakai defer_admin_email (claim dibatalkan, percobaan tidak dibuang),
+ *   "menyerah" memakai give_up_admin_email (email sudah terkirim), selain itu
+ *   fail_admin_email dengan jeda bertingkat.
  */
-async function catatKegagalan(admin, item, alasan) {
+async function catatKegagalan(admin, item, alasan, kebijakan = { aksi: "gagal", jedaDetik: 0 }) {
+  const pesan = alasanUntukPanel(alasan, item.attempts, kebijakan);
   try {
-    const { error } = await admin.rpc("fail_admin_email", {
-      p_id: item.id,
-      p_error: String(alasan || "").slice(0, 500),
-    });
+    let error;
+    if (kebijakan.aksi === "tunda") {
+      // Penolakan SEMENTARA (kuota/rate limit): claim dibatalkan di database
+      // (`attempts - 1`) dan barisnya menunggu jendela berikutnya. Kalau ini
+      // dihitung sebagai percobaan gagal, kuota harian yang pulih sendiri akan
+      // tetap berakhir "menyerah" — persis 10 email yang hilang 16 Okt 2026.
+      ({ error } = await admin.rpc("defer_admin_email", {
+        p_id: item.id,
+        p_error: pesan,
+        p_delay_seconds: kebijakan.jedaDetik,
+      }));
+    } else if (kebijakan.aksi === "menyerah") {
+      // Emailnya SUDAH terkirim tetapi barisnya tidak bisa dihapus: tandai
+      // menyerah sekarang juga supaya ping berikutnya tidak mengirim ulang
+      // (email dobel) hanya karena percobaan barisnya masih tersisa.
+      ({ error } = await admin.rpc("give_up_admin_email", { p_id: item.id, p_error: pesan }));
+    } else {
+      ({ error } = await admin.rpc("fail_admin_email", {
+        p_id: item.id,
+        p_error: pesan,
+        p_delay_seconds: kebijakan.jedaDetik || 0,
+      }));
+    }
     if (error && !/function|does not exist|schema cache/i.test(error.message || "")) {
       console.warn("[admin-email] gagal mencatat alasan kegagalan:", error.message);
     }
@@ -299,11 +399,12 @@ async function deliver(admin, item) {
       const { data: b } = await admin
         .from("bookings")
         .select(
-          "code, booking_date, booking_time, address, payment_method, total_price, services(name), profiles!bookings_user_id_fkey(name, phone)"
+          "code, booking_date, booking_time, address, payment_method, total_price, services(name), profiles!bookings_user_id_fkey(name, phone, email)"
         )
         .eq("id", ref)
         .maybeSingle();
       if (!b) return "skip";
+      if (alamatUji(b.profiles?.email)) return { skipped: "sumber-uji", email: b.profiles?.email };
       const emails = await adminEmailsForEvent(admin, "new_booking");
       return sendAdminNewBookingEmail(emails, {
         code: b.code,
@@ -330,6 +431,7 @@ async function deliver(admin, item) {
         .select("name, email")
         .eq("id", r.author_id)
         .maybeSingle();
+      if (alamatUji(author?.email)) return { skipped: "sumber-uji", email: author?.email };
       const emails = await adminEmailsForEvent(admin, "new_report");
       return sendAdminNewReportEmail(emails, {
         author_role: r.author_role,
@@ -353,6 +455,7 @@ async function deliver(admin, item) {
         .select("name, email, balance")
         .eq("id", d.technician_id)
         .maybeSingle();
+      if (alamatUji(tech?.email)) return { skipped: "sumber-uji", email: tech?.email };
       // Bucket balance-proofs PRIVAT → kolom menyimpan path. Admin butuh
       // tautan yang bisa dibuka, jadi buat signed URL (1 jam) bila perlu.
       let proofUrl = d.proof_url;
@@ -379,6 +482,7 @@ async function deliver(admin, item) {
         .eq("id", ref)
         .maybeSingle();
       if (!p) return "skip";
+      if (alamatUji(p.email)) return { skipped: "sumber-uji", email: p.email };
       if (p.role === "technician") {
         const emails = await adminEmailsForEvent(admin, "new_technician");
         return sendAdminNewApplicantEmail(emails, {
@@ -413,6 +517,7 @@ async function deliver(admin, item) {
       if (!a) return "skip";
       // Sudah dijalankan/dibatalkan sebelum sempat dikirim → tidak perlu diberitakan.
       if (a.status !== "diminta") return "skip";
+      if (alamatUji(a.email)) return { skipped: "sumber-uji", email: a.email };
       const { data: pelapor } = a.user_id
         ? await admin.from("profiles").select("role").eq("id", a.user_id).maybeSingle()
         : { data: null };

@@ -7,47 +7,47 @@
 import { resetPasswordHtml } from "./email-templates/reset-password.js";
 import { confirmSignupHtml } from "./email-templates/confirm-signup.js";
 import { permintaanHapusHtml, hapusAkunSelesaiHtml } from "./email-templates/account-deletion.js";
+import { alamatUjiDiizinkan, saringAlamatUji } from "./email-uji.js";
+import { kirimLewatResend } from "./email-transport.js";
+import { kirimAtauAntre } from "./email-antrean.js";
 
+/**
+ * Kirim email lewat Resend — SATU-SATUNYA pintu keluar email aplikasi.
+ *
+ * GERBANG DATA UJI (kejadian 16 Okt 2026, lihat src/lib/email-uji.js): alamat
+ * uji dibuang DARI DAFTAR PENERIMA di sini, bukan hanya di antrean admin. Dengan
+ * begitu tidak ada satu pun panggilan Resend untuk akun probe — konfirmasi
+ * pesanan ke `…@example.invalid`, penugasan teknisi uji, struk, pengingat saldo
+ * — sehingga kuota harian tersisa untuk notifikasi sungguhan. Bila setelah
+ * disaring tidak ada penerima yang tersisa, hasilnya `skipped: "sumber-uji"`
+ * (dipahami antrean admin sebagai "bereskan barisnya tanpa kiriman").
+ *
+ * Skrip diagnostik yang sengaja mengirim ke alamat uji Resend menyalakan
+ * `EMAIL_UJI_DIIZINKAN=1`.
+ */
 async function sendMail({ to, subject, html, attachments }) {
-  if (!to || (Array.isArray(to) && to.length === 0)) {
+  const diminta = (Array.isArray(to) ? to : [to]).map((a) => String(a ?? "").trim()).filter(Boolean);
+  if (diminta.length === 0) {
     return { simulated: true, skipped: "no-recipient" };
   }
 
-  if (!process.env.RESEND_API_KEY) {
-    console.log("[email disimulasikan — RESEND_API_KEY belum diisi]");
-    console.log(`To: ${Array.isArray(to) ? to.join(", ") : to}\nSubject: ${subject}${attachments?.length ? `\nAttachments: ${attachments.map((a) => a.filename).join(", ")}` : ""}`);
-    return { simulated: true };
+  const penerima = alamatUjiDiizinkan() ? diminta : saringAlamatUji(diminta);
+  if (penerima.length === 0) {
+    console.log(`[email dilewati — penerima akun uji, kuota tidak dipakai]: ${diminta.join(", ")}`);
+    return { simulated: true, skipped: "sumber-uji", to: diminta };
   }
 
-  try {
-    const { Resend } = await import("resend");
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    // PENTING: SDK resend TIDAK melempar untuk error API (kunci salah, domain
-    // pengirim belum terverifikasi, penerima ditolak) — ia mengembalikan
-    // `{ data, error }`. Sebelum ini hasilnya diabaikan sehingga pengiriman yang
-    // GAGAL dilaporkan sebagai sukses: baris antrean ikut ditandai terkirim dan
-    // email hilang tanpa jejak. Kembalikan `error` supaya pemanggil
-    // (drainAdminEmailOutbox) menahan baris untuk dicoba ulang.
-    const { data, error } = await resend.emails.send({
-      from: process.env.EMAIL_FROM || "Fixify <onboarding@resend.dev>",
-      to,
-      subject,
-      html,
-      ...(attachments?.length ? { attachments } : {}),
-    });
-    if (error) {
-      const detail = `${error.name || "error"}: ${error.message || "tanpa pesan"}`;
-      console.error("Gagal mengirim email:", detail);
-      return { simulated: false, error: detail };
-    }
-    // `id` dipakai uji verify:email-send untuk membuktikan Resend benar-benar
-    // MENERIMA pesannya (bukan sekadar env terbaca).
-    return { simulated: false, id: data?.id };
-  } catch (err) {
-    // Kegagalan jaringan/import — tidak terkirim, tapi bukan "simulasi".
-    console.error("Gagal mengirim email:", err.message);
-    return { simulated: false, error: err.message };
-  }
+  return kirimLewatResend({ to: penerima, subject, html, attachments });
+}
+
+/**
+ * Kirim notifikasi yang BOLEH MENYUSUL: bila penyedia menolak sementara (kuota
+ * harian habis / rate limit), pesannya disimpan di antrean `email_outbox` untuk
+ * dicoba lagi setelah jendela jeda — bukan hilang diam-diam (lihat
+ * src/lib/email-antrean.js). Dipakai email fire-and-forget ke pelanggan/teknisi.
+ */
+async function sendMailTertunda(params) {
+  return kirimAtauAntre(params, sendMail);
 }
 
 function paymentLabel(m) {
@@ -85,7 +85,11 @@ export async function sendBookingConfirmationEmail(booking) {
     `
   );
 
-  return sendMail({ to: booking.customer_email, subject: `Booking ${booking.code} diterima — Fixify`, html });
+  return sendMailTertunda({
+    to: booking.customer_email,
+    subject: `Booking ${booking.code} diterima — Fixify`,
+    html,
+  });
 }
 
 /** Ke semua admin: pelanggan mengklaim pembayaran dengan bukti transfer — perlu verifikasi. */
@@ -182,7 +186,11 @@ export async function sendReportResolvedEmail(reporterEmail, report) {
     `
   );
 
-  return sendMail({ to: reporterEmail, subject: `Laporanmu telah diselesaikan — Fixify`, html });
+  return sendMailTertunda({
+    to: reporterEmail,
+    subject: `Laporanmu telah diselesaikan — Fixify`,
+    html,
+  });
 }
 
 /** Ke pelanggan: struk PDF terlampir saat pesanan selesai. */
@@ -205,7 +213,7 @@ export async function sendReceiptEmail(customerEmail, receipt) {
     `
   );
 
-  return sendMail({
+  return sendMailTertunda({
     to: customerEmail,
     subject: `Struk pesanan ${receipt.code} — Fixify`,
     html,
@@ -278,7 +286,11 @@ export async function sendTechnicianAssignmentEmail(technicianEmail, booking) {
     `
   );
 
-  return sendMail({ to: technicianEmail, subject: `Tugas baru ${booking.code} — Fixify`, html });
+  return sendMailTertunda({
+    to: technicianEmail,
+    subject: `Tugas baru ${booking.code} — Fixify`,
+    html,
+  });
 }
 
 /* ============ NOTIFIKASI SALDO: SETOR & TARIK ============ */
@@ -550,7 +562,7 @@ export async function sendTechnicianBalanceReminderEmail(technicianEmail, info =
     `
   );
 
-  return sendMail({
+  return sendMailTertunda({
     to: technicianEmail,
     subject:
       piutang > 0

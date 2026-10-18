@@ -5,6 +5,7 @@ import { sendPushToUser } from "@/lib/notify";
 import { offerReleasedJobToNearestTechnicians } from "@/lib/job-offer";
 import { sendAdminJobReleaseEmail } from "@/lib/email";
 import { adminEmailsForEvent } from "@/lib/admin-email";
+import { alamatUji } from "@/lib/email-uji";
 
 export const dynamic = "force-dynamic";
 
@@ -75,7 +76,7 @@ export async function POST(request) {
     } catch (e) {
       console.warn("[notify-job-release] baca konteks pesanan gagal:", e?.message);
     }
-    const { data: tech } = await sb.from("profiles").select("name").eq("id", user.id).maybeSingle();
+    const { data: tech } = await sb.from("profiles").select("name, email").eq("id", user.id).maybeSingle();
 
     const code = booking?.code || "-";
     const serviceName = booking?.services?.name || "Layanan";
@@ -106,21 +107,27 @@ export async function POST(request) {
     //    pengaturan panel admin (RPC admin_emails_for_event); tanpa migrasi
     //    pengaturan = semua admin seperti sebelumnya.
     let emailed = 0;
-    try {
-      const list = await adminEmailsForEvent(createAdminClient(), "job_release");
-      if (list.length > 0) {
-        await sendAdminJobReleaseEmail(list, {
-          code,
-          serviceName,
-          techName,
-          reason,
-          address: booking?.address,
-          schedule: booking ? `${booking.booking_date} ${booking.booking_time || "-"}` : "-",
-        });
-        emailed = list.length;
+    // Sumber akun uji → emailnya tidak dikirim sama sekali (kuota harian hanya
+    // untuk pelepasan tugas sungguhan; aturan bersama src/lib/email-uji.js).
+    if (alamatUji(tech?.email)) {
+      console.warn(`[notify-job-release] email admin dilewati — sumber akun uji (${tech.email})`);
+    } else {
+      try {
+        const list = await adminEmailsForEvent(createAdminClient(), "job_release");
+        if (list.length > 0) {
+          await sendAdminJobReleaseEmail(list, {
+            code,
+            serviceName,
+            techName,
+            reason,
+            address: booking?.address,
+            schedule: booking ? `${booking.booking_date} ${booking.booking_time || "-"}` : "-",
+          });
+          emailed = list.length;
+        }
+      } catch (e) {
+        console.warn("[notify-job-release] email admin gagal:", e?.message);
       }
-    } catch (e) {
-      console.warn("[notify-job-release] email admin gagal:", e?.message);
     }
 
     // 3) Tawarkan tugas yang baru dilepas ke teknisi TERDEKAT yang keahlian &

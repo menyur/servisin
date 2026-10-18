@@ -84,8 +84,24 @@ begin
       -- Jejak kegagalan email (migrate-admin-email-failures.sql): mencatat
       -- sebab kegagalan dan mengembalikan baris ke antrean. Hanya worker di
       -- server; dari luar keduanya bisa memalsukan alasan atau memicu kiriman.
-      ('fail_admin_email(uuid, text)', 'service_role'),
+      -- Sejak fix-admin-email-macet-dan-kuota.sql, fail_admin_email memakai
+      -- argumen `p_delay_seconds` (jeda bertingkat), ditambah dua fungsi baru:
+      -- `defer_admin_email` (penolakan sementara dari penyedia email: kuota /
+      -- rate limit — claim dibatalkan) dan `give_up_admin_email` (email sudah
+      -- terkirim tetapi barisnya gagal dihapus; ditandai menyerah supaya tidak
+      -- jadi email dobel).
+      ('fail_admin_email(uuid, text, integer)', 'service_role'),
+      ('defer_admin_email(uuid, text, integer)', 'service_role'),
+      ('give_up_admin_email(uuid, text)', 'service_role'),
       ('retry_admin_email(uuid)', 'service_role'),
+      -- Antrean email UMUM (migrate-email-outbox-umum.sql): barisnya memuat HTML
+      -- utuh notifikasi pelanggan/teknisi, jadi dari luar server isinya bisa
+      -- dibaca, disisipi pesan palsu, atau dihapus sebelum sempat terkirim.
+      ('take_email_batch(integer)', 'service_role'),
+      ('complete_email(uuid)', 'service_role'),
+      ('fail_email(uuid, text, integer)', 'service_role'),
+      ('defer_email(uuid, text, integer)', 'service_role'),
+      ('give_up_email(uuid, text)', 'service_role'),
       -- Menghapus riwayat lama menurut kebijakan retensi: pekerjaan terjadwal.
       ('purge_expired_history(integer)', 'service_role'),
       -- Perkakas setup (membuat bucket penyimpanan), bukan untuk klien.

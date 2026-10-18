@@ -180,8 +180,11 @@ const api = read("flutter_app/lib/api.dart");
 check("Api.notifyAdminEvent ada", /static Future<void> notifyAdminEvent\(/.test(api));
 check(
   "dipanggil setelah buat pesanan, buat laporan, dan ajukan setor",
-  (api.match(/unawaited\(notifyAdminEvent\(/g) || []).length >= 3,
-  `${(api.match(/unawaited\(notifyAdminEvent\(/g) || []).length} panggilan`
+  // `dart format` memecah panggilan panjang menjadi dua baris (`unawaited(`
+  // lalu `notifyAdminEvent(`), jadi jarak putih di antara keduanya harus
+  // ditoleransi — tanpa itu pemeriksa ini merah hanya karena pemformatan.
+  (api.match(/unawaited\(\s*notifyAdminEvent\(/g) || []).length >= 3,
+  `${(api.match(/unawaited\(\s*notifyAdminEvent\(/g) || []).length} panggilan`
 );
 for (const ev of ["new_booking", "new_report", "new_deposit"]) {
   check(`aplikasi mengirim event ${ev}`, new RegExp(`notifyAdminEvent\\('${ev}'`).test(api));
@@ -293,6 +296,160 @@ check(
     /bukan kegagalan/i.test(tabNotif)
 );
 
+step("B6. Kuota ≠ menyerah: jeda bertingkat & baris macet disembuhkan");
+// Kejadian 16 Okt 2026 (diperiksa di database produksi): 10 email gagal karena
+// `daily_quota_exceeded` — kuota harian yang pulih sendiri — tetapi lima
+// percobaannya terpakai dalam ~4 detik, sehingga gangguan sementara menjadi
+// "menyerah" permanen. 11 baris lain macet di `attempts = 5/5` TANPA jejak
+// kegagalan (tidak bisa diklaim lagi, tidak muncul di panel). Bagian ini menjaga
+// kebijakannya, bukan cuma kalimatnya: modul murninya diuji langsung.
+const retry = await import("../src/lib/email-retry.js");
+check(
+  "penolakan kuota harian dikenali sebagai SEMENTARA",
+  retry.alasanSementara("daily_quota_exceeded: You have reached your daily email sending quota.")
+);
+check("rate limit (429) dikenali sebagai sementara", retry.alasanSementara("429 too many requests"));
+check(
+  '"tidak ada penerima" BUKAN sebab sementara (itu setelan admin yang perlu diperiksa)',
+  !retry.alasanSementara('Tidak ada admin yang menerima peristiwa ini — periksa tab "Notif Email Admin".')
+);
+const kebKuota = retry.kebijakanUlang("daily_quota_exceeded", 3);
+check(
+  "kuota → DITUNDA (claim dibatalkan: percobaan tidak dianggap gagal)",
+  kebKuota.aksi === "tunda" && kebKuota.sementara === true
+);
+check(
+  "penundaan kuota menunggu jendela berikutnya (≤ 24 jam + kelonggaran)",
+  kebKuota.jedaDetik > 60 && kebKuota.jedaDetik <= 24 * 3600 + 600,
+  `${Math.round(kebKuota.jedaDetik / 60)} menit`
+);
+// "Kegagalan biasa" = galat yang TIDAK bisa diklasifikasikan sementara maupun
+// menetap (mis. galat internal penyedia). Inilah yang memang layak dicoba lagi
+// dengan jeda bertingkat. Sengaja BUKAN "api key is invalid": sejak 17 Okt 2026
+// alasan itu — sama seperti hard bounce & domain belum terverifikasi — dibaca
+// MENETAP dan dihentikan seketika (lihat blok pemeriksaan di bawah), jadi
+// memakainya di sini akan menguji kebijakan yang sudah tidak berlaku lagi.
+const BIASA = "application_error: Terjadi kesalahan internal di penyedia email";
+const keb1 = retry.kebijakanUlang(BIASA, 1);
+const keb2 = retry.kebijakanUlang(BIASA, 2);
+const keb4 = retry.kebijakanUlang(BIASA, 4);
+check(
+  "kegagalan biasa punya jeda BERTINGKAT (ping beruntun tidak membakar percobaan)",
+  keb1.aksi === "gagal" && keb1.jedaDetik > 0 && keb1.jedaDetik < keb2.jedaDetik && keb2.jedaDetik < keb4.jedaDetik,
+  `${keb1.jedaDetik}s → ${keb2.jedaDetik}s → ${keb4.jedaDetik}s`
+);
+check("percobaan terakhir tidak dijeda lagi (barisnya menyerah)", retry.jedaUlangDetik(5) === 0);
+check(
+  "batas percobaan baris antrean dihormati (bukan angka 5 yang dipaku)",
+  retry.kebijakanUlang(BIASA, 2, { maksPercobaan: 2 }).jedaDetik === 0
+);
+
+// PENOLAKAN PERMANEN: berhenti SEKETIKA, bukan diulang dengan jeda bertingkat.
+// Mengulangi alamat yang tidak ada / domain yang belum terverifikasi hanya
+// menambah bounce keras pada akun pengirim, dan reputasi pengirim yang rusak
+// membuat email pelanggan sungguhan ikut masuk spam. Bukti dari API Resend
+// 17 Okt 2026: 17 dari 100 kiriman terakhir `bounced` — pemicunya alamat uji
+// `…@example.invalid` yang ikut masuk daftar `to`.
+check(
+  "hard bounce dikenali MENETAP",
+  retry.alasanMenetap("550 mailbox unavailable — recipient address rejected") &&
+    retry.alasanMenetap("bounced: alamat tidak ada")
+);
+check(
+  "kunci/domain yang salah dikenali MENETAP (tidak mungkin berhasil dengan menunggu)",
+  retry.alasanMenetap("API key is invalid") &&
+    retry.alasanMenetap("validation_error: domain is not verified") &&
+    retry.alasanMenetap("invalid recipient: not a valid email address")
+);
+for (const [label, alasan] of [
+  ["hard bounce", "550 mailbox unavailable — recipient address rejected"],
+  ["kunci tidak sah", "API key is invalid"],
+  ["domain belum verified", "validation_error: domain is not verified"],
+]) {
+  const k = retry.kebijakanUlang(alasan, 1);
+  check(`kebijakan "${label}" → menyerah seketika (jeda 0, bukan diulang)`, k.aksi === "menyerah" && k.jedaDetik === 0 && k.menetap === true);
+}
+check(
+  "kuota harian TIDAK pernah dibaca menetap (dua aturan tidak saling menelan)",
+  !retry.alasanMenetap("daily_quota_exceeded: You have reached your daily email sending quota.") &&
+    retry.kebijakanUlang("daily_quota_exceeded", 1).aksi === "tunda"
+);
+check(
+  "alasan di panel menjelaskan kenapa email itu TIDAK diulang (agar reputasi pengirim terjaga)",
+  /DITOLAK PERMANEN/.test(retry.alasanUntukPanel("550 mailbox unavailable", 1, retry.kebijakanUlang("550 mailbox unavailable", 1))) &&
+    /reputasi pengirim/.test(retry.alasanUntukPanel("550 mailbox unavailable", 1, retry.kebijakanUlang("550 mailbox unavailable", 1)))
+);
+check(
+  "alasan di panel menyebutkan penundaan sementara (admin tahu ini bukan rusak)",
+  /SEMENTARA/.test(retry.alasanUntukPanel("daily_quota_exceeded", 1, kebKuota))
+);
+check(
+  "antrean admin menghentikan penolakan permanen lewat give_up_admin_email (bukan fail_admin_email berulang)",
+  /give_up_admin_email/.test(read("src/lib/admin-email.js"))
+);
+
+const fixMacet = read("supabase/fix-admin-email-macet-dan-kuota.sql");
+check("migrasi menambah kolom jeda `not_before`", /add column if not exists not_before timestamptz/.test(fixMacet));
+check(
+  "baris macet (percobaan habis TANPA failed_at) ditandai gagal, bukan dibiarkan menggantung",
+  /attempts >= o\.max_attempts[\s\S]{0,120}?failed_at is null/.test(fixMacet)
+);
+check(
+  "pengambilan batch memasang LEASE (ping beruntun tidak mengirim ulang email yang sedang dikirim)",
+  /not_before = now\(\) \+ interval '5 minutes'/.test(fixMacet)
+);
+check(
+  "p_limit 0 benar-benar tidak mengklaim baris (probe/CI tidak menghabiskan percobaan nyata)",
+  /limit greatest\(coalesce\(p_limit, 20\), 0\)/.test(fixMacet)
+);
+check(
+  "penundaan sementara membatalkan claim (attempts - 1, jadi kuota tidak menghabiskan percobaan)",
+  /attempts = greatest\(attempts - 1, 0\)/.test(fixMacet)
+);
+check(
+  "RPC defer/give_up hanya untuk server",
+  /grant execute on function public\.defer_admin_email\(uuid, text, int\) to service_role/.test(fixMacet) &&
+    /revoke all on function public\.give_up_admin_email\(uuid, text\) from public, anon, authenticated/.test(fixMacet)
+);
+check(
+  "worker memakai kebijakan itu (tunda / menyerah / jeda), bukan selalu fail_admin_email",
+  /kebijakanUlang\(/.test(lib) && /defer_admin_email/.test(lib) && /give_up_admin_email/.test(lib)
+);
+check(
+  "worker memeriksa galat complete_admin_email (sumber baris macet)",
+  /\{ error: hapusErr \}[\s\S]{0,120}?complete_admin_email/.test(lib)
+);
+
+step("B7. Sumber akun UJI tidak menghabiskan kuota email");
+// Kejadian 16 Okt 2026: yang menghabiskan kuota harian Resend bukan pelanggan,
+// melainkan skrip uji — tiap probe membuat pesanan/laporan/pendaftaran dengan
+// akun sementara dan trigger antrean mengirim email NYATA ke inbox admin
+// (belasan dalam beberapa detik). Akun uji sudah punya konvensi tanpa inbox
+// (`@example.invalid`), jadi antrean memakai konvensi yang sama.
+const uji = await import("../src/lib/email-uji.js");
+check(
+  "akun probe (@example.invalid) dikenali sebagai alamat uji",
+  uji.alamatUji("wo-admin-1792166173139-e8468db5@example.invalid")
+);
+check("alamat uji Resend dikenali", uji.alamatUji("delivered@resend.dev"));
+check(
+  "alamat pelanggan sungguhan BUKAN alamat uji",
+  !uji.alamatUji("fhieajjah@gmail.com") && !uji.alamatUji("suhendi2293@gmail.com")
+);
+check(
+  "worker melewati peristiwa dari akun uji (tanpa kirim, baris tetap dibereskan)",
+  /alamatUji\(/.test(lib) && /skipped: "sumber-uji"/.test(lib) && /dilewati \+= 1/.test(lib)
+);
+check(
+  "pemeriksa email (scripts/lib/email-health.mjs) memakai pola alamat uji yang SAMA",
+  /from "\.\.\/\.\.\/src\/lib\/email-uji\.js"/.test(read("scripts/lib/email-health.mjs"))
+);
+check(
+  "kelima peristiwa memeriksa sumber uji (bukan cuma satu)",
+  (lib.match(/skipped: "sumber-uji"/g) || []).length >= 5,
+  `${(lib.match(/skipped: "sumber-uji"/g) || []).length} tempat`
+);
+
 const sehat = read("src/app/api/health/route.js");
 check(
   "/api/health melaporkan JUMLAH email gagal + waktu kegagalan terakhir",
@@ -333,10 +490,16 @@ if (env) {
   );
 
   if (!tableErr) {
-    // Fungsi worker harus ada: panggil dengan limit 1. Aman: baris yang
-    // terambil hanya menaikkan `attempts`; tabel ini diuji saat (nyaris) kosong.
-    const { error: fnErr } = await admin.rpc("take_admin_email_batch", { p_limit: 1 });
-    check("RPC take_admin_email_batch bisa dipanggil", !fnErr, fnErr?.message || "ok");
+    // Fungsi worker harus ada. `p_limit: 0` = TANPA baris: dulu probe ini memakai
+    // limit 1 sehingga setiap kali dijalankan ia mengklaim satu baris antrean
+    // sungguhan dan menaikkan `attempts`-nya — ikut andil pada baris yang macet
+    // di produksi. Dengan 0, izinnya tetap terbukti tanpa menyentuh data.
+    const { data: nol, error: fnErr } = await admin.rpc("take_admin_email_batch", { p_limit: 0 });
+    check(
+      "RPC take_admin_email_batch bisa dipanggil & p_limit 0 tidak mengklaim baris",
+      !fnErr && (nol || []).length === 0,
+      fnErr?.message || `terklaim: ${(nol || []).length}`
+    );
 
     const { error: fnErr2 } = await admin.rpc("complete_admin_email", {
       p_id: "00000000-0000-0000-0000-000000000000",
@@ -357,11 +520,32 @@ if (env) {
       jejakErr?.message || "ada"
     );
 
+    const KOSONG = "00000000-0000-0000-0000-000000000000";
     const { error: fnErr3 } = await admin.rpc("fail_admin_email", {
-      p_id: "00000000-0000-0000-0000-000000000000",
+      p_id: KOSONG,
       p_error: "uji verify-admin-email (baris tidak ada, tidak mengubah apa pun)",
+      p_delay_seconds: 0,
     });
-    check("RPC fail_admin_email bisa dipanggil", !fnErr3, fnErr3?.message || "ok");
+    check("RPC fail_admin_email (+ jeda) bisa dipanggil", !fnErr3, fnErr3?.message || "ok");
+
+    // Dua RPC penjaga "jangan sampai masalah sementara jadi menyerah"
+    // (fix-admin-email-macet-dan-kuota.sql).
+    const { error: fnErr5 } = await admin.rpc("defer_admin_email", {
+      p_id: KOSONG,
+      p_error: "uji verify-admin-email",
+      p_delay_seconds: 0,
+    });
+    check(
+      "RPC defer_admin_email bisa dipanggil (jalankan supabase/fix-admin-email-macet-dan-kuota.sql bila ❌)",
+      !fnErr5,
+      fnErr5?.message || "ok"
+    );
+
+    const { error: fnErr6 } = await admin.rpc("give_up_admin_email", {
+      p_id: KOSONG,
+      p_error: "uji verify-admin-email",
+    });
+    check("RPC give_up_admin_email bisa dipanggil", !fnErr6, fnErr6?.message || "ok");
 
     const { error: fnErr4 } = await admin.rpc("retry_admin_email", {
       p_id: "00000000-0000-0000-0000-000000000000",

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { drainAdminEmailOutbox } from "@/lib/admin-email";
+import { sapuEmailTertunda } from "@/lib/email-antrean";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +26,20 @@ export const dynamic = "force-dynamic";
  * Flutter juga memanggilnya, dan yang dilakukannya hanya mengirim baris antrean
  * yang memang sudah ada di database (tidak bisa dipakai menyurvei/mengubah
  * data). Balasannya hanya hitungan.
+ *
+ * Sejak 16 Okt 2026 route ini juga menyapu antrean UMUM `email_outbox`
+ * (src/lib/email-antrean.js) — notifikasi pelanggan/teknisi yang ditolak
+ * penyedia secara SEMENTARA (kuota harian habis) disimpan di sana untuk dicoba
+ * ulang. Pemicunya sama persis (cron tiap menit + panggilan aplikasi), jadi
+ * tidak perlu penjadwal baru.
  */
 export async function POST() {
   try {
-    const hasil = await drainAdminEmailOutbox(20);
-    return NextResponse.json({ ok: hasil.ok !== false, ...hasil });
+    const [hasil, tertunda] = await Promise.all([
+      drainAdminEmailOutbox(20),
+      sapuEmailTertunda(10).catch((err) => ({ ok: false, skipped: err?.message })),
+    ]);
+    return NextResponse.json({ ok: hasil.ok !== false, ...hasil, antreanUmum: tertunda });
   } catch (err) {
     console.error("[admin-email-worker] fatal:", err?.message);
     return NextResponse.json({ ok: false, error: err?.message }, { status: 500 });

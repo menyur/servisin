@@ -88,7 +88,20 @@
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ALAMAT_UJI_DEFAULT, ambilHealth, bacaEnvLokal, nilaiEmail, parseWait, PENGIRIM_CADANGAN } from "./lib/email-health.mjs";
+import {
+  ALAMAT_UJI_DEFAULT,
+  ambilHealth,
+  bacaEnvLokal,
+  nilaiEmail,
+  nilaiRiwayatResend,
+  parseWait,
+  pesanKuotaHarian,
+  pesanRiwayatResend,
+  PENGIRIM_CADANGAN,
+} from "./lib/email-health.mjs";
+// Kebijakan percobaan ulang dipakai apa adanya (bukan disalin) supaya selftest
+// benar-benar menguji aturan yang dipakai antrean produksi.
+import { kebijakanUlang } from "../src/lib/email-retry.js";
 
 const DIREKTORI = dirname(fileURLToPath(import.meta.url));
 const SKRIP_KIRIM = join(DIREKTORI, "verify-email-send.mjs");
@@ -108,6 +121,10 @@ const TO = (arg("to") ?? process.env.EMAIL_TEST_TO ?? ALAMAT_UJI_DEFAULT).trim()
 const WAIT_S = parseWait(argv);
 const NO_DNS = argv.includes("--no-dns");
 const NO_API = argv.includes("--no-api");
+// Riwayat kiriman (GET /emails) — membaca status NYATA pesan yang sudah dikirim,
+// hal yang tidak bisa dijawab oleh pemeriksaan env/DNS mana pun.
+const NO_RIWAYAT = argv.includes("--no-riwayat");
+const LIMIT_RIWAYAT = Math.min(Math.max(Number(arg("riwayat") ?? 100) || 100, 10), 100);
 
 /** Batas atas --tunggu supaya perintah tidak bisa menggantung tanpa batas. */
 const TUNGGU_MAKS_MENIT = 720;
@@ -347,6 +364,47 @@ function perluPicu(hasil) {
  * @param {object[]} hasil hasil kueri DNS (kueriResend)
  * @returns {string[]} kalimat siap cetak
  */
+/** Nomor tipe record DNS (jawaban DoH memakai angka, bukan nama). */
+const TIPE_DNS = { A: 1, NS: 2, CNAME: 5, SOA: 6, MX: 15, TXT: 16, AAAA: 28 };
+
+/**
+ * Baris jawaban DNS yang BENAR-BENAR ada di zona yang kita periksa.
+ *
+ * KENAPA INI ADA (salah lapor nyata, 17 Okt 2026): resolver MENGIKUTI CNAME, jadi
+ * jawaban untuk `TXT send.fixify.id` ikut memuat catatan milik host RESEND
+ * (`send.forge.rmta.net`) — MX `feedback.forge.rmta.net` dan SPF-nya. Pemeriksa
+ * yang membaca seluruh jawaban tanpa melihat NAMA PEMILIKNYA lalu melaporkan
+ * "zona masih memuat MX & TXT di `send.fixify.id`, hapus sisa catatan lama itu" —
+ * padahal zona itu hanya berisi CNAME (dibuktikan langsung ke nameserver zonanya).
+ * Laporan seperti itu menyesatkan ke arah paling buruk: menyuruh menghapus catatan
+ * yang sebenarnya disediakan Resend lewat CNAME, dan menyisakan SPF/DKIM tanpa
+ * pemilik. Karena itu jawaban dipisah menurut pemiliknya: `name` sama dengan nama
+ * yang ditanyakan = catatan di zona; selain itu = warisan dari target CNAME.
+ *
+ * Baris tanpa `name` (fixture lama / DoH yang tidak menyertakan pemilik) dianggap
+ * milik zona, supaya pemeriksaan tidak diam-diam melewatkan catatan nyata.
+ *
+ * Jenis record juga disaring bila `jenis` diberikan: kueri `MX send.fixify.id`
+ * jawabannya memuat baris CNAME (pemiliknya `send.fixify.id`) DItambah MX milik
+ * target. Tanpa saringan jenis, baris CNAME itu membuat nama ber-CNAME tampak
+ * "memuat MX" — persis salah lapor yang diperbaiki di sini.
+ */
+function barisZona(jawaban, nama, jenis) {
+  const dicari = String(nama ?? "").toLowerCase().replace(/\.$/, "");
+  const tipe = jenis ? TIPE_DNS[String(jenis).toUpperCase()] : null;
+  return (jawaban ?? []).filter((r) => {
+    const pemilik = String(r?.name ?? "").toLowerCase().replace(/\.$/, "");
+    if (pemilik && pemilik !== dicari) return false;
+    if (tipe && r?.type != null && Number(r.type) !== tipe) return false;
+    return true;
+  });
+}
+
+/** Nilai data jawaban yang memang milik zona (lihat barisZona). */
+function dataZona(jawaban, nama, jenis) {
+  return barisZona(jawaban, nama, jenis).map((r) => String(r?.data ?? ""));
+}
+
 function tumpangCname(catatan, hasil, domain) {
   const peta = new Map();
   for (const h of hasil ?? []) {
@@ -534,11 +592,19 @@ async function tanyaDns(jenis, nama, timeoutMs) {
       headers: { accept: "application/dns-json" },
       signal: ac.signal,
     });
-    if (!res.ok) return { data: [], err: `HTTP ${res.status}` };
+    if (!res.ok) return { data: [], jawaban: [], err: `HTTP ${res.status}` };
     const j = await res.json();
-    return { data: (j.Answer ?? []).map((a) => String(a.data ?? "")), err: null };
+    // `jawaban` menyertakan NAMA PEMILIK tiap baris: tanpa itu, catatan yang
+    // diwariskan lewat CNAME tidak bisa dibedakan dari catatan milik zona
+    // (lihat barisZona). `data` tetap disediakan untuk pemanggil lama.
+    const jawaban = (j.Answer ?? []).map((a) => ({
+      name: String(a.name ?? ""),
+      type: a.type,
+      data: String(a.data ?? ""),
+    }));
+    return { data: jawaban.map((a) => a.data), jawaban, err: null };
   } catch (e) {
-    return { data: [], err: e?.name === "AbortError" ? `timeout ${timeoutMs / 1000}s` : e.message };
+    return { data: [], jawaban: [], err: e?.name === "AbortError" ? `timeout ${timeoutMs / 1000}s` : e.message };
   } finally {
     clearTimeout(t);
   }
@@ -565,6 +631,29 @@ async function ambilDomainResend(apiKey, domain, timeoutMs) {
     return { domain: await rinci.json(), id: cocok.id, err: null };
   } catch (e) {
     return { domain: null, id: null, err: e?.name === "AbortError" ? `timeout ${timeoutMs / 1000}s` : e.message };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * Riwayat kiriman langsung dari API Resend (`GET /emails`) — satu-satunya cara
+ * menjawab "kenapa pesan yang SUDAH DITERIMA berakhir `failed`?". Membaca saja.
+ * @returns {{items: object[]|null, err: string|null}}
+ */
+async function ambilRiwayatResend(apiKey, limit, timeoutMs) {
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(`https://api.resend.com/emails?limit=${limit}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: ac.signal,
+    });
+    if (!res.ok) return { items: null, err: `GET /emails → HTTP ${res.status}` };
+    const j = await res.json();
+    return { items: j.data ?? j.items ?? [], err: null };
+  } catch (e) {
+    return { items: null, err: e?.name === "AbortError" ? `timeout ${timeoutMs / 1000}s` : e.message };
   } finally {
     clearTimeout(t);
   }
@@ -664,10 +753,11 @@ function rincianEnv(env) {
 
 /**
  * Satu baris simpulan: satu masalah tersisa, yang paling menghambat lebih dulu
- * (env produksi → catatan DNS → uji kirim). Murni; `dns` boleh null.
+ * (env produksi → catatan DNS → riwayat kiriman → uji kirim). Murni; `dns`,
+ * `kirim`, dan `riwayat` boleh null.
  * @returns {{kode: number, baris: string}}
  */
-function simpulkan({ env, dns, kirim }) {
+function simpulkan({ env, dns, kirim, riwayat }) {
   const masalah = [];
   if (env && !env.ok) masalah.push(rincianEnv(env)[0] ?? "masalah kesiapan env produksi");
 
@@ -683,7 +773,24 @@ function simpulkan({ env, dns, kirim }) {
     );
   }
 
-  if (kirim?.kode === 1) masalah.push(`Resend menolak uji kirim${kirim.pesan ? ` (${kirim.pesan})` : ""} — lihat detail di atas`);
+  // Riwayat kiriman: temuan yang menjelaskan email yang SUDAH DITERIMA lalu
+  // gagal/bounce — tidak terlihat dari env maupun DNS. Hanya temuan yang
+  // dilaporkan (status `delivered` saja bukan temuan), dan temuan HISTORIS yang
+  // sudah dibuktikan pulih (ada kiriman `delivered` sesudah masalah terakhir)
+  // tidak lagi diangkat ke simpulan — kalau tidak, dokter akan merah selamanya.
+  if (riwayat?.temuan?.length && !riwayat.pulih) masalah.push(riwayat.temuan[0]);
+
+  if (kirim?.kode === 1) {
+    // Kegagalan kuota DIKATAKAN apa adanya: bukan kunci, bukan domain. Tanpa
+    // cabang ini, satu baris simpulan menuding kunci/domain sementara penyebab
+    // sebenarnya kuota harian habis (Resend: `daily_quota_exceeded`).
+    const kuota = pesanKuotaHarian(kirim.pesan);
+    masalah.push(
+      kuota
+        ? `kiriman ditolak: ${kuota}`
+        : `Resend menolak uji kirim${kirim.pesan ? ` (${kirim.pesan})` : ""} — lihat detail di atas`
+    );
+  }
   if (kirim?.gagalJalan) masalah.push(`uji kirim tidak bisa dijalankan (${kirim.gagalJalan})`);
 
   if (masalah.length) {
@@ -702,11 +809,16 @@ function simpulkan({ env, dns, kirim }) {
         "kunci Resend tidak ada di mesin ini sehingga pengiriman nyata tak bisa dibuktikan — isi RESEND_API_KEY di .env.local lalu jalankan ulang"
     );
   if (!dns) belumTerbukti.push("catatan DNS domain pengirim tidak diperiksa (--no-dns)");
+  // Riwayat kiriman yang tidak diperiksa juga bukan hijau: ia satu-satunya bagian
+  // yang melihat pesan yang SUDAH berangkat, jadi melewatinya berarti "sehat"
+  // diklaim tanpa memeriksa bukti kedatangan yang paling langsung.
+  if (!riwayat) belumTerbukti.push("riwayat kiriman Resend tidak diperiksa (--no-riwayat, atau RESEND_API_KEY belum ada)");
   if (belumTerbukti.length) return { kode: 3, baris: `BELUM TERBUKTI: ${belumTerbukti.join("; ")}` };
 
   return {
     kode: 0,
-    baris: "TIDAK ADA MASALAH TERSISA: env produksi siap, status domain pengirim `verified` di Resend, dan Resend menerima uji kirim.",
+    baris:
+      "TIDAK ADA MASALAH TERSISA: env produksi siap, status domain pengirim `verified` di Resend, riwayat kiriman tidak menunjukkan kegagalan yang belum pulih, dan Resend menerima uji kirim.",
   };
 }
 
@@ -936,6 +1048,75 @@ if (SELFTEST) {
     0
   );
 
+  // ---------- SALAH LAPOR NYATA 17 Okt 2026: catatan milik HOST RESEND yang
+  // terbaca karena CNAME diikuti tidak boleh dianggap catatan di zona. Fixture di
+  // bawah memakai bentuk jawaban DoH yang sesungguhnya untuk domain ini.
+  const CNAME_SEND = { name: "send.fixify.id", type: 5, data: "send.forge.rmta.net." };
+  // Jawaban PER JENIS kueri, persis seperti resolver menjawab (CNAME diikuti):
+  const jawabanPerJenis = {
+    CNAME: [CNAME_SEND],
+    MX: [CNAME_SEND, { name: "send.forge.rmta.net", type: 15, data: "10 feedback.forge.rmta.net." }],
+    TXT: [CNAME_SEND, { name: "send.forge.rmta.net", type: 16, data: '"v=spf1 ip4:52.3.252.119 ~all"' }],
+  };
+  tambah(
+    "zona: MX/TXT milik host RESEND (name=target CNAME) TIDAK dihitung sebagai catatan zona",
+    dataZona(jawabanPerJenis.MX, "send.fixify.id", "MX"),
+    []
+  );
+  tambah(
+    "zona: kueri MX tidak terbaca 'memuat MX' hanya karena baris CNAME-nya ikut terjawab",
+    dataZona(jawabanPerJenis.MX, "send.fixify.id", "MX").length,
+    0
+  );
+  tambah(
+    "zona: CNAME di `send.` tetap terbaca (itu yang memang ada di zona)",
+    dataZona(jawabanPerJenis.CNAME, "send.fixify.id", "CNAME"),
+    ["send.forge.rmta.net."]
+  );
+  tambah(
+    "zona: catatan milik target CNAME terbaca bila ditanyakan sebagai namanya sendiri",
+    dataZona(jawabanPerJenis.MX, "send.forge.rmta.net", "MX"),
+    ["10 feedback.forge.rmta.net."]
+  );
+  tambah(
+    "zona: baris tanpa pemilik (fixture lama) dianggap milik zona, bukan dibuang",
+    dataZona([{ data: "10 mx.example.id." }], "send.fixify.id"),
+    ["10 mx.example.id."]
+  );
+  tambah(
+    "zona: nama pembanding tidak peduli huruf besar/kecil & titik akhir",
+    dataZona([{ name: "SEND.FIXIFY.ID.", data: "x" }], "send.fixify.id"),
+    ["x"]
+  );
+  // Hasil SETELAH pemisahan — persis yang dilakukan bagian live: tiap peran
+  // hanya menyisakan data milik zonanya sendiri.
+  const diZona = kueriResend("fixify.id").map((k) => ({
+    ...k,
+    data: dataZona(jawabanPerJenis[k.jenis] ?? [], k.nama, k.jenis),
+  }));
+  tambah(
+    "zona: setelah dipisah, `send.` hanya berisi CNAME (MX/TXT warisan tidak menyamar jadi catatan zona)",
+    diZona.filter((h) => h.nama === "send.fixify.id" && h.data.length).map((h) => h.jenis),
+    ["CNAME"]
+  );
+  tambah(
+    "tumpang: CNAME + MX/TXT yang hanya DIWARISI dari host Resend → TIDAK dilaporkan (ini salah lapor yang diperbaiki)",
+    tumpangCname(apiSiap.catatan, diZona, "fixify.id").length,
+    0
+  );
+  tambah(
+    "tumpang: MX/TXT yang BENAR-BENAR ada di zona tetap dilaporkan",
+    tumpangCname(
+      apiSiap.catatan,
+      [
+        { jenis: "CNAME", nama: "send.fixify.id", data: ["send.forge.rmta.net."] },
+        { jenis: "MX", nama: "send.fixify.id", data: dataZona([{ name: "send.fixify.id", type: 15, data: "10 mx1.hostinger.com." }], "send.fixify.id", "MX") },
+      ],
+      "fixify.id"
+    ).length,
+    1
+  );
+
   // panduanDns dengan data dari API Resend: nilai PASTI, bukan "salin dari dashboard"
   const pApi = panduanDns([
     {
@@ -962,6 +1143,50 @@ if (SELFTEST) {
   tambah("panduan(api): MX/TXT menumpang di `send` → menyuruh hapus lebih dulu", /hapus dulu MX & TXT/.test(pBentrok), true);
   tambah("panduan(api): menjelaskan CNAME diabaikan selama MX/TXT ada", /RFC 2181/.test(pBentrok), true);
 
+  // nilaiRiwayatResend / pesanRiwayatResend — pembeda "diterima lalu gagal" dari
+  // "bounce", dari "data uji merusak kiriman". Semua dari data NYATA 17 Okt 2026.
+  const pesanUji = [
+    { id: "1", last_event: "delivered", message_id: "<a@s.es>", created_at: "2026-10-16 13:00:00", to: ["itsupprots@gmail.com"], subject: "Pesanan baru" },
+    { id: "2", last_event: "bounced", message_id: "<b@s.es>", created_at: "2026-10-16 13:46:44", to: ["itsupprots@gmail.com", "probe-1@example.invalid"], subject: "Pendaftar teknisi baru" },
+    { id: "3", last_event: "bounced", message_id: "<c@s.es>", created_at: "2026-10-16 13:50:00", to: ["sendiri@emailnyata.id"], subject: "Satu penerima nyata" },
+    { id: "4", last_event: "failed", message_id: null, created_at: "2026-10-16 18:01:57", to: ["fhieajjah@gmail.com"], subject: "Reset kata sandi" },
+  ];
+  const rw = nilaiRiwayatResend(pesanUji);
+  tambah("riwayat: jumlah & hitungan peristiwa", [rw.jumlah, rw.peristiwa.delivered, rw.peristiwa.bounced, rw.peristiwa.failed], [4, 1, 2, 1]);
+  tambah("riwayat: `failed` tanpa message_id = ditolak SEBELUM diserahkan", rw.belumDiserahkan.length, 1);
+  tambah("riwayat: `bounced` dengan message_id TIDAK dihitung sebagai belum diserahkan", rw.gagalSetelahDiserahkan.length, 0);
+  tambah("riwayat: bounce dari alamat uji dikenali", rw.bounceUji, 1);
+  tambah(
+    "riwayat: penerima NYATA yang menemani alamat uji dicatat sebagai KORBAN, bukan penyebab",
+    [rw.korbanNyata.map((b) => b.alamat), rw.bounceNyata.map((b) => b.alamat)],
+    [["itsupprots@gmail.com"], ["sendiri@emailnyata.id"]]
+  );
+  const tUji = pesanRiwayatResend(rw);
+  tambah(
+    "riwayat: temuan menyebut SEBAB + LANGKAHNYA (kuota, alamat uji, alamat nyata)",
+    [tUji.length, /daily_quota_exceeded|kuota harian/.test(tUji.join(" ")), /verify:uji-guard/.test(tUji.join(" ")), /alasanMenetap/.test(tUji.join(" "))],
+    [3, true, true, true]
+  );
+  tambah("riwayat: tidak ada pesan → tidak ada temuan & tidak melempar", [nilaiRiwayatResend([]).jumlah, pesanRiwayatResend(null).length], [0, 0]);
+  tambah(
+    "riwayat: semua delivered → TIDAK ada temuan (bukan alarm palsu)",
+    pesanRiwayatResend(nilaiRiwayatResend([{ last_event: "delivered", message_id: "<x@s.es>", to: ["a@gmail.com"], subject: "ok" }])).length,
+    0
+  );
+  tambah(
+    "riwayat: beberapa penerima NYATA tanpa alamat uji → sebabnya tidak dipastikan (meragukan)",
+    nilaiRiwayatResend([
+      { last_event: "bounced", message_id: "<y@s.es>", to: ["a@nyata.id", "b@nyata.id"], subject: "dua" },
+    ]).bounceMeragukan.length,
+    2
+  );
+
+  // Kebijakan percobaan untuk penolakan permanen (bounce keras) — jangan ulangi.
+  const gagalTetap = kebijakanUlang("validation_error: domain is not verified", 1);
+  const bounceTetap = kebijakanUlang("550 mailbox unavailable — recipient address rejected", 1);
+  tambah("kebijakan: alamat/domain ditolak permanen → berhenti seketika (menyerah, tanpa jeda)", [gagalTetap.aksi, gagalTetap.jedaDetik, bounceTetap.aksi], ["menyerah", 0, "menyerah"]);
+  tambah("kebijakan: kuota tetap dibaca SEMENTARA (bukan menyerah)", kebijakanUlang("daily_quota_exceeded: You have reached your daily email sending quota.", 1).aksi, "tunda");
+
   // simpulkan
   const envOk = { ok: true, kode: [], detail: null };
   const dnsOk = { daftar: [{ domain: "fixify.id", hilang: [] }] };
@@ -970,11 +1195,20 @@ if (SELFTEST) {
   const kirimDitolak = { kode: 1, pesan: "validation_error: domain is not verified" };
   const dnsHilang = { daftar: [{ domain: "fixify.id", hilang: ["MX send.fixify.id", "TXT send.fixify.id"] }] };
 
-  tambah("simpulkan: semua beres → exit 0", simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus }).kode, 0);
+  const riwayatBersih = { temuan: [], pulih: true };
+  tambah("simpulkan: semua beres → exit 0", simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus, riwayat: riwayatBersih }).kode, 0);
   tambah(
     "simpulkan: semua beres → menyatakan tidak ada masalah",
-    simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus }).baris.startsWith("TIDAK ADA MASALAH TERSISA"),
+    simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus, riwayat: riwayatBersih }).baris.startsWith("TIDAK ADA MASALAH TERSISA"),
     true
+  );
+  tambah(
+    "simpulkan: riwayat kiriman dilewati → belum terbukti, bukan hijau",
+    [
+      simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus }).kode,
+      /--no-riwayat/.test(simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus }).baris),
+    ],
+    [3, true]
   );
   tambah(
     "simpulkan: kunci produksi tak terbaca → exit 1 + menamai kuncinya",
@@ -1014,6 +1248,41 @@ if (SELFTEST) {
     "simpulkan: masalah pasti lebih diutamakan daripada belum terbukti",
     simpulkan({ env: { ok: false, kode: ["kunci-tidak-terbaca"], detail: null }, dns: null, kirim: null }).kode,
     1
+  );
+  const simpulRiwayat = simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus, riwayat: { temuan: ["X: email nyata hilang karena data uji"] } });
+  tambah(
+    "simpulkan: temuan riwayat kiriman diangkat ke satu baris simpulan (exit 1)",
+    [simpulRiwayat.kode, /email nyata hilang karena data uji/.test(simpulRiwayat.baris)],
+    [1, true]
+  );
+  tambah(
+    "simpulkan: temuan riwayat yang sudah PULIH (ada `delivered` sesudahnya) tidak lagi membuat dokter merah",
+    simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus, riwayat: { temuan: ["X: historis"], pulih: true } }).kode,
+    0
+  );
+  tambah(
+    "riwayat: kegagalan lalu ada kiriman `delivered` sesudahnya → ditandai PULIH",
+    (() => {
+      const n = nilaiRiwayatResend([
+        { last_event: "failed", message_id: null, created_at: "2026-10-16 18:01:57", to: ["a@gmail.com"], subject: "gagal" },
+        { last_event: "delivered", message_id: "<x@s.es>", created_at: "2026-10-17 00:05:02", to: ["a@gmail.com"], subject: "sampai" },
+      ]);
+      return [n.pulih, n.jumlahTerkirimSetelahMasalah];
+    })(),
+    [true, 1]
+  );
+  tambah(
+    "riwayat: kiriman `delivered` SEBELUM kegagalan terakhir tidak dianggap pulih",
+    nilaiRiwayatResend([
+      { last_event: "delivered", message_id: "<x@s.es>", created_at: "2026-10-16 10:00:00", to: ["a@gmail.com"], subject: "sampai" },
+      { last_event: "failed", message_id: null, created_at: "2026-10-16 18:01:57", to: ["a@gmail.com"], subject: "gagal" },
+    ]).pulih,
+    false
+  );
+  tambah(
+    "simpulkan: riwayat bersih tidak menambah keluhan",
+    simpulkan({ env: envOk, dns: dnsOk, kirim: kirimLulus, riwayat: riwayatBersih }).kode,
+    0
   );
 
   let gagalSelftest = 0;
@@ -1130,10 +1399,31 @@ if (!NO_DNS) {
     const hasil = [];
     for (const k of kueriResend(domain)) {
       const jawab = await tanyaDns(k.jenis, k.nama, TIMEOUT_MS);
-      hasil.push({ ...k, data: jawab.data });
+      hasil.push({ ...k, data: jawab.data, jawaban: jawab.jawaban });
       if (jawab.err) infoDns.push(`pertanyaan DNS ${k.jenis} ${k.nama} gagal: ${jawab.err}`);
     }
     const nilai = nilaiDns(domain, hasil);
+
+    // Catatan yang BENAR-BENAR ada di zona domain ini. Jawaban resolver
+    // mengikuti CNAME, jadi MX/TXT milik host RESEND (`send.forge.rmta.net`)
+    // ikut terbaca seolah-olah milik domain ini — dan pemeriksa yang tidak
+    // memisahkannya akan menyuruh menghapus catatan yang tidak pernah ada di
+    // zona (salah lapor 17 Okt 2026).
+    const diZona = hasil.map((h) => ({ ...h, data: dataZona(h.jawaban ?? [], h.nama, h.jenis) }));
+
+    // Kalau MX/TXT hanya muncul karena CNAME diikuti, katakan apa adanya — kalau
+    // tidak, pembaca mengira zonanya masih kotor dan mulai menghapus catatan
+    // yang justru disediakan Resend.
+    for (const h of hasil) {
+      const warisan = (h.jawaban ?? []).filter((r) => {
+        const pemilik = String(r?.name ?? "").toLowerCase().replace(/\.$/, "");
+        return pemilik && pemilik !== String(h.nama).toLowerCase();
+      });
+      if (warisan.length && h.jenis !== "CNAME")
+        infoDns.push(
+          `${h.jenis} ${h.nama} terbaca dari host Resend lewat CNAME (${[...new Set(warisan.map((r) => r.name))].join(", ")}) — catatan itu BUKAN milik zona ini, jadi tidak ada yang perlu dihapus`
+        );
+    }
     for (const i of nilai.info) infoDns.push(`${i} (${label})`);
 
     // Nameserver zona: hanya untuk menuntun panel DNS mana yang dibuka di
@@ -1163,10 +1453,10 @@ if (!NO_DNS) {
       // Sisa catatan LAMA di nama yang sama dengan CNAME dilaporkan WALAU CNAME-nya
       // sudah `verified` (lihat tumpangCname) — persis kasus yang tidak dikeluhkan
       // siapa pun tetapi membuat DNS tidak konsisten antar resolver.
-      for (const t of tumpangCname(api.catatan, hasil, domain)) infoApi.push(`${domain} (${label}): ${t}`);
+      for (const t of tumpangCname(api.catatan, diZona, domain)) infoApi.push(`${domain} (${label}): ${t}`);
       for (const k of [...api.kurang, ...api.peringatan]) {
         if (k.jenis !== "CNAME") continue;
-        const tumpang = hasil
+        const tumpang = diZona
           .filter((h) => h.nama === `${k.host}.${domain}` && h.data.length > 0)
           .map((h) => h.jenis);
         if (tumpang.length) k.bentrok = [...new Set(tumpang)];
@@ -1223,6 +1513,59 @@ if (!NO_DNS) {
   console.log("[2/3] catatan DNS domain pengirim ... DILEWATI (--no-dns)");
 }
 
+// --- 2b: riwayat kiriman (status NYATA pesan yang sudah dikirim) -------------
+// Pertanyaan yang dijawab bagian ini: "Resend menerima pesannya, kenapa
+// `last_event`-nya `failed`?" Env boleh siap, domain boleh `verified` — keduanya
+// tidak memberi tahu apa yang terjadi pada pesan yang sudah berangkat.
+let riwayat = null;
+if (NO_RIWAYAT) {
+  console.log("[2b] riwayat kiriman Resend ........ DILEWATI (--no-riwayat)");
+} else if (!kunciResend) {
+  console.log("[2b] riwayat kiriman Resend ........ DILEWATI (RESEND_API_KEY tidak ada di mesin ini)");
+} else {
+  const jawabRiwayat = await ambilRiwayatResend(kunciResend, LIMIT_RIWAYAT, TIMEOUT_MS);
+  if (jawabRiwayat.err) {
+    console.log(`[2b] riwayat kiriman Resend ........ GAGAL (${jawabRiwayat.err})`);
+  } else {
+    const n = nilaiRiwayatResend(jawabRiwayat.items);
+    const temuan = pesanRiwayatResend(n);
+    riwayat = { nilai: n, temuan, pulih: n.pulih };
+    // Label membedakan tiga keadaan: bersih, ADA MASALAH SEKARANG, atau historis
+    // yang sudah dipulihkan (ada kiriman `delivered` sesudah masalah terakhir).
+    // Menyebut yang terakhir sebagai "PERLU DIPERIKSA" akan membuat pembaca
+    // memburu kegagalan kemarin yang sudah ditangani.
+    const labelRiwayat = temuan.length ? (n.pulih ? "HISTORIS (jalur sudah sehat)" : "PERLU DIPERIKSA") : "LULUS";
+    console.log(
+      `[2b] riwayat kiriman Resend ........ ${labelRiwayat} (${n.jumlah} pesan terakhir${n.rentang.dari ? `, ${n.rentang.dari} → ${n.rentang.sampai}` : ""})`
+    );
+    const daftar = Object.entries(n.peristiwa)
+      .sort((a, b) => b[1] - a[1])
+      .map(([ev, c]) => `${ev}=${c}`)
+      .join(" · ");
+    console.log(`      peristiwa: ${daftar || "(tidak ada pesan terbaca)"}`);
+    if (n.belumDiserahkan.length)
+      console.log(
+        `      ditolak sebelum diserahkan (message_id kosong): ${n.belumDiserahkan.length} — ${n.belumDiserahkan[n.belumDiserahkan.length - 1].waktu}`
+      );
+    if (n.bounce.length)
+      console.log(
+        `      bounce: ${n.peristiwa.bounced ?? 0} pesan · pemicunya alamat uji: ${n.bounceUji}× · penerima nyata yang ikut terbawa: ${n.korbanNyata.map((b) => `${b.alamat} ${b.jumlah}×`).join(", ") || "(tidak ada)"}`
+      );
+    for (const t of temuan) console.log(`      - ${t}`);
+    if (n.pulih)
+      console.log(
+        `      jalan sudah sehat: ${n.jumlahTerkirimSetelahMasalah} kiriman \`delivered\` SESUDAH masalah terakhir (${n.terakhirMasalah}) — temuan di atas historis, bukan keadaan sekarang`
+      );
+    // Riwayat itu HISTORIS: temuan di atas menjelaskan kiriman yang sudah berlalu,
+    // bukan status sekarang. Tanpa catatan ini, kegagalan 16 Okt yang sudah
+    // ditangani terbaca sebagai masalah yang masih berjalan.
+    if (temuan.length && n.rentang.dari)
+      console.log(
+        `      catatan: riwayat ini mencakup ${n.rentang.dari} → ${n.rentang.sampai} (historis). Bukti apakah masih berlanjut: kirim email sungguhan lalu jalankan ulang bagian [2b] — pesan baru berstatus \`delivered\` berarti jalurnya sudah sehat.`
+      );
+  }
+}
+
 // --- 3/3: uji kirim nyata (skrip yang sama dengan verify:email-send) ---------
 let kirim = null;
 // Waktu tunggu habis dan domain belum `verified`: mengirim dari domain itu pasti
@@ -1263,7 +1606,7 @@ if (tunggu?.aksi === "habis") {
 
 // --- Simpulan: satu masalah tersisa, satu baris ------------------------------
 console.log("=".repeat(72));
-const keputusan = simpulkan({ env, dns, kirim });
+const keputusan = simpulkan({ env, dns, kirim, riwayat });
 console.log(keputusan.baris);
 
 // --- --panduan: langkah mengisi catatan DNS yang kurang (setelah simpulan) ---

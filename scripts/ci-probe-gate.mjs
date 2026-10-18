@@ -10,8 +10,9 @@
 //   node scripts/ci-probe-gate.mjs --only=realtime-rls,audit-f3-f6
 //   node scripts/ci-probe-gate.mjs --list   # daftar langkah tanpa menjalankan
 //
-// Tiga belas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
-// kredensial), E2E pengingat setor admin sampai ke aplikasi (penanda terbaca
+// Enam belas langkah: kebijakan saldo tidak negatif (offline/read-only — tanpa
+// kredensial), E2E
+// pengingat setor admin sampai ke aplikasi (penanda terbaca
 // sesi teknisi), RLS bucket bukti setor (pemilik saja, tidak bocor ke teknisi
 // lain / anon), retensi riwayat 30 hari (chat & laporan dihapus, pesanan
 // ditandai, catatan keuangan utuh), konfigurasi provider Google
@@ -21,11 +22,13 @@
 // (komisi/voucher), E2E klaim teknisi (keahlian+area), E2E pengiriman push
 // "pekerjaan baru" ke perangkat teknisi yang cocok, dan gerbang privasi
 // "teknisi menuju lokasi" (anon ditolak, pelanggan lain tidak bisa membaca,
-// posisi basi/kedaluwarsa tidak tampil).
+// posisi basi/kedaluwarsa tidak tampil), dan siklus hidup akun (baca saja:
+// sesi tanpa baris profil → aplikasi menyapa "Kawan", dan permintaan hapus
+// berstatus 'selesai' yang akunnya masih bisa masuk).
 // Total ±3 menit di jaringan normal.
 //
-// PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`
-// dan `notif-env` — keduanya murni baca).
+// PERINGATAN: probe ber-kredensial TIDAK read-only (kecuali `google-provider`,
+// `notif-env`, dan `akun-aman` — ketiganya murni baca).
 // Mereka membuat baris/akun uji sementara di Supabase produksi (termasuk saldo
 // & voucher pada langkah E2E), memverifikasi perilaku nyata, lalu menghapusnya
 // lagi — dan setiap langkah melaporkan sisa data uji (harus 0). Kredensial
@@ -126,6 +129,13 @@ const STEPS = [
     label: "Gerbang privasi \"teknisi menuju lokasi\": anon ditolak, pelanggan lain tidak bisa membaca posisi, posisi basi/kedaluwarsa tidak tampil",
     args: ["scripts/verify-trip-share-privacy-live.mjs"],
     guards: "kode posisi teknisi hanya terbaca pemilik pesanan selama perjalanan aktif & segar; berbagi berakhir sendiri saat tiba (jalankan ULANG supabase/migrate-technician-trip-share.sql bila langkah ini keluar kode 2)",
+  },
+  {
+    id: "akun-aman",
+    label: "Siklus hidup akun (baca saja): sesi tanpa profil & penghapusan yang aksesnya belum tercabut",
+    args: ["scripts/verify-account-security.mjs"],
+    guards:
+      "tidak ada sesi sah tanpa baris profiles (gejala: aplikasi menyapa \"Kawan\" dan pengguna tak bisa mengajukan hapus akun) dan tidak ada permintaan hapus berstatus 'selesai' yang akunnya masih bisa masuk (jalankan supabase/fix-profil-hilang.sql, atau cabut akses akunnya, bila langkah ini merah)",
   },
   {
     id: "e2e-push-notify",

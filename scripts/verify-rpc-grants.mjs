@@ -286,6 +286,23 @@ const ARG = {
   "complete_push(uuid)": { p_id: TIDAK_ADA },
   "take_admin_email_batch(integer)": { p_limit: 0 },
   "complete_admin_email(uuid)": { p_id: TIDAK_ADA },
+  // Keluarga jejak kegagalan email (migrate-admin-email-failures.sql +
+  // fix-admin-email-macet-dan-kuota.sql). Semua argumennya menunjuk baris yang
+  // TIDAK ADA, jadi panggilan ini tidak mengubah data siapa pun — yang diuji
+  // hanya izinnya. `p_limit: 0` pada pengambilan batch sekarang benar-benar
+  // berarti "tanpa baris", sehingga probe tidak lagi mengklaim antrean nyata.
+  "fail_admin_email(uuid, text, integer)": { p_id: TIDAK_ADA, p_error: "cek izin", p_delay_seconds: 0 },
+  "defer_admin_email(uuid, text, integer)": { p_id: TIDAK_ADA, p_error: "cek izin", p_delay_seconds: 0 },
+  "give_up_admin_email(uuid, text)": { p_id: TIDAK_ADA, p_error: "cek izin" },
+  "retry_admin_email(uuid)": { p_id: TIDAK_ADA },
+  // Antrean email UMUM (migrate-email-outbox-umum.sql). Semua argumen menunjuk
+  // baris yang TIDAK ADA dan `p_limit: 0` tidak mengklaim apa pun, jadi probe ini
+  // hanya menguji izinnya — tidak menyentuh pesan yang sedang menunggu.
+  "take_email_batch(integer)": { p_limit: 0 },
+  "complete_email(uuid)": { p_id: TIDAK_ADA },
+  "fail_email(uuid, text, integer)": { p_id: TIDAK_ADA, p_error: "cek izin", p_delay_seconds: 0 },
+  "defer_email(uuid, text, integer)": { p_id: TIDAK_ADA, p_error: "cek izin", p_delay_seconds: 0 },
+  "give_up_email(uuid, text)": { p_id: TIDAK_ADA, p_error: "cek izin" },
   // Memicu sapuan worker. Antrean memang disapu tiap menit oleh jadwal, jadi ini
   // tidak mengubah perilaku normal — dan justru efek inilah yang ingin dicegah.
   "kick_admin_email_worker()": {},

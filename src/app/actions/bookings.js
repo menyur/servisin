@@ -5,6 +5,7 @@ import { calculateTotal, genBookingCode } from "@/lib/pricing";
 import { createPaymentTransaction } from "@/lib/payment";
 import { sendBookingConfirmationEmail, sendAdminNewBookingEmail, sendAdminPaymentProofEmail } from "@/lib/email";
 import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
+import { alamatUji } from "@/lib/email-uji";
 import { revalidatePath } from "next/cache";
 
 export async function createBooking(input) {
@@ -216,23 +217,29 @@ async function finishBookingCreation(supabase, { booking, service, profile, user
   // memakai aturan identik dan tidak pernah mengirim dua kali: bila migrasi
   // admin_email_outbox sudah dijalankan, trigger DB yang mengantrekan dan di
   // sini cukup menyapu antrean.
-  await notifyAdminsOrDirect(supabase, async () => {
-    // Penerima mengikuti pengaturan panel admin untuk peristiwa "pesanan baru"
-    // (RPC menyaring admin yang mematikannya; sebelum migrasi = semua admin).
-    const adminEmails = await adminEmailsForEvent(supabase, "new_booking");
-    if (!adminEmails?.length) return;
-    await sendAdminNewBookingEmail(adminEmails, {
-      code: booking.code,
-      service_name: service.name,
-      customer_name: profile?.name || user.email,
-      customer_phone: profile?.phone || "",
-      booking_date: booking.booking_date,
-      booking_time: booking.booking_time,
-      address: booking.address,
-      payment_method: booking.payment_method,
-      total_price: booking.total_price,
-    });
-  });
+  await notifyAdminsOrDirect(
+    supabase,
+    async () => {
+      // Penerima mengikuti pengaturan panel admin untuk peristiwa "pesanan baru"
+      // (RPC menyaring admin yang mematikannya; sebelum migrasi = semua admin).
+      const adminEmails = await adminEmailsForEvent(supabase, "new_booking");
+      if (!adminEmails?.length) return;
+      await sendAdminNewBookingEmail(adminEmails, {
+        code: booking.code,
+        service_name: service.name,
+        customer_name: profile?.name || user.email,
+        customer_phone: profile?.phone || "",
+        booking_date: booking.booking_date,
+        booking_time: booking.booking_time,
+        address: booking.address,
+        payment_method: booking.payment_method,
+        total_price: booking.total_price,
+      });
+    },
+    // Sumber peristiwa = pelanggan yang memesan; akun uji tidak dikirimi email
+    // ke admin (kuota harian dihabiskan data uji, bukan pelanggan).
+    { sumberEmail: user.email }
+  );
 
   revalidatePath("/dashboard");
 
@@ -290,25 +297,31 @@ export async function submitPaymentProof({ bookingId, proofUrl, amount }) {
     return { error: error.message };
   }
 
-  // email ke admin penerima peristiwa "bukti pembayaran" (fire-and-forget)
-  try {
-    const [{ data: profile }, adminEmails] = await Promise.all([
-      supabase.from("profiles").select("name, phone").eq("id", user.id).single(),
-      adminEmailsForEvent(supabase, "payment_proof"),
-    ]);
-    if (adminEmails?.length) {
-      sendAdminPaymentProofEmail(adminEmails, {
-        code: booking.code,
-        customer_name: profile?.name || user.email,
-        customer_phone: profile?.phone || "",
-        method: booking.payment_method,
-        amount: amt,
-        total: booking.total_price,
-        proofUrl,
-      }).catch(() => {});
+  // email ke admin penerima peristiwa "bukti pembayaran" (fire-and-forget).
+  // Sumber akun uji → tidak ada kiriman sama sekali (kuota harian hanya untuk
+  // peristiwa sungguhan; lihat src/lib/email-uji.js).
+  if (alamatUji(user.email)) {
+    console.warn(`[bukti bayar] email admin dilewati — sumber akun uji (${user.email})`);
+  } else {
+    try {
+      const [{ data: profile }, adminEmails] = await Promise.all([
+        supabase.from("profiles").select("name, phone").eq("id", user.id).single(),
+        adminEmailsForEvent(supabase, "payment_proof"),
+      ]);
+      if (adminEmails?.length) {
+        sendAdminPaymentProofEmail(adminEmails, {
+          code: booking.code,
+          customer_name: profile?.name || user.email,
+          customer_phone: profile?.phone || "",
+          method: booking.payment_method,
+          amount: amt,
+          total: booking.total_price,
+          proofUrl,
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.warn("[bukti bayar] email admin gagal:", e?.message);
     }
-  } catch (e) {
-    console.warn("[bukti bayar] email admin gagal:", e?.message);
   }
 
   revalidatePath("/dashboard");
