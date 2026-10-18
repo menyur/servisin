@@ -279,7 +279,7 @@ export async function updateBookingStatusAdmin(bookingId, status) {
   // data minimal untuk push (user_id selalu ada; teknisi opsional)
   const { data: cur } = await supabase
     .from("bookings")
-    .select("code, user_id, technician_id, address, services(name)")
+    .select("code, status, user_id, technician_id, address, services(name)")
     .eq("id", bookingId)
     .single();
 
@@ -309,6 +309,17 @@ export async function updateBookingStatusAdmin(bookingId, status) {
           ? `${techName} sedang mengerjakan pesanan ${cur.code} (${cur.services?.name || "layanan"}).`
           : `Pesanan ${cur.code} sedang dikerjakan.`,
         url: "/dashboard",
+        tag: `booking-${bookingId}`,
+      });
+    } else if (status === "cancelled" && cur.status !== "cancelled") {
+      // Pembatalan oleh admin sebelumnya tidak memberi tahu pelanggan sama
+      // sekali. Hanya kirim saat status benar-benar berubah agar tombol simpan
+      // ulang di panel admin tidak menghasilkan notifikasi ganda.
+      await sendPushToUser(cur.user_id, {
+        title: "Pesanan dibatalkan ❌",
+        event: "order_cancelled",
+        body: `Pesanan ${cur.code} (${cur.services?.name || "layanan"}) dibatalkan admin. Buka Pesanan untuk melihat detail terbaru.`,
+        url: "/orders",
         tag: `booking-${bookingId}`,
       });
     } else if (status === "completed") {
@@ -875,7 +886,11 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
   }
 
   // pastikan target memang teknisi — jangan sampai mengubah status customer/admin
-  const { data: target } = await supabase.from("profiles").select("role, name, email").eq("id", userId).single();
+  const { data: target } = await supabase
+    .from("profiles")
+    .select("role, name, email, approval_status")
+    .eq("id", userId)
+    .single();
   if (!target || target.role !== "technician") {
     return { error: "Hanya akun teknisi yang bisa disetujui/ditolak." };
   }
@@ -886,6 +901,30 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
     .eq("id", userId)
     .eq("role", "technician");
   if (error) return { error: error.message };
+
+  // Kabari teknisi HANYA saat status benar-benar berubah. Menyimpan ulang
+  // status yang sama (mis. admin menekan tombol dua kali) tidak boleh memicu
+  // notifikasi palsu. Disetujui → tab Pekerjaan (langsung bisa ambil job);
+  // ditolak → tab Profil (tempat data pendaftaran & kontak admin dilihat).
+  if (target.approval_status !== approvalStatus) {
+    if (approvalStatus === "approved") {
+      await sendPushToUser(userId, {
+        title: "Akun teknisi disetujui 🎉",
+        event: "technician_approved",
+        body: `Selamat${target.name ? `, ${target.name}` : ""}! Kamu sudah bisa mengambil pekerjaan. Lengkapi area layanan di Profil agar pekerjaan di sekitarmu muncul.`,
+        url: "/jobs",
+        tag: `approval-${userId}`,
+      });
+    } else if (approvalStatus === "rejected") {
+      await sendPushToUser(userId, {
+        title: "Pendaftaran teknisi belum disetujui ❌",
+        event: "technician_rejected",
+        body: "Pendaftaran teknismu belum disetujui admin. Buka Profil untuk memeriksa datamu, lalu hubungi admin bila perlu.",
+        url: "/profile",
+        tag: `approval-${userId}`,
+      });
+    }
+  }
 
   revalidatePath("/admin");
   revalidatePath("/", "layout"); // refresh badge navbar (jumlah pendaftar pending)
