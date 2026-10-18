@@ -31,6 +31,7 @@ emu.png
 runs.json
 run.json
 flutter_app/android/app/google-services1.json
+flutter_app/android/app/google-services old.json
 emulator-preview.html
 
 # APK TIDAK disimpan di Git: tiap rilis ±39 MB masuk riwayat dan tiap clone

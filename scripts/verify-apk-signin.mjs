@@ -108,7 +108,35 @@ export function parseGoogleServices(json) {
       else if (Number(oauth.client_type) === CLIENT_TYPE_WEB) web.push(id);
     }
   }
-  return { android, web, packages };
+  // Deduplikasi: client Web/Android yang SAMA muncul di SETIAP entri app Android
+  // pada berkas yang memuat beberapa paket (mis. paket lama + paket sekarang),
+  // sehingga tanpa ini jumlahnya terlihat dua padahal nilainya satu.
+  return { android: [...new Set(android)], web: [...new Set(web)], packages: [...new Set(packages)] };
+}
+
+/**
+ * Entri `client` untuk satu paket, khusus client OAuth bertipe Android (type 1)
+ * dan sidik jari yang terdaftar.
+ *
+ * Kenapa perlu: Firebase menyimpan SEMUA app Android di satu berkas, jadi
+ * `google-services.json` bisa memuat paket lama (`com.fixify.app`) dan paket
+ * sekarang (`id.fixify.app`) sekaligus. Client bertipe Android itulah bukti bahwa
+ * pasangan (package, SHA-1) sudah didaftarkan — tanpa itu Google menolak login
+ * native di perangkat (ApiException 10 / error 12500), bukan saat build.
+ * `null` = paket tidak ada di berkas.
+ */
+export function androidClientUntukPaket(json, pkg) {
+  for (const client of json?.client ?? []) {
+    const info = client?.client_info?.android_client_info;
+    if (!info || info.package_name !== pkg) continue;
+    const ids = (client.oauth_client ?? [])
+      .filter((o) => Number(o.client_type) === CLIENT_TYPE_ANDROID)
+      .map((o) => o.client_id)
+      .filter(Boolean);
+    const certHash = (info.certificate_hash ?? []).filter(Boolean);
+    return { ada: ids.length > 0, ids, certHash };
+  }
+  return null;
 }
 
 /** Normalisasi sidik jari: buang pemisah, jadikan huruf besar, format AA:BB:… */
@@ -648,11 +676,13 @@ function main() {
   // --- 1 & 2: google-services.json + client Web ---------------------------
   const gsPath = flags.googleServices || process.env.GOOGLE_SERVICES_FILE || DEFAULT_GOOGLE_SERVICES;
   let services = null;
+  let gsJson = null;
   if (!existsSync(gsPath)) {
     add("google-services", "google-services.json", "fail", `tidak ditemukan: ${path.relative(ROOT, gsPath)}`);
   } else {
     try {
-      services = parseGoogleServices(JSON.parse(readFileSync(gsPath, "utf8")));
+      gsJson = JSON.parse(readFileSync(gsPath, "utf8"));
+      services = parseGoogleServices(gsJson);
     } catch (err) {
       add("google-services", "google-services.json", "fail", `bukan JSON valid: ${err.message}`);
     }
@@ -683,18 +713,52 @@ function main() {
     }
 
     const gradle = existsSync(BUILD_GRADLE) ? parseApplicationIds(readFileSync(BUILD_GRADLE, "utf8")) : {};
-    const pkgGs = services.packages[0] ?? null;
+    // Satu berkas bisa memuat beberapa app Android (paket lama yang belum dihapus
+    // di Firebase + paket sekarang). Yang menentukan: apakah applicationId
+    // SEKARANG ada di daftar — bukan paket pertama di berkas.
+    const daftarPkg = services.packages;
+    const pkgCocok = Boolean(gradle.applicationId) && daftarPkg.includes(gradle.applicationId);
     if (!gradle.applicationId) {
       add("package", "package name vs applicationId", "unknown", `applicationId tidak terbaca dari ${path.relative(ROOT, BUILD_GRADLE)}`);
-    } else if (pkgGs && pkgGs !== gradle.applicationId) {
+    } else if (daftarPkg.length && !pkgCocok) {
       add(
         "package",
         "package name vs applicationId",
         "fail",
-        `google-services.json: ${pkgGs} · Gradle: ${gradle.applicationId} — Google mencocokkan (package, SHA-1), jadi login native akan ditolak.`
+        `google-services.json: ${daftarPkg.join(", ")} · Gradle: ${gradle.applicationId} — Google mencocokkan (package, SHA-1), jadi login native akan ditolak.`
       );
     } else {
-      add("package", "package name vs applicationId", "pass", pkgGs ? `${pkgGs} (cocok)` : `${gradle.applicationId} (tanpa paket di google-services.json)`);
+      const lain = daftarPkg.filter((p) => p !== gradle.applicationId);
+      add(
+        "package",
+        "package name vs applicationId",
+        "pass",
+        pkgCocok
+          ? `${gradle.applicationId} (cocok${lain.length ? `; berkas juga memuat paket lain: ${lain.join(", ")}` : ""})`
+          : `${gradle.applicationId} (tanpa paket di google-services.json)`
+      );
+    }
+
+    // Client bertipe Android untuk paket sekarang: bukti SHA-1 sudah didaftarkan.
+    const klien = gsJson ? androidClientUntukPaket(gsJson, gradle.applicationId) : null;
+    if (klien?.ada) {
+      add(
+        "android-oauth-client",
+        `OAuth client Android untuk ${gradle.applicationId}`,
+        "pass",
+        `${klien.ids.length} client bertipe Android · cert_hash ${klien.certHash.length} sidik jari`
+      );
+    } else if (klien) {
+      add(
+        "android-oauth-client",
+        `OAuth client Android untuk ${gradle.applicationId}`,
+        "fail",
+        [
+          `entri ${gradle.applicationId} tidak memuat client bertipe Android (cert_hash ${klien.certHash.length}).`,
+          `Daftarkan SHA-1 rilis di Firebase (Project settings → Your apps → Android → Add fingerprint) atau buat OAuth client Android untuk paket ini, lalu unduh ulang google-services.json.`,
+          `Tanpa itu Google menolak login native di perangkat (ApiException 10 / error 12500) walau build dan unggahan ke Play tetap lancar.`,
+        ].join("\n      ")
+      );
     }
   }
 
@@ -907,6 +971,25 @@ function runSelftest() {
     }),
     { android: ["a"], web: ["w"], packages: ["app.contoh.uji"] }
   );
+  // Berkas Firebase bisa memuat beberapa paket sekaligus: helper harus memilih
+  // entri yang cocok, bukan paket pertama di berkas.
+  const gsDuaPaket = {
+    client: [
+      { client_info: { android_client_info: { package_name: "com.lama.uji" } }, oauth_client: [{ client_type: 1, client_id: "lama" }] },
+      { client_info: { android_client_info: { package_name: "app.contoh.uji", certificate_hash: ["AA:BB"] } }, oauth_client: [{ client_type: 3, client_id: "w" }] },
+    ],
+  };
+  cek("androidClientUntukPaket (paket kedua, tanpa client Android)", androidClientUntukPaket(gsDuaPaket, "app.contoh.uji"), {
+    ada: false,
+    ids: [],
+    certHash: ["AA:BB"],
+  });
+  cek("androidClientUntukPaket (paket pertama, ada client Android)", androidClientUntukPaket(gsDuaPaket, "com.lama.uji"), {
+    ada: true,
+    ids: ["lama"],
+    certHash: [],
+  });
+  cek("androidClientUntukPaket (paket tak ada di berkas)", androidClientUntukPaket(gsDuaPaket, "app.tidak.ada"), null);
   cek("formatSha1 (tanpa pemisah)", formatSha1("abae3b7961720fd049ef6251639615aace053268"), "AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68");
   cek("formatSha1 (panjang salah)", formatSha1("AB:CD"), null);
   cek("expectedFromFileText (komentar + baris kosong)", expectedFromFileText("# catatan\n\nAB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68  # release\n"), "AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68");
