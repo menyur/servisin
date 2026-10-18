@@ -21,6 +21,11 @@ freebuff-cleanup-tmp/
 # Laporan JSON ESLint yang dibuat CI saat lint gagal
 lint-report.json
 
+# Skrip & berkas sementara di akar repo (tmp-*, mis. tmp-cek-*.mjs yang memuat
+# surel akun nyata atau data uji dari .env.local). Pola tanpa garis miring
+# berlaku di semua tingkat; `git check-ignore -v <berkas>` untuk memastikan.
+tmp-*
+
 # Artefak lokal/agen yang tidak boleh ikut commit (bobot tanpa nilai):
 emu.png
 runs.json
