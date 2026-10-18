@@ -818,7 +818,7 @@ function main() {
       [
         `SHA-1 keystore yang akan dipakai: ${sidikJari}`,
         `Belum ada nilai harapan. Daftarkan sidik jari itu di Google Cloud Console →`,
-        `Credentials → OAuth client Android (package com.fixify.app), lalu SALIN ke`,
+        `Credentials → OAuth client Android (package id.fixify.app), lalu SALIN ke`,
         `${path.relative(ROOT, expectedFile)} (satu baris) supaya pemeriksaan ini bisa mendeteksi`,
         `keystore terganti / build jatuh ke kunci debug.`,
       ].join("\n      ")
@@ -892,18 +892,20 @@ function runSelftest() {
     storeFile: "../a.keystore",
     keyAlias: "fixify-release",
   });
-  cek("parseApplicationIds", parseApplicationIds('applicationId = "com.fixify.app"\n    namespace = "com.fixify.app"'), {
-    applicationId: "com.fixify.app",
-    namespace: "com.fixify.app",
+  // Paket uji sengaja dibuat BEDA antara applicationId & namespace: parser harus
+  // tetap membaca keduanya walau repo ini kini memakai satu nama paket untuk dua-duanya.
+  cek("parseApplicationIds", parseApplicationIds('applicationId = "app.contoh.uji"\n    namespace = "id.contoh.uji"'), {
+    applicationId: "app.contoh.uji",
+    namespace: "id.contoh.uji",
   });
   cek(
     "parseGoogleServices (Android + Web)",
     parseGoogleServices({
       client: [
-        { client_info: { android_client_info: { package_name: "com.fixify.app" } }, oauth_client: [{ client_type: 1, client_id: "a" }, { client_type: 3, client_id: "w" }] },
+        { client_info: { android_client_info: { package_name: "app.contoh.uji" } }, oauth_client: [{ client_type: 1, client_id: "a" }, { client_type: 3, client_id: "w" }] },
       ],
     }),
-    { android: ["a"], web: ["w"], packages: ["com.fixify.app"] }
+    { android: ["a"], web: ["w"], packages: ["app.contoh.uji"] }
   );
   cek("formatSha1 (tanpa pemisah)", formatSha1("abae3b7961720fd049ef6251639615aace053268"), "AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68");
   cek("formatSha1 (panjang salah)", formatSha1("AB:CD"), null);

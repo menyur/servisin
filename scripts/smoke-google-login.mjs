@@ -19,7 +19,7 @@
 //   node scripts/smoke-google-login.mjs --manual        # human-in-the-loop: leg Google asli
 //   node scripts/smoke-google-login.mjs --selftest      # uji parser tanpa device
 //   node scripts/smoke-google-login.mjs --fake-device   # dry-run: device palsu, jaringan asli
-//   node scripts/smoke-google-login.mjs --device=emulator-5554 --app=com.fixify.app
+//   node scripts/smoke-google-login.mjs --device=emulator-5554 --app=id.fixify.app
 //
 // Mengapa ada mode otomatis: memilih akun di layar Google tidak bisa diotomasi
 // tanpa menyimpan kredensial pengguna (tidak dilakukan di sini). Karena itu
@@ -48,7 +48,7 @@ import {
   deleteTempUsers,
 } from "./lib/probe-env.mjs";
 
-const DEFAULT_APP_ID = process.env.SMOKE_APP_ID || "com.fixify.app";
+const DEFAULT_APP_ID = process.env.SMOKE_APP_ID || "id.fixify.app";
 const DEEP_LINKS = ["fixify://login-callback", "fixify://reset-password", "fixify://confirm"];
 const ADB_TIMEOUT_MS = 30_000;
 const SESSION_WAIT_MS = 60_000;
@@ -478,10 +478,10 @@ const FIXTURES = {
     { name: "kosong", input: "List of devices attached\n\n", expect: [] },
   ],
   resolve: [
-    { name: "intent-filter app kita", input: "com.fixify.app/.MainActivity\n", expect: "com.fixify.app/.MainActivity" },
+    { name: "intent-filter app kita", input: "id.fixify.app/.MainActivity\n", expect: "id.fixify.app/.MainActivity" },
     { name: "dijawab browser", input: "com.android.chrome/com.google.android.apps.chrome.Main\n", expect: "com.android.chrome/com.google.android.apps.chrome.Main" },
     { name: "tidak ada aktivitas", input: "No activity found\n", expect: null },
-    { name: "nama komponen penuh", input: "com.fixify.app/com.fixify.app.MainActivity\n", expect: "com.fixify.app/com.fixify.app.MainActivity" },
+    { name: "nama komponen penuh", input: "id.fixify.app/id.fixify.app.MainActivity\n", expect: "id.fixify.app/id.fixify.app.MainActivity" },
   ],
   prefs: [
     {

@@ -1,10 +1,11 @@
-# Runbook Google Play — Fixify (com.fixify.app)
+# Runbook Google Play — Fixify (id.fixify.app)
 
 Dokumen ini memandu pendaftaran **Fixify** ke Google Play: apa yang **sudah siap di
 repo**, apa yang **hanya bisa Anda lakukan** (akun, unggah, keputusan), dan urutan
 langkahnya supaya tidak ditolak setelah akun developer dibayar.
 
 Berkas terkait: [go-live-checklist](./go-live-checklist.md) ·
+[**unggah-play (langkah klik-per-klik)**](./upload-play.md) ·
 [security](./security.md) · [keystore-recovery](./keystore-recovery.md) ·
 [fitur-per-peran](./fitur-per-peran.md)
 
@@ -19,13 +20,26 @@ langkah AAB di CI terhapus.
 
 | Area | Status | Bukti |
 |---|---|---|
-| Package name | ✅ `com.fixify.app` | `flutter_app/android/app/build.gradle.kts` |
+| Package name (**identitas Play**) | ✅ `id.fixify.app` — `namespace` Kotlin juga `id.fixify.app` (satu nama paket) | `flutter_app/android/app/build.gradle.kts` |
 | Versi | ✅ otomatis: `1.4.0.<build>` (versionName) + `versionCode` = `<build>` tiap rilis | versi dasar: `flutter_app/pubspec.yaml`; penghitung: `scripts/apk-version.mjs` |
 | targetSdk | ✅ **36** (Android 16) | manifest rilis hasil build |
 | minSdk | ✅ 24 | manifest rilis |
 | AAB bertanda tangan rilis | ✅ 53,5 MB, `keytool -printcert` = SHA-1 `AB:AE:3B:…:68` | `flutter_app/build/app/outputs/bundle/release/app-release.aab` |
 | Sidik jari keystore tercatat | ✅ sama dengan OAuth client Android | `flutter_app/android/known-sha1.txt` |
 | Aset listing | ✅ ikon 512×512 + feature graphic 1024×500 | `store/play/` |
+
+> **Kenapa paketnya `id.fixify.app`, bukan `com.fixify.app` (18 Okt 2026).** Unggahan
+> AAB ber-paket `com.fixify.app` ditolak Play dengan dua pesan sekaligus: *"harus memiliki
+> nama paket id.fixify.app"* (aplikasi Play Console terdaftar dengan paket itu) dan
+> *"otoritas penyedia konten … digunakan oleh developer lain: com.fixify.app.androidx-startup,
+> com.fixify.app.firebaseinitprovider"* — artinya paket itu sudah dipakai developer lain,
+> dan nama paket Play unik global serta permanen. Karena otoritas penyedia diturunkan dari
+> `${applicationId}` (bukan namespace), mengganti `applicationId` saja sudah menghapus konflik
+> sekaligus menyamakan dengan aplikasi Play; `namespace` Kotlin lalu ikut diselaraskan supaya
+> repo hanya menyebut satu nama paket. Yang **di luar repo** dan wajib dikerjakan:
+> daftarkan app Android `id.fixify.app` di Firebase lalu ganti `google-services.json`, dan buat
+> OAuth client Android untuk paket itu (build akan gagal sampai berkas Firebase diganti).
+> Langkah lengkap: [upload-play.md §0.1](./upload-play.md).
 | Teks listing | ✅ judul, deskripsi singkat, deskripsi lengkap, catatan rilis | `store/play/*.txt` |
 | Screenshot ponsel | ✅ 5 berkas 1080×1920 (9:16) | `store/play/screenshots/` |
 | Halaman legal | ✅ `/privasi`, `/syarat`, `/hapus-akun` | `src/app/*/page.js` |
@@ -94,6 +108,11 @@ AAB dibangun otomatis oleh CI (`.github/workflows/build-apk.yml`) bersama APK:
 Jangan pernah mengunggah APK debug atau AAB yang ditandatangani kunci debug —
 Play menolaknya. Gate `npm run verify:play` memeriksa tanda tangan **dan** bahwa
 AAB bukan milik "Android Debug".
+
+> **APK tidak bisa menggantikan AAB.** Untuk aplikasi baru, Play hanya menerima **AAB**
+> di track rilis; APK hanya bisa dipakai lewat **Internal app sharing** (uji cepat, ≤ 100
+> pengguna, tautan 60 hari, tidak bisa dipromosikan) atau dibagikan dari halaman `/unduh`.
+> Langkah unggahnya, klik demi klik, ada di [upload-play.md](./upload-play.md).
 
 ---
 
@@ -194,6 +213,8 @@ Aplikasi mengharuskan login, jadi Play **wajib** diberi akun uji:
 
 ## 6. Jalur rilis: internal → closed testing → produksi
 
+0. **Langkah klik-per-klik unggah AAB** (Play Console → track → tester → promosi) ada di
+   [upload-play.md](./upload-play.md); ringkasan urutannya di bawah ini.
 1. **Internal testing** — unggah AAB, tambahkan 1–5 tester (diri sendiri + tim),
    pasang dari tautan opt-in, lalu jalankan smoke uji `docs/go-live-checklist.md` §4
    di perangkat nyata (login Google, notifikasi, pesanan, chat).
@@ -211,6 +232,15 @@ Aplikasi mengharuskan login, jadi Play **wajib** diberi akun uji:
    dan kesiapan operasional (dukungan, pembayaran, teknisi).
 4. **Produksi** — rilis bertahap (*staged rollout* 5–20%), pantau
    **Vitals** (crash/ANR) + `/api/health` web + antrean notifikasi.
+
+**Seusai unggahan AAB diterima** (statusnya sudah tampil di Play Console), jalankan
+`npm run cache:trim`. Perintah itu mengukur cache build lokal lebih dulu: bila masih di
+bawah ambang 4 GB ia tidak melakukan apa pun, dan bila sudah melewatinya ia **menyalin
+semua AAB** ke `~/Downloads/fixify-rilis` (beserta SHA-256 untuk dicocokkan dengan
+unggahan) **baru** menghapus `.next`, `flutter_app/build`, `.dart_tool`, dan
+`android/.gradle`. Jadi AAB tidak pernah hilang karena pembersihan — kejadian 18 Okt 2026
+(build 41 hampir terhapus) tidak bisa terulang. Rinciannya di
+[bersihkan-cache.md](./bersihkan-cache.md).
 
 **Target API level:** untuk aplikasi baru & pembaruan, Play mensyaratkan
 **Android 16 (targetSdk 36)** per **31 Agustus 2026** (perpanjangan maksimal
@@ -269,7 +299,7 @@ menyiapkannya.
 ## 8. Checklist sebelum menekan "Submit for review"
 
 **Sudah siap di repo (jangan perlu diubah):**
-- [x] Package `com.fixify.app` + versionCode naik otomatis tiap rilis (tidak dipakai ulang) + targetSdk 36
+- [x] Package `id.fixify.app` + versionCode naik otomatis tiap rilis (tidak dipakai ulang) + targetSdk 36
 - [x] AAB bertanda tangan upload key (SHA-1 tercatat & cocok `known-sha1.txt`)
 - [x] Ikon 512×512, feature graphic 1024×500, 5 screenshot 9:16
 - [x] Teks listing (judul/deskripsi singkat/panjang/catatan rilis)

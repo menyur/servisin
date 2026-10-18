@@ -6,6 +6,10 @@
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true}); console.log('.next dihapus')\"",
     "clean:cache": "node scripts/clean-dev-cache.mjs",
+    "cache:check": "node scripts/clean-dev-cache.mjs --check",
+    "cache:trim": "node scripts/clean-dev-cache.mjs --auto",
+    "predev": "node scripts/clean-dev-cache.mjs --hook",
+    "prebuild": "node scripts/clean-dev-cache.mjs --hook",
     "cleanup": "node scripts/weekly-cleanup.mjs",
     "cleanup:run": "node scripts/weekly-cleanup.mjs --yes",
     "dev": "next dev",

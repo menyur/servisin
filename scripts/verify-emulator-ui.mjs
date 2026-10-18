@@ -65,7 +65,7 @@ const DO_BUILD = !hasFlag("no-build");
 const LAUNCH = hasFlag("launch");
 const KEEP_DATA = hasFlag("keep-data");
 
-const PKG = "com.fixify.app";
+const PKG = "id.fixify.app";
 const ACTIVITY = `${PKG}/.MainActivity`;
 const REPO_ROOT = process.cwd();
 const FLUTTER_DIR = join(REPO_ROOT, "flutter_app");

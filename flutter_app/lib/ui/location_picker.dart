@@ -187,7 +187,7 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
             children: [
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.fixify.app',
+                userAgentPackageName: 'id.fixify.app',
               ),
               const RichAttributionWidget(
                 attributions: [TextSourceAttribution('© OpenStreetMap contributors')],

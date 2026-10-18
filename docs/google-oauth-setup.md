@@ -1,4 +1,4 @@
-# Panduan OAuth Client Google — Fixify (com.fixify.app)
+# Panduan OAuth Client Google — Fixify (id.fixify.app)
 
 Tujuan: tombol **Masuk/Daftar dengan Google** bekerja di APK (jalur native idToken)
 dan web. Pasangan dengan perbaikan fallback di `google_signin_button.dart`.
@@ -8,7 +8,8 @@ Data proyek (terverifikasi dari repo):
 | Item | Nilai |
 |---|---|
 | Firebase project | `fixify-f337a` (project number 577467094546) |
-| Package | `com.fixify.app` |
+| Package (identitas Play) | `id.fixify.app` |
+| Namespace kode Kotlin | `id.fixify.app` (internal; tidak dipakai Google) |
 | Release keystore | `flutter_app/android/fixify-release.keystore` (alias `fixify-release`) |
 | **SHA-1 release** | `AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68` |
 | SHA-256 release (pembanding) | `46:CF:E3:29:…:1F:B9:73` (lihat `docs/keystore-recovery.md`) |
@@ -34,7 +35,8 @@ Data proyek (terverifikasi dari repo):
 Ulangi untuk setiap SHA-1 (satu client per fingerprint):
 
 1. **+ Create Credentials → OAuth client ID** → Application type: **Android**.
-2. Package name: `com.fixify.app`.
+2. Package name: `id.fixify.app` (identitas Play — **bukan** `com.fixify.app` yang
+   sudah dipakai developer lain di Play; lihat [upload-play.md](./upload-play.md)).
 3. SHA-1: `AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68` (release) → Create.
    Nilai yang sama dicatat di `flutter_app/android/known-sha1.txt` supaya
    pemeriksa pra-rilis (`npm run verify:apk-signin`) bisa mendeteksi keystore
@@ -419,7 +421,7 @@ persis: `https://sgxlnhzezknmdhefsvvu.supabase.co/auth/v1/callback`
 (salin dari Supabase → Providers → Google bila URI-nya ditampilkan di sana).
 
 **C3. Client OAuth Android + SHA-1.**
-Credentials → OAuth client ID tipe **Android**, package `com.fixify.app`,
+Credentials → OAuth client ID tipe **Android**, package `id.fixify.app`,
 SHA-1 rilis: `AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68`.
 Tanpa pasangan (package, SHA-1) ini, Google Sign-In native selalu gagal
 (`ApiException 10`) dan app jatuh ke browser.

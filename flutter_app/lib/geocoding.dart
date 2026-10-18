@@ -22,7 +22,7 @@ class Geocoding {
 
   static const _endpoint = 'https://nominatim.openstreetmap.org/search';
   // User-Agent wajib jelas untuk Nominatim (bukan nilai rahasia).
-  static const _userAgent = 'fixify_app/1.0 (com.fixify.app)';
+  static const _userAgent = 'fixify_app/1.0 (id.fixify.app)';
 
   /// Cari [query] → hasil teratas, atau null bila tidak ada yang cocok.
   /// Melempar bila jaringan/HTTP gagal (pemanggil menampilkan pesan ramah).

@@ -103,7 +103,7 @@ terpasang tetap ada karena AVD-nya tidak dihapus:
 > Setelah boot dingin, emulator kadang memunculkan *"System UI isn't responding"*.
 > Itu ANR proses System UI emulator, bukan aplikasi Fixify — pilih **Wait**
 > (jangan **Close app**), lalu pastikan `dumpsys window | grep mCurrentFocus`
-> kembali menunjuk `com.fixify.app`.
+> kembali menunjuk `id.fixify.app`.
 
 **Membaca layar tanpa mata.** `uiautomator dump` hanya melihat semantik Flutter
 bila ada layanan aksesibilitas aktif. Pola yang bekerja: nyalakan TalkBack saat

@@ -152,6 +152,24 @@ jobs:
       - name: Verifikasi jalur rilis APK
         run: npm run verify:apk-release
 
+      # Paket aplikasi vs google-services.json diperiksa di sini karena
+      # kegagalannya SENYAP dan baru terasa di perangkat: Gradle tetap bisa
+      # membangun APK yang menolak login Google (Google mencocokkan pasangan
+      # package + SHA-1). Sejak paket Play pindah ke `id.fixify.app` (namespace
+      # Kotlin ikut diselaraskan), pemeriksaan inilah yang menangkap berkas
+      # Firebase yang masih menunjuk paket lama sebelum ia sampai ke perangkat.
+      # Read-only, tanpa jaringan.
+      - name: Verifikasi paket aplikasi & kunci Google
+        run: npm run verify:apk-signin
+
+      # Penjaga cache build lokal diuji di sini karena kegagalannya SUNYI dan
+      # mahal: cache pernah menumpuk 8,8 GB tanpa ada yang menyadarinya, dan
+      # pembersihan yang salah menghapus AAB rilis yang belum diunggah ke Play.
+      # Yang diuji hanya logika murni (ambang, status, TTL hook, nama arsip) —
+      # tanpa menyentuh berkas cache di runner. Statis.
+      - name: Verifikasi penjaga cache build lokal
+        run: node scripts/clean-dev-cache.mjs --selftest
+
       # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
       # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
       # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,

@@ -77,7 +77,7 @@ const BOTTOM_NAV_RATIO = 0.82; // ambang "ini bar navigasi bawah"
 
 const REPO_ROOT = process.cwd();
 const FLUTTER_DIR = join(REPO_ROOT, "flutter_app");
-const PKG = "com.fixify.app";
+const PKG = "id.fixify.app";
 const ACTIVITY = `${PKG}/.MainActivity`;
 
 let failed = 0;
@@ -182,7 +182,7 @@ function dumpXml() {
 }
 
 /**
- * Paket yang sedang tampil di depan (mis. `com.fixify.app`).
+ * Paket yang sedang tampil di depan (mis. `id.fixify.app`).
  *
  * Satu regex atas `topResumedActivity` saja terlalu rapuh: tepat setelah
  * `pm clear` + `am start` di emulator yang masih sibuk, dumpsys bisa kembali

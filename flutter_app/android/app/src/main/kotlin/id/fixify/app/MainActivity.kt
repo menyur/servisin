@@ -1,4 +1,4 @@
-package com.fixify.app
+package id.fixify.app
 
 import android.app.Activity
 import android.app.NotificationChannel
@@ -32,7 +32,10 @@ import io.flutter.plugin.common.MethodChannel
  *     (OAuth 2.0 Client, type "Web application") yang juga diisi di
  *     Supabase Dashboard > Authentication > Providers > Google.
  *  2. SHA-1 debug & release terdaftar di Google Cloud Console untuk
- *     applicationId com.fixify.app.
+ *     applicationId id.fixify.app.
+ *
+ * Paket kelas ini SENGAJA sama dengan `namespace`/`applicationId` di
+ * build.gradle.kts (satu nama paket untuk seluruh repo).
  */
 class MainActivity : FlutterActivity() {
     private val channelName = "fixify/google_signin"

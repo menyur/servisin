@@ -10,7 +10,7 @@
 # Sidik jari ini BUKAN rahasia: ia tercetak di setiap APK dan memang didaftarkan
 # di Google Cloud Console. Wajib SAMA dengan:
 #   Google Cloud Console → APIs & Services → Credentials
-#   → OAuth client ID tipe "Android" untuk package com.fixify.app.
+#   → OAuth client ID tipe "Android" untuk package id.fixify.app.
 #
 # Rotasi keystore adalah perubahan yang disengaja: daftarkan SHA-1 baru di
 # Console, perbarui secret ANDROID_KEYSTORE_BASE64, lalu perbarui baris ini.

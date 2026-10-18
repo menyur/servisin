@@ -45,7 +45,10 @@ Isi dulu, karena banyak langkah teknis bergantung pada jawabannya.
 - [ ] **Distribusi APK.** Cukup lewat halaman `/unduh` (APK langsung) atau juga **Google Play**?
       Play butuh Privacy Policy URL + keystore terdaftar (Play App Signing) — lihat §2.6.
       **Runbook lengkap, aset (ikon/feature graphic/screenshot) & teks listing yang siap diunggah:
-      [play-store.md](./play-store.md)** · gate otomatis `npm run verify:play`.
+      [play-store.md](./play-store.md)** · **langkah unggah AAB/APK klik-per-klik:
+      [upload-play.md](./upload-play.md)** · gate otomatis `npm run verify:play`.
+      Catatan: aplikasi baru **hanya** bisa dirilis lewat **AAB** di track Play; APK cuma untuk
+      **Internal app sharing** (§ upload-play.md).
 - [x] **Legal.** Halaman **Kebijakan Privasi** (`/privasi`) & **Syarat & Ketentuan** (`/syarat`)
       sudah tersedia dan ditautkan di footer. Wajib untuk pendaftaran platform & verifikasi OAuth
       Google — siapkan URL `/privasi` sebagai Privacy Policy URL di consent screen. Tinjau ulang isinya
@@ -262,7 +265,9 @@ Kalau gate `live-probe` gagal, build APK **tertahan** (mekanisme yang disengaja;
 - [ ] Halaman `tentang`, `panduan-pelanggan`, `panduan-teknisi` ditinjau ulang untuk publik.
 - [ ] Bila distribusi lewat Google Play: daftar Privacy Policy URL, isi Data Safety, dan daftarkan
       keystore (Play App Signing) — jawaban Data Safety, kuesioner rating, aturan uji tertutup
-      akun personal, dan aset yang siap diunggah ada di [play-store.md](./play-store.md).
+      akun personal, dan aset yang siap diunggah ada di [play-store.md](./play-store.md);
+      langkah unggahnya (AAB → internal → closed → produksi, plus jalur APK) di
+      [upload-play.md](./upload-play.md).
       ✅ **Kewajiban konten buatan pengguna (chat) sudah dipenuhi** (18 Okt 2026): menu ⋮ di
       layar chat punya **Laporkan percakapan** (masuk `reports` sebagai `kind='chat'` + `reason`,
       tampil di tab Laporan Masuk panel admin) dan **Blokir/Buka blokir** (`chat_blocks`,

@@ -19,7 +19,17 @@ if (keystorePropsFile.exists()) {
 }
 
 android {
-    namespace = "com.fixify.app"
+    // `namespace` = paket kode Kotlin/Java + kelas R/BuildConfig (internal,
+    // tidak dilihat Play). `applicationId` di bawah = identitas aplikasi di
+    // perangkat DAN di Play Console. Keduanya SENGAJA SAMA (`id.fixify.app`)
+    // supaya repo hanya punya satu nama paket: MainActivity ada di
+    // `src/main/kotlin/id/fixify/app/`.
+    //
+    // Latar 18 Okt 2026: identitas Play harus pindah ke `id.fixify.app` karena
+    // paket `com.fixify.app` sudah dipakai developer lain (otoritas penyedia
+    // konten `…androidx-startup` / `…firebaseinitprovider` bentrok, dan Paket
+    // Play unik global). Namespace ikut diselaraskan pada perubahan berikutnya.
+    namespace = "id.fixify.app"
     // Pin 36: plugin (share_plus, app_links via supabase_flutter, dkk.)
     // mensyaratkan compileSdk 35–36 lewat AAR metadata —
     // flutter.compileSdkVersion bawaan ternyata lebih rendah.
@@ -32,8 +42,11 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.fixify.app"
+        // Identitas Play: harus SAMA dengan paket aplikasi di Play Console dan
+        // dengan `package_name` di google-services.json (dijaga
+        // `npm run verify:apk-signin`). Jangan kembalikan ke `com.fixify.app`:
+        // paket itu sudah terpakai developer lain di Play.
+        applicationId = "id.fixify.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

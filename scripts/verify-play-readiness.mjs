@@ -151,7 +151,17 @@ cek(
   versi !== null,
   "build TIDAK lagi ditulis di pubspec — dihitung CI lewat scripts/apk-version.mjs",
 );
-cek("applicationId = com.fixify.app", /applicationId\s*=\s*"com\.fixify\.app"/.test(gradle), "Play menolak penggantian package name setelah aplikasi dibuat");
+// Identitas Play. `com.fixify.app` TIDAK bisa dipakai: otoritas penyedia kontennya
+// sudah terdaftar pada developer lain di Play (pesan "Remove conflicts from the
+// manifest before uploading"), sedangkan aplikasi Play yang sudah dibuat memakai
+// `id.fixify.app`. Yang menentukan identitas Play adalah `applicationId`; `namespace`
+// Kotlin kini sama dengannya (lihat build.gradle.kts) supaya repo hanya punya satu
+// nama paket — memeriksa `applicationId` tetap yang paling menentukan.
+cek(
+  "applicationId = id.fixify.app",
+  /applicationId\s*=\s*"id\.fixify\.app"/.test(gradle),
+  "harus sama dengan paket aplikasi di Play Console; Play menolak penggantian package name setelah aplikasi dibuat",
+);
 cek("compileSdk >= 35", /compileSdk\s*=\s*(\d+)/.test(gradle) && Number(/compileSdk\s*=\s*(\d+)/.exec(gradle)[1]) >= 35);
 
 // Build CI memakai `--split-per-abi`, sehingga AGP menaruh manifest rilis di
@@ -213,12 +223,60 @@ if (dipilih && versi) {
 }
 
 // 2. AAB + tanda tangan
-const aabPath = "flutter_app/build/app/outputs/bundle/release/app-release.aab";
+// Nama berkasnya tidak selalu `app-release.aab`: AAB yang dipulihkan dari arsip
+// `cache:trim` membawa stempel waktu, dan berkas bisa diganti nama manual. Yang
+// bermakna bagi Play adalah ISI di folder rilis, jadi gate ini menerima AAB apa
+// pun di sana — `app-release.aab` (nama artefak CI) tetap diutamakan agar build
+// segar tidak tertukar dengan sisa lama. Sebelumnya gate menyebut "AAB belum ada"
+// untuk berkas yang jelas-jelas ada, hanya beda nama.
+const aabDir = "flutter_app/build/app/outputs/bundle/release";
+const aabKandidat = ada(aabDir)
+  ? readdirSync(join(ROOT, aabDir))
+      .filter((n) => n.toLowerCase().endsWith(".aab"))
+      .map((n) => `${aabDir}/${n}`)
+      .sort((a, b) => {
+        const utama = (p) => (p.endsWith("/app-release.aab") ? 0 : 1);
+        return utama(a) - utama(b) || a.localeCompare(b);
+      })
+  : [];
+const aabPath = aabKandidat[0] ?? `${aabDir}/app-release.aab`;
+if (aabKandidat.length) {
+  console.log(
+    `   berkas AAB: ${aabPath}${aabKandidat.length > 1 ? ` (+${aabKandidat.length - 1} AAB lain di folder itu)` : ""}`,
+  );
+}
 if (ada(aabPath)) {
   const buf = readFileSync(join(ROOT, aabPath));
   const mb = (buf.length / (1024 * 1024)).toFixed(1);
   cek("AAB ada dan tidak kosong", buf.length > 1024 * 1024, `${mb} MB`);
   cek(`AAB di bawah ${BATAS.aabMaksByte / (1024 * 1024)} MB`, buf.length < BATAS.aabMaksByte, `${mb} MB`);
+  // Paket di dalam AAB harus sama dengan `applicationId` sekarang. Pemeriksaan
+  // ini ada karena kesalahan nyata 18 Okt 2026: Play MENOLAK AAB ber-paket
+  // `com.fixify.app` ("otoritas penyedia konten berikut digunakan oleh developer
+  // lain: …androidx-startup, …firebaseinitprovider") sedangkan aplikasi Play
+  // Console memakai `id.fixify.app`. AAB lama itu tetap lolos semua pemeriksaan
+  // lain (ukuran, tanda tangan rilis) — hanya paketnya yang salah, dan itu baru
+  // terlihat setelah diunggah. Otoritas penyedia diturunkan dari `${applicationId}`,
+  // jadi kehadiran `id.fixify.app.*` adalah bukti paket yang benar.
+  // Yang diperiksa adalah otoritasnya, bukan sekadar ada/tidak teks paket: kelas
+  // `MainActivity` dan `namespace` boleh saja disebut dengan bentuk lain di masa
+  // depan, sedangkan otoritas inilah yang menentukan bentrok atau tidak di Play.
+  const mfAab = bacaEntriZip(join(ROOT, aabPath), "base/manifest/AndroidManifest.xml");
+  if (mfAab === null) {
+    catat("paket AAB tidak bisa diperiksa", "alat `unzip` tidak ditemukan atau entri manifes tak terbaca");
+  } else {
+    cek(
+      "paket AAB = applicationId sekarang (otoritas penyedia konten `id.fixify.app.*`)",
+      /id\.fixify\.app\.(androidx-startup|firebaseinitprovider|flutter\.)/.test(mfAab),
+      "AAB ini masih ber-paket lama — bangun ulang setelah applicationId dipindah, Play akan menolaknya",
+    );
+    cek(
+      "AAB tidak memakai otoritas paket lama (com.fixify.app.*) yang sudah dipakai developer lain",
+      !/com\.fixify\.app\.(androidx-startup|firebaseinitprovider|flutter\.)/.test(mfAab),
+      "paket com.fixify.app tidak bisa dipakai di Play — lihat docs/upload-play.md §0.1",
+    );
+  }
+
   // Tanda tangan JAR (v1) wajib ada di AAB; Play menolak AAB tanpa itu.
   // Nama entri tanda tangan terlihat di direktori zip, tetapi ISI-nya
   // terdeflate — jadi sertifikatnya harus dibaca dengan membongkar entri,
@@ -248,7 +306,7 @@ if (ada(aabPath)) {
   }
 } else {
   gagal += 1;
-  console.log(`❌ AAB belum ada — Play MEWAJIBKAN App Bundle, bukan APK. Bangun: cd flutter_app && flutter build appbundle --release`);
+  console.log(`❌ AAB belum ada di ${aabDir} — Play MEWAJIBKAN App Bundle, bukan APK. Bangun: cd flutter_app && flutter build appbundle --release`);
 }
 
 cek(

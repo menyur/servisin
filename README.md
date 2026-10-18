@@ -42,6 +42,8 @@ npm run dev
 
 Buka `http://localhost:3000`. Script lain: `npm run build` (produksi), `npm run lint` (ESLint 9 — perintah sama yang dijalankan CI), `npm run clean:cache` (laporan ukuran cache build lokal: `.next`, `flutter_app/build`, `.dart_tool`, `android/.gradle`; tambahkan `-- --yes` untuk menghapusnya), `npm run cleanup` (bersihkan data uji di database, bukan cache).
 
+**Cache build lokal dijaga otomatis.** Cache pernah menumpuk **8,8 GB** tanpa disadari pada 18 Okt 2026, dan pembersihannya ikut menghapus AAB rilis yang belum diunggah — sekarang ada ambang **4 GB** (`npm run cache:check` gagal bila terlampaui), pemeriksaan harian yang hanya memberi peringatan di `npm run dev`/`npm run build`, dan `npm run cache:trim` untuk membersihkan **setelah rilis** (tidak melakukan apa pun bila masih di bawah ambang). Sebelum menghapus, semua **AAB disalin** ke `~/Downloads/fixify-rilis` beserta SHA-256; bila penyalinan gagal, penghapusan dibatalkan. Rinciannya di [docs/bersihkan-cache.md](docs/bersihkan-cache.md).
+
 ## 3. Akun admin pertama
 
 1. Daftar lewat `/register`, lalu di Supabase **Table Editor → profiles** ubah kolom `role` jadi `admin`.
@@ -101,7 +103,7 @@ APK **tidak dibangun manual**: [build-apk.yml](.github/workflows/build-apk.yml) 
 5. Job menjalankan juga `flutter build apk --release --analyze-size` (build terpisah — flag itu tidak bisa digabung `--split-debug-info`) lalu meringkasnya dengan [`scripts/summarize-apk-size.mjs`](scripts/summarize-apk-size.mjs) ke halaman ringkasan job: komponen penyumbang ukuran terbesar (engine, kode Dart, dex, aset) plus paket Dart terbesar. Berkas analisisnya diunggah sebagai artifact `apk-size-report`.
 6. Verifikasi cepat konfigurasi jalur unduh tanpa kredensial: `npm run verify:apk-release`.
 
-Package ID aplikasi: **`com.fixify.app`** — harus sama di `applicationId` ([flutter_app/android/app/build.gradle.kts](flutter_app/android/app/build.gradle.kts)), OAuth Android client di Google Cloud Console, dan [flutter_app/android/app/google-services.json](flutter_app/android/app/google-services.json).
+Package ID aplikasi (identitas Play): **`id.fixify.app`** — harus sama di `applicationId` ([flutter_app/android/app/build.gradle.kts](flutter_app/android/app/build.gradle.kts)), OAuth Android client di Google Cloud Console, `package_name` di [flutter_app/android/app/google-services.json](flutter_app/android/app/google-services.json), dan paket aplikasi di Play Console. Sejak 18 Okt 2026 seluruh nama paket disamakan ke `id.fixify.app` — termasuk `namespace` Kotlin dan `MainActivity` (`flutter_app/android/app/src/main/kotlin/id/fixify/app/`) — karena paket `com.fixify.app` sudah dipakai developer lain di Play; Play menolak AAB-nya dengan pesan otoritas penyedia konten bentrok. Rincian & langkah pindah paket: [docs/upload-play.md](docs/upload-play.md).
 
 ## Struktur folder (ringkas)
 
@@ -112,6 +114,8 @@ fixify/
   docs/security.md     -> praktik keamanan (RLS, storage, env) — WAJIB dibaca sebelum menambah fitur
   docs/prosedur-uji-lupa-password.md -> prosedur uji alur lupa kata sandi di APK (langkah tetap + apa yang diperiksa)
   docs/bersihkan-data-uji.md -> alat pembersih data uji & pesanan lama (dry-run default, `--ya` untuk eksekusi)
+  docs/upload-play.md  -> langkah unggah AAB & APK ke Google Play, klik-per-klik (AAB wajib untuk track rilis; APK hanya lewat Internal app sharing)
+  docs/bersihkan-cache.md -> penjaga cache build lokal (ambang 4 GB, AAB diarsipkan sebelum cache dihapus)
   scripts/             -> setup-storage.mjs, weekly-cleanup.mjs, dsb.
   src/app/             -> halaman (landing, booking, track, dashboard, technician, admin, unduh, panduan)
   src/app/actions/     -> semua Server Actions (auth, bookings, admin, technician, reviews, reports, push)
