@@ -63,6 +63,11 @@ export async function signUp(prevState, formData) {
     siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     origin,
     ip: ipDariHeader(h),
+    // Token Turnstile dari formulir (widget-nya ada di halaman /register bila
+    // NEXT_PUBLIC_TURNSTILE_SITE_KEY terisi). Jalur WEB selalu dijaga bila
+    // kuncinya ada; lihat src/lib/signup-guard.js.
+    turnstileToken: formData.get("cf-turnstile-response"),
+    asal: "web",
   });
 
   if (!hasil.ok) {
@@ -77,10 +82,17 @@ export async function signUp(prevState, formData) {
         error: `Email verifikasi baru saja dikirim ke alamat ini — tunggu ${hasil.sisaDetik} detik lagi.`,
       };
     }
-    if (hasil.alasan === "jeda_ip") {
+    if (hasil.alasan === "jeda_ip" || hasil.alasan === "jeda_alamat" || hasil.alasan === "batas_harian") {
+      // Pesannya datang dari pembatas (pembatas.pesan) supaya jumlah menit/jam
+      // yang disebutkan selalu cocok dengan aturan yang menolaknya.
       return {
-        error: `Terlalu banyak pendaftaran dari jaringan ini — coba lagi dalam ${Math.ceil(hasil.sisaDetik / 60)} menit.`,
+        error:
+          hasil.pesan ||
+          `Terlalu banyak pendaftaran dari jaringan ini — coba lagi dalam ${Math.ceil((hasil.sisaDetik || 60) / 60)} menit.`,
       };
+    }
+    if (hasil.alasan === "turnstile") {
+      return { error: "Verifikasi keamanan gagal — muat ulang halaman lalu coba lagi." };
     }
     if (hasil.alasan === "env") {
       return { error: "Pendaftaran sedang tidak bisa mengirim email. Hubungi admin." };

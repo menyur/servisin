@@ -17,6 +17,7 @@ import {
 import { bacaPiutangTerbuka } from "@/lib/piutang";
 import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
+import { kirimUlangVerifikasiPendaftaran } from "@/lib/signup-verification";
 import { ICONS } from "@/lib/icons";
 import { revalidatePath } from "next/cache";
 import { ADMIN_NOTIFY_EVENTS, ADMIN_NOTIFY_EVENT_KEYS } from "@/lib/admin-notify-events";
@@ -686,12 +687,34 @@ export async function getAllUsersAdmin() {
       ratingMap[r.technician_id].count += 1;
     }
   }
+  // Status KONFIRMASI SUREL hanya ada di auth.users, bukan di profiles — dan
+  // tanpa itu panel tidak bisa membedakan pendaftar yang benar-benar menunggu
+  // review dari pendaftar yang TIDAK PERNAH mengonfirmasi surel (mereka tidak
+  // bisa masuk sama sekali, jadi bisa menggantung berhari-hari tanpa sebab yang
+  // terlihat). Dibaca sekali untuk semua akun; gagal membaca = tidak diklaim.
+  let statusAuth = {};
+  try {
+    const klien = createAdminClient();
+    const { data: daftarAuth } = await klien.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    statusAuth = Object.fromEntries(
+      (daftarAuth?.users || []).map((a) => [
+        a.id,
+        { terkonfirmasi: Boolean(a.email_confirmed_at), masuk: a.last_sign_in_at ?? null },
+      ])
+    );
+  } catch (err) {
+    console.error("[admin] status konfirmasi surel tidak terbaca:", err?.message ?? err);
+  }
+
   const users = (data || []).map((u) => {
     const agg2 = ratingMap[u.id];
+    const auth = statusAuth[u.id];
     return {
       ...u,
       rating_avg: agg2 && agg2.count ? Math.round((agg2.sum / agg2.count) * 10) / 10 : null,
       rating_count: agg2 ? agg2.count : 0,
+      surel_terkonfirmasi: auth ? auth.terkonfirmasi : null,
+      terakhir_masuk: auth?.masuk ?? null,
     };
   });
 
@@ -862,6 +885,62 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
   revalidatePath("/", "layout"); // refresh badge navbar (jumlah pendaftar pending)
   revalidateTag("technicians"); // daftar publik /teknisi berubah (approve/reject)
   return { ok: true };
+}
+
+/**
+ * Kirim ULANG surel verifikasi untuk pendaftar yang belum mengonfirmasi.
+ *
+ * Kenapa ada di sini: pendaftar teknisi yang surelnya belum dikonfirmasi TIDAK
+ * BISA masuk, jadi admin tidak akan pernah bisa menilai KTP-nya — antrean
+ * "Pendaftar Teknisi" hanya bisa menampung mereka tanpa ujung. Tautan lama juga
+ * kedaluwarsa (1 jam), sehingga satu-satunya jalan yang sah adalah tautan BARU.
+ *
+ * Kata sandi pendaftar tidak disentuh (lihat kirimUlangVerifikasiPendaftaran).
+ */
+export async function kirimUlangVerifikasiPendaftarAdmin(userId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: profil } = await supabase
+    .from("profiles")
+    .select("role, approval_status")
+    .eq("id", userId)
+    .maybeSingle();
+  if (!profil || profil.role !== "technician") {
+    return { error: "Hanya akun teknisi yang bisa dikirimi surel verifikasi." };
+  }
+
+  let klien;
+  try {
+    klien = createAdminClient();
+  } catch (err) {
+    return { error: err?.message ?? "Kunci server tidak terbaca." };
+  }
+
+  const { data: akun } = await klien.auth.admin.getUserById(userId);
+  const alamat = akun?.user?.email;
+  if (!alamat) return { error: "Surel pendaftar tidak ditemukan." };
+  if (akun.user.email_confirmed_at) return { error: "Surel pendaftar ini sudah dikonfirmasi." };
+
+  const hasil = await kirimUlangVerifikasiPendaftaran({
+    email: alamat,
+    siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
+    admin: klien,
+  });
+
+  if (!hasil.ok) {
+    if (hasil.alasan === "jeda") {
+      return { error: `Surel verifikasi baru saja dikirim — tunggu ${hasil.sisaDetik} detik lagi.` };
+    }
+    if (hasil.alasan === "sudah_terkonfirmasi") {
+      return { error: "Surel pendaftar ini sudah dikonfirmasi." };
+    }
+    console.error("[admin] kirim ulang verifikasi gagal:", hasil.alasan, hasil.pesan ?? "-");
+    return { error: "Gagal mengirim surel verifikasi — periksa kunci Resend di server." };
+  }
+
+  return { ok: true, terkirim: Boolean(hasil.terkirim) };
 }
 
 export async function updateUserRoleAdmin(userId, role) {

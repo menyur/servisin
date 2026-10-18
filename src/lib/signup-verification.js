@@ -35,12 +35,19 @@
  *
  * Batas yang diketahui, dan ini penting: karena akun dibuat lewat Admin API,
  * maka BATAS PENDAFTARAN BAWAAN SUPABASE (per IP, anti-penyalahgunaan) TIDAK
- * berlaku lagi. Penggantinya ada di sini: jeda 60 detik per alamat + kuota per
- * IP. Itu penjaga praktis, bukan penegak kuota — di serverless (Vercel) tiap
- * instance punya peta sendiri. Penahan penyalahgunaan sungguhan (mis. spam
- * pendaftaran massal) butuh CAPTCHA/Turnstile di depan endpoint ini; sama
- * seperti jalur reset, riwayat sengaja disimpan di memori supaya tidak ada
- * migrasi database yang harus dijalankan sebelum fitur ini berfungsi.
+ * berlaku lagi. Penggantinya dua lapis:
+ *
+ *   1. PERSISTEN (berlaku dari instance mana pun) — `public.signup_attempts` +
+ *      RPC `pendaftaran_izin()`, dipakai lewat src/lib/signup-guard.js. Ini
+ *      penahan yang sebenarnya; lihat supabase/migrate-signup-guard.sql.
+ *   2. MEMORI PROSES (jeda 60 detik per alamat + kuota per IP, di berkas ini) —
+ *      sekarang hanya penjaga cepat supaya permintaan berulang dari instance
+ *      yang sama tidak menyentuh database sama sekali.
+ *
+ * Ditambah Turnstile di formulir web (lapisan kedua anti-bot; diverifikasi di
+ * server oleh src/lib/signup-guard.js). Jeda memori sengaja TETAP ADA: ia bekerja
+ * tanpa database, jadi pendaftaran tidak ikut mati bila migrasi/DB bermasalah —
+ * dan keadaannya dilaporkan (`pembatasPersisten: false`), bukan disembunyikan.
  *
  * Modul ini sengaja tanpa alias `@/…` supaya bisa diimpor skrip `verify:*` yang
  * berjalan di Node polos (tanpa bundler Next) — di situlah alurnya diuji.
@@ -53,6 +60,12 @@ import {
   sisaJedaDetik,
   tautanDariHasil,
 } from "./password-reset.js";
+import {
+  periksaPembatasPersisten,
+  verifikasiTurnstile,
+  modeTurnstile,
+  periksaSurelBekas,
+} from "./signup-guard.js";
 
 /** Jeda wajib antar-permintaan untuk alamat yang sama (selaras dengan app). */
 export const JEDA_PER_ALAMAT_MS_DAFTAR = JEDA_PER_ALAMAT_MS;
@@ -192,10 +205,17 @@ export function ipDariHeader(headers) {
  * @param {string} [o.siteUrl]   NEXT_PUBLIC_SITE_URL (cadangan tujuan)
  * @param {string} [o.origin]    origin permintaan (cadangan terakhir)
  * @param {string} [o.ip]        alamat IP pemanggil (kuota per IP)
+ * @param {string} [o.turnstileToken] token Turnstile dari formulir web
+ * @param {"web"|"api"} [o.asal] asal permintaan — menentukan apakah Turnstile
+ *                               diwajibkan (aplikasi Android tidak bisa
+ *                               menampilkan tantangan; lihat signup-guard.js)
  * @param {number} [o.sekarangMs] untuk uji; bawaan Date.now()
  * @param {object} [o.admin]     klien admin (uji menyuntik tiruan)
  * @param {Function} [o.kirimEmail] pengirim email (uji menyuntik tiruan)
- * @returns {Promise<{ok:boolean, terkirim?:boolean, alasan?:string, sisaDetik?:number, pesan?:string, idPesan?:string}>}
+ * @param {Function} [o.cekPembatas] pembatas persisten (uji menyuntik tiruan)
+ * @param {Function} [o.cekTurnstile] verifikasi Turnstile (uji menyuntik tiruan)
+ * @param {Function} [o.cekBekas] pemeriksa surel bekas akun terhapus
+ * @returns {Promise<{ok:boolean, terkirim?:boolean, alasan?:string, sisaDetik?:number, pesan?:string, idPesan?:string, pembatasPersisten?:boolean, ditandaiBekas?:boolean}>}
  */
 export async function kirimVerifikasiPendaftaran({
   email,
@@ -205,9 +225,14 @@ export async function kirimVerifikasiPendaftaran({
   siteUrl,
   origin,
   ip,
+  turnstileToken = null,
+  asal = "web",
   sekarangMs = Date.now(),
   admin,
   kirimEmail = sendSignupVerificationEmail,
+  cekPembatas = periksaPembatasPersisten,
+  cekTurnstile = verifikasiTurnstile,
+  cekBekas = periksaSurelBekas,
 } = {}) {
   const alamat = normalisasiEmail(email);
   if (!alamat) return { ok: false, alasan: "email_tidak_valid" };
@@ -222,8 +247,35 @@ export async function kirimVerifikasiPendaftaran({
   const tujuan = tujuanVerifikasi({ redirectTo, siteUrl, origin });
   if (!tujuan) return { ok: false, alasan: "tujuan_tidak_diketahui" };
 
-  // Jeda dicatat SEBELUM akunnya diketahui: berlaku sama untuk alamat terdaftar
-  // maupun tidak, jadi jawaban 429 tidak pernah membocorkan keberadaan akun.
+  // (1) PEMBATAS PERSISTEN — dicatat SEBELUM apa pun yang bergantung pada
+  //     keberadaan akun, dan berlaku untuk semua alamat. Ini penahan yang
+  //     berdiri di seluruh deployment; penjaga memori di bawah hanya menambah
+  //     kecepatan. Percobaan yang ditolak Turnstile pun tetap tercatat di sini,
+  //     sehingga pengiriman berulang tanpa token ikut menghabiskan anggarannya.
+  const pembatas = await cekPembatas({ admin, ip, email: alamat });
+  if (pembatas?.ok === false) {
+    return {
+      ok: false,
+      alasan: pembatas.kode || "jeda_ip",
+      sisaDetik: pembatas.sisaDetik,
+      pesan: pembatas.pesan,
+    };
+  }
+
+  // (2) TURNSTILE — hanya bila diwajibkan untuk jalur ini (formulir web selalu,
+  //     jalur aplikasi bila TURNSTILE_WAJIB_API dinyalakan).
+  const modeTt = modeTurnstile({ asal });
+  if (modeTt.aktif) {
+    const tt = await cekTurnstile({ token: turnstileToken, ip });
+    if (!tt?.ok) {
+      console.error("[signup-verification] Turnstile menolak:", tt?.error ?? "sebab tidak diketahui");
+      return { ok: false, alasan: "turnstile" };
+    }
+  }
+
+  // (3) Penjaga memori (cepat, tanpa database): jeda per alamat lalu per IP.
+  //     Dicatat SEBELUM akunnya diketahui — berlaku sama untuk alamat terdaftar
+  //     maupun tidak, jadi jawaban 429 tidak pernah membocorkan keberadaan akun.
   const sisaDetik = sisaJedaDetik(riwayatAlamat.get(alamat), sekarangMs);
   if (sisaDetik > 0) return { ok: false, alasan: "jeda", sisaDetik };
 
@@ -310,7 +362,129 @@ export async function kirimVerifikasiPendaftaran({
     return { ok: false, alasan: "gagal_kirim", pesan: kirim.error };
   }
 
+  // Surel ini bekas akun yang sudah DIHAPUS? Tandai untuk admin.
+  //
+  // Sengaja dilakukan SETELAH email dikirim dan TIDAK mengubah jawaban ke
+  // pendaftar: fungsinya menutup celah "hapus akun lalu daftar ulang" sebagai
+  // cara mereset riwayat penilaian dari pandangan operator — bukan menolak
+  // pendaftaran (privasi memang membebaskan alamatnya).
+  const tanda = await tandaiBekasAkun({ admin: klien, email: alamat, userId: hasil?.user?.id, cekBekas });
+
+  return {
+    ok: true,
+    terkirim: true,
+    idPesan: kirim?.id ?? null,
+    pembatasPersisten: pembatas?.tersedia !== false,
+    ditandaiBekas: Boolean(tanda?.ditandai),
+  };
+}
+
+/**
+ * KIRIM ULANG tautan verifikasi untuk akun yang SUDAH dibuat tetapi belum
+ * pernah dikonfirmasi — dipakai admin dari tab "Pendaftar Teknisi".
+ *
+ * Kenapa terpisah dari [kirimVerifikasiPendaftaran]: fungsi itu WAJIB menerima
+ * kata sandi (dipakai `generateLink` saat akunnya belum ada), sedangkan admin
+ * tidak pernah tahu kata sandi pendaftar. Terverifikasi pada project ini
+ * (18 Okt 2026): untuk akun yang SUDAH ada dan BELUM terkonfirmasi,
+ * `generateLink({ type: 'signup' })` tetap mengembalikan tautan baru walau
+ * `password` tidak dikirim — kata sandinya tidak berubah, hanya tautannya yang
+ * diperbarui. Jadi fungsi ini sengaja TIDAK menyentuh kata sandi siapa pun.
+ *
+ * Akun yang SUDAH terkonfirmasi tidak dikirimi apa pun (`alasan:
+ * "sudah_terkonfirmasi"`): tautan verifikasi untuk akun terkonfirmasi tidak
+ * berguna, dan mengirimkannya berarti mengirim email yang membingungkan.
+ *
+ * @returns {Promise<{ok:boolean, terkirim?:boolean, alasan?:string, sisaDetik?:number, pesan?:string, idPesan?:string, sudahTerkonfirmasi?:boolean}>}
+ */
+export async function kirimUlangVerifikasiPendaftaran({
+  email,
+  redirectTo,
+  siteUrl,
+  origin,
+  sekarangMs = Date.now(),
+  admin,
+  kirimEmail = sendSignupVerificationEmail,
+} = {}) {
+  const alamat = normalisasiEmail(email);
+  if (!alamat) return { ok: false, alasan: "email_tidak_valid" };
+
+  const tujuan = tujuanVerifikasi({ redirectTo, siteUrl, origin });
+  if (!tujuan) return { ok: false, alasan: "tujuan_tidak_diketahui" };
+
+  // Penjaga cepat yang sama dengan jalur pendaftaran: klik ganda admin tidak
+  // mengirim dua email. Bukan batas keamanan — batas sebenarnya ada di
+  // `public.signup_attempts` untuk jalur publik.
+  const sisaDetik = sisaJedaDetik(riwayatAlamat.get(alamat), sekarangMs);
+  if (sisaDetik > 0) return { ok: false, alasan: "jeda", sisaDetik };
+
+  let klien = admin;
+  if (!klien) {
+    try {
+      klien = createAdminClient();
+    } catch (err) {
+      return { ok: false, alasan: "env", pesan: err?.message };
+    }
+  }
+
+  const { data: hasil, error } = await klien.auth.admin.generateLink({
+    type: "signup",
+    email: alamat,
+    options: { redirectTo: tujuan },
+  });
+
+  const tautan = tautanDariHasil(hasil);
+  if (error || !tautan) {
+    const sudahTerkonfirmasi =
+      error?.code === "email_exists" ||
+      error?.status === 422 ||
+      /already (been )?registered|already exists/i.test(error?.message || "");
+    if (sudahTerkonfirmasi) return { ok: true, terkirim: false, alasan: "sudah_terkonfirmasi", sudahTerkonfirmasi: true };
+    console.error(
+      "[signup-verification] generateLink (kirim ulang) gagal:",
+      error?.status ?? "-",
+      error?.code ?? "-",
+      error?.message ?? "tanpa action_link"
+    );
+    return { ok: false, alasan: "akun_gagal_disiapkan", pesan: error?.message };
+  }
+
+  const kirim = await kirimEmail({
+    to: alamat,
+    actionLink: tautan,
+    siteUrl: siteUrl || origin || null,
+    berlakuJam: BERLAKU_JAM,
+  });
+
+  if (kirim?.simulated) return { ok: false, alasan: "env", pesan: "RESEND_API_KEY belum terbaca" };
+  if (kirim?.error) return { ok: false, alasan: "gagal_kirim", pesan: kirim.error };
+
+  riwayatAlamat.set(alamat, sekarangMs);
   return { ok: true, terkirim: true, idPesan: kirim?.id ?? null };
+}
+
+/**
+ * Tulis penanda "surel bekas akun terhapus" pada baris profil pendaftar baru.
+ * Best-effort: kegagalannya dicatat, tidak pernah menggagalkan pendaftaran.
+ */
+async function tandaiBekasAkun({ admin, email, userId, cekBekas }) {
+  if (!admin || !userId) return { ditandai: false, alasan: "tanpa_konteks" };
+  try {
+    const bekas = await cekBekas({ admin, email });
+    if (!bekas?.pernah) return { ditandai: false, alasan: bekas?.error ?? "bukan_bekas" };
+    const { error } = await admin
+      .from("profiles")
+      .update({ bekas_akun_terhapus_at: new Date().toISOString() })
+      .eq("id", userId);
+    if (error) {
+      console.error("[signup-verification] gagal menandai surel bekas akun:", error.message);
+      return { ditandai: false, error: error.message };
+    }
+    return { ditandai: true, sejak: bekas.sejak ?? null };
+  } catch (err) {
+    console.error("[signup-verification] gagal menandai surel bekas akun:", err?.message);
+    return { ditandai: false, error: err?.message ?? "gagal" };
+  }
 }
 
 /** Buang riwayat jeda — dipakai uji supaya kasus tidak saling mempengaruhi. */

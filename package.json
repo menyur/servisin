@@ -70,6 +70,7 @@
     "verify:trip-share": "node scripts/verify-trip-share-privacy.mjs",
     "verify:trip-share-live": "node scripts/verify-trip-share-privacy-live.mjs",
     "hapus-akun": "node scripts/hapus-akun.mjs",
+    "hapus:akun-uji": "node scripts/hapus-akun-uji.mjs",
     "bersihkan:data-uji": "node scripts/bersihkan-data-uji.mjs",
     "verify:emulator": "node scripts/verify-emulator-ui.mjs",
     "apply:sql": "node scripts/apply-supabase-sql.mjs",

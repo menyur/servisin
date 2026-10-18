@@ -96,6 +96,15 @@ jobs:
       - name: Verifikasi izin EXECUTE RPC
         run: npm run verify:rpc-grants-offline
 
+      # Penjaga PENDAFTARAN diperiksa di sini karena kegagalannya tidak terlihat
+      # sama sekali: jeda yang hanya hidup di memori proses tetap membuat
+      # pendaftaran massal lolos dari instance lain, dan Turnstile yang salah
+      # pasang bisa memblokir SEMUA pendaftaran web atau justru tidak diperiksa.
+      # `--selftest` = bagian kirim nyata (opt-in) tidak dihitung; sisanya
+      # hermetis (admin, RPC, dan Cloudflare tiruan).
+      - name: Verifikasi penjaga pendaftaran (pembatas persisten + Turnstile)
+        run: npm run verify:signup-endpoint -- --selftest
+
       # Umur piutang + penghapusan eksplisit diperiksa di sini karena
       # kegagalannya KEUANGAN dan senyap: piutang teknisi yang berhenti bisa
       # menua tanpa ada yang mengingatkan atau memutuskan, dan penghapusan yang

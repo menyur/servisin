@@ -4,9 +4,15 @@ import { use, useActionState } from "react";
 import Link from "next/link";
 import { signUp } from "@/app/actions/auth";
 import SubmitButton from "@/components/SubmitButton";
+import TurnstileField from "@/components/TurnstileField";
 
 export default function RegisterPage({ searchParams }) {
   const [state, formAction] = useActionState(signUp, null);
+  // Kunci SITUS Turnstile bersifat publik (memang untuk dibundel ke peramban).
+  // Kosong = Turnstile belum diaktifkan: widgetnya tidak dirender dan skrip
+  // pihak ketiga tidak dimuat. Kunci rahasianya (TURNSTILE_SECRET_KEY) hanya ada
+  // di server — lihat src/lib/signup-guard.js.
+  const situsTurnstile = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || null;
   // Tujuan setelah daftar (mis. kembali ke alur booking dengan layanan terpilih).
   // Next 15+: searchParams berupa Promise — dibuka dengan use().
   const params = searchParams instanceof Promise ? use(searchParams) : searchParams;
@@ -55,6 +61,7 @@ export default function RegisterPage({ searchParams }) {
             <label className="label">Kata sandi</label>
             <input className="input" type="password" name="password" minLength={6} required />
           </div>
+          <TurnstileField siteKey={situsTurnstile} />
           {state?.error && <p className="text-coral text-sm font-medium">{state.error}</p>}
           <SubmitButton>Daftar</SubmitButton>
         </form>

@@ -49,11 +49,18 @@ import {
   catatIp,
   ipDariHeader,
   kirimVerifikasiPendaftaran,
+  kirimUlangVerifikasiPendaftaran,
   lupakanRiwayatPendaftaran,
   metadataPendaftaran,
   sisaJedaIp,
   tujuanVerifikasi,
 } from "../src/lib/signup-verification.js";
+import {
+  aturanPembatas,
+  modeTurnstile,
+  periksaPembatasPersisten,
+  verifikasiTurnstile,
+} from "../src/lib/signup-guard.js";
 
 const AKAR = process.cwd();
 const argv = process.argv.slice(2);
@@ -170,6 +177,32 @@ console.log("-".repeat(72));
     cek("lib tidak mengirim email saat env kurang (tidak menyamar terkirim)", lib.includes('alasan: "env"'));
     cek("lib punya jeda per alamat", lib.includes("sisaJedaDetik"));
     cek("lib punya kuota per IP", lib.includes("sisaJedaIp"));
+
+    // --- Lapisan yang berdiri di seluruh deployment (18 Okt 2026) ---------
+    const guard = baca("src/lib/signup-guard.js");
+    const migrasiGuard = baca("supabase/migrate-signup-guard.sql");
+    const adminAksi = baca("src/app/actions/admin.js");
+    const dashboard = baca("src/components/AdminDashboard.js");
+    const halamanDaftar = baca("src/app/register/page.js");
+    const kolomTurnstile = baca("src/components/TurnstileField.js");
+    const alatHapus = baca("scripts/hapus-akun-uji.mjs");
+
+    cek("berkas ada: src/lib/signup-guard.js", Boolean(guard));
+    cek("berkas ada: supabase/migrate-signup-guard.sql", Boolean(migrasiGuard));
+    cek("lib pendaftaran memakai pembatas persisten", lib.includes("./signup-guard.js"));
+    cek("route aplikasi meneruskan token Turnstile", route.includes("cf-turnstile-response") || route.includes("turnstileToken"));
+    cek("aksi web meneruskan token Turnstile", webAksi.includes("cf-turnstile-response"));
+    cek("formulir web merender kolom Turnstile", Boolean(kolomTurnstile) && halamanDaftar.includes("TurnstileField"));
+    cek("migrasi membuat RPC pendaftaran_izin", Boolean(migrasiGuard) && migrasiGuard.includes("pendaftaran_izin"));
+    cek(
+      "migrasi mencabut izin dari PUBLIC (bukan hanya anon/authenticated)",
+      Boolean(migrasiGuard) && /revoke all on function public\.pendaftaran_izin[^;]*from public/i.test(migrasiGuard)
+    );
+    cek("migrasi menambah kolom penanda surel bekas akun", Boolean(migrasiGuard) && migrasiGuard.includes("bekas_akun_terhapus_at"));
+    cek("admin bisa mengirim ulang verifikasi pendaftar", Boolean(adminAksi) && adminAksi.includes("kirimUlangVerifikasiPendaftarAdmin"));
+    cek("panel menandai surel bekas akun terhapus", Boolean(dashboard) && dashboard.includes("bekas_akun_terhapus_at"));
+    cek("panel menunjukkan surel yang belum dikonfirmasi", Boolean(dashboard) && dashboard.includes("surel belum dikonfirmasi"));
+    cek("alat hapus akun uji menolak akun ber-KTP", Boolean(alatHapus) && alatHapus.includes("punya foto KTP"));
 
     cek("email.js punya sendSignupVerificationEmail", emailJs.includes("sendSignupVerificationEmail"));
     cek("template punya judul tetap", template.includes("JUDUL_EMAIL_VERIFIKASI"));
@@ -507,6 +540,119 @@ console.log("-".repeat(72));
     email: "<script>alert(1)</script>@x.id",
   });
   cek("alamat di-escape di HTML", !jahat.includes("<script>alert(1)</script>"));
+}
+
+// ============================================================================
+// B3 — penjaga pendaftaran: pembatas PERSISTEN + Turnstile + kirim ulang
+//      (hermetis: admin/rpc/fetch tiruan, tanpa jaringan)
+// ============================================================================
+console.log("");
+console.log("B3 Penjaga pendaftaran (pembatas persisten, Turnstile, kirim ulang)");
+console.log("-".repeat(72));
+
+{
+  const aturan = aturanPembatas({ ip: "203.0.113.7", email: "Budi@Example.com" });
+  cek(
+    "aturanPembatas: IP, batas harian, dan alamat — berurutan",
+    aturan.map((a) => a.kode).join(",") === "jeda_ip,batas_harian,jeda_alamat",
+    aturan.map((a) => a.kode).join(",")
+  );
+  cek("aturanPembatas: alamat dinormalkan (huruf kecil)", aturan[2].kunci === "email:budi@example.com");
+  cek("aturanPembatas: tanpa IP & alamat → tidak ada aturan", aturanPembatas({}).length === 0);
+  cek("aturanPembatas: pesan menyebut menit (bukan angka mentah)", /menit|jam/.test(aturan[0].pesan(120)));
+
+  cek("Turnstile: tanpa kunci → tidak aktif (bukan memblokir)", modeTurnstile({ secret: "", siteKey: "" }).aktif === false);
+  cek("Turnstile: web dengan kedua kunci → aktif", modeTurnstile({ secret: "s", siteKey: "k", asal: "web" }).aktif === true);
+  cek(
+    "Turnstile: kunci rahasia ada tetapi site key kosong → tidak aktif + sebab jelas",
+    modeTurnstile({ secret: "s", siteKey: "", asal: "web" }).sebab === "situs_belum_punya_site_key"
+  );
+  cek("Turnstile: jalur aplikasi tidak diwajibkan secara bawaan", modeTurnstile({ secret: "s", siteKey: "k", asal: "api" }).aktif === false);
+  cek(
+    "Turnstile: jalur aplikasi bisa diwajibkan lewat TURNSTILE_WAJIB_API",
+    modeTurnstile({ secret: "s", siteKey: "k", asal: "api", wajibApi: "1" }).aktif === true
+  );
+  cek("Turnstile: token kosong ditolak tanpa memanggil Cloudflare", (await verifikasiTurnstile({ token: "", secret: "s" })).error === "token_kosong");
+  cek("Turnstile: token kebesaran ditolak", (await verifikasiTurnstile({ token: "x".repeat(5000), secret: "s" })).error === "token_terlalu_panjang");
+  cek(
+    "Turnstile: jawaban Cloudflare sukses diteruskan",
+    (await verifikasiTurnstile({ token: "t", secret: "s", fetchFn: async () => ({ ok: true, json: async () => ({ success: true }) }) })).ok === true
+  );
+  cek(
+    "Turnstile: penolakan Cloudflare menyebut kodenya (tanpa token di pesan)",
+    (await verifikasiTurnstile({
+      token: "t",
+      secret: "s",
+      fetchFn: async () => ({ ok: true, json: async () => ({ success: false, "error-codes": ["invalid-input-response"] }) }),
+    })).error === "invalid-input-response"
+  );
+  cek(
+    "Turnstile: jaringan mati → gagal (fail-closed untuk token yang dikirim)",
+    (await verifikasiTurnstile({ token: "t", secret: "s", fetchFn: async () => { throw new Error("mati"); } })).ok === false
+  );
+
+  // RPC pembatas tiruan: batas tercapai, sukses, dan gangguan database.
+  const panggilanBatas = [];
+  const adminBatas = {
+    rpc: async (nama, isi) => {
+      panggilanBatas.push({ nama, isi });
+      return { data: { ok: false, error: "batas_tercapai", sisa_detik: 90 }, error: null };
+    },
+  };
+  const terblokir = await periksaPembatasPersisten({ admin: adminBatas, ip: "203.0.113.7", email: "budi@example.com" });
+  cek("pembatas persisten: batas tercapai → ok:false + kode aturan", terblokir.ok === false && terblokir.kode === "jeda_ip");
+  cek("pembatas persisten: sisa waktu diteruskan ke pesan", terblokir.sisaDetik === 90 && /menit/.test(terblokir.pesan));
+  cek("pembatas persisten: berhenti di aturan pertama (tidak mencatat kunci lain)", panggilanBatas.length === 1);
+
+  const panggilanLulus = [];
+  const adminLulus = { rpc: async (nama, isi) => { panggilanLulus.push(isi); return { data: { ok: true }, error: null }; } };
+  const lulus = await periksaPembatasPersisten({ admin: adminLulus, ip: "203.0.113.8", email: "sari@example.com" });
+  cek("pembatas persisten: semua aturan dicatat saat lolos", lulus.tersedia === true && lulus.diperiksa === 3 && panggilanLulus.length === 3);
+  cek(
+    "pembatas persisten: memanggil RPC pendaftaran_izin dengan jendela dari aturan",
+    panggilanLulus[0].p_jendela_detik === 900 && panggilanLulus[0].p_batas === 8
+  );
+
+  const adminRusak = { rpc: async () => ({ data: null, error: { message: "could not find the function public.pendaftaran_izin" } }) };
+  const rusak = await periksaPembatasPersisten({ admin: adminRusak, ip: "203.0.113.9", email: "x@example.com" });
+  cek("pembatas persisten: migrasi belum ada → TIDAK memblokir pendaftaran", rusak.ok === true);
+  cek("pembatas persisten: degradasi TERLIHAT (tersedia:false + perluMigrasi)", rusak.tersedia === false && rusak.perluMigrasi === true);
+
+  // Kirim ulang: akun belum terkonfirmasi → email terkirim TANPA kata sandi.
+  lupakanRiwayatPendaftaran();
+  {
+    const admin = adminTiruan();
+    const mailer = mailerTiruan();
+    const hasil = await kirimUlangVerifikasiPendaftaran({
+      email: "pemohon@example.com",
+      redirectTo: "fixify://confirm",
+      admin,
+      kirimEmail: mailer.kirim,
+    });
+    cek("kirim ulang: berhasil tanpa kata sandi (admin tidak tahu sandi pendaftar)", hasil.ok === true && hasil.terkirim === true);
+    cek("kirim ulang: generateLink tidak membawa password", !("password" in (admin.panggilan[0] || {})));
+    cek("kirim ulang: satu email terkirim dengan tautan verifikasi", mailer.surat.length === 1 && mailer.surat[0].actionLink === LINK_BAIK);
+  }
+
+  // Kirim ulang: akun SUDAH terkonfirmasi → tidak ada email yang dikirim.
+  {
+    lupakanRiwayatPendaftaran();
+    const admin = adminTiruan({ data: null, error: { status: 422, code: "email_exists", message: "Email address already registered" } });
+    const mailer = mailerTiruan();
+    const hasil = await kirimUlangVerifikasiPendaftaran({ email: "sudah@example.com", redirectTo: "fixify://confirm", admin, kirimEmail: mailer.kirim });
+    cek("kirim ulang: akun terkonfirmasi → tidak dikirimi apa pun", hasil.ok === true && hasil.terkirim === false && hasil.sudahTerkonfirmasi === true);
+    cek("kirim ulang: akun terkonfirmasi → email benar-benar tidak terkirim", mailer.surat.length === 0);
+  }
+
+  // Kirim ulang: klik ganda → satu email saja.
+  {
+    lupakanRiwayatPendaftaran();
+    const admin = adminTiruan();
+    const mailer = mailerTiruan();
+    const a = await kirimUlangVerifikasiPendaftaran({ email: "dobel@example.com", redirectTo: "fixify://confirm", admin, kirimEmail: mailer.kirim });
+    const b = await kirimUlangVerifikasiPendaftaran({ email: "dobel@example.com", redirectTo: "fixify://confirm", admin, kirimEmail: mailer.kirim, sekarangMs: Date.now() + 1000 });
+    cek("kirim ulang: klik ganda tidak mengirim dua email", a.ok === true && b.alasan === "jeda" && mailer.surat.length === 1);
+  }
 }
 
 // ============================================================================

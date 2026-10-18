@@ -14,6 +14,7 @@ import {
   assignTechnicianAdmin,
   fetchNearestTechniciansAdmin,
   setTechnicianApprovalAdmin,
+  kirimUlangVerifikasiPendaftarAdmin,
   updateReportAdmin,
   confirmBookingPaymentAdmin,
   rejectPaymentProofAdmin,
@@ -940,9 +941,22 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           {users.map((u) => (
             <div key={u.id} className="card flex justify-between items-center flex-wrap gap-3">
               <div>
-                <p className="font-semibold text-navy text-sm flex items-center gap-2">
+                <p className="font-semibold text-navy text-sm flex items-center gap-2 flex-wrap">
                   {u.name}
                   {u.role === "technician" && <ApprovalBadge status={u.approval_status} />}
+                  {/* Ditandai jalur pendaftaran (src/lib/signup-verification.js):
+                      surel ini pernah dipakai akun yang SUDAH DIHAPUS. Bukan
+                      penolakan — hanya pemberitahuan supaya "hapus akun lalu
+                      daftar ulang" tidak menjadi cara mereset riwayat penilaian
+                      tanpa jejak di mata admin (docs/security.md §8.4). */}
+                  {u.bekas_akun_terhapus_at && (
+                    <span
+                      className="pill bg-amber-tint text-amber text-[10px] font-bold"
+                      title="Surel ini pernah dipakai akun yang sudah dihapus. Riwayat penilaian/penyalahgunaan sebelumnya TIDAK melekat pada akun ini."
+                    >
+                      surel bekas akun terhapus
+                    </span>
+                  )}
                 </p>
                 <p className="text-xs text-ink-soft">{u.email} · {u.phone || "-"}</p>
                 {u.role === "technician" && (
@@ -1294,6 +1308,17 @@ function ApprovalBadge({ status }) {
 }
 
 function ApplicantList({ users, onReview }) {
+  // Kirim ulang surel verifikasi untuk pendaftar yang belum mengonfirmasi.
+  // Tanpa ini, pendaftar seperti itu tidak bisa masuk sama sekali sehingga KTP
+  // dan datanya tidak akan pernah bisa dinilai admin — antreannya menggantung.
+  const [kirimId, setKirimId] = useState(null);
+  const [pesanKirim, setPesanKirim] = useState({});
+  async function kirimUlang(id) {
+    setKirimId(id);
+    const res = await kirimUlangVerifikasiPendaftarAdmin(id);
+    setKirimId(null);
+    setPesanKirim((m) => ({ ...m, [id]: res.error || "Surel verifikasi sudah dikirim ulang." }));
+  }
   const applicants = users
     .filter((u) => u.role === "technician")
     .sort((a, b) => {
@@ -1310,18 +1335,42 @@ function ApplicantList({ users, onReview }) {
       {applicants.map((u) => (
         <div key={u.id} className={`card flex justify-between items-center flex-wrap gap-3 ${u.approval_status === "pending" ? "!border-amber" : ""}`}>
           <div>
-            <p className="font-semibold text-navy text-sm flex items-center gap-2">
+            <p className="font-semibold text-navy text-sm flex items-center gap-2 flex-wrap">
               {u.name} <ApprovalBadge status={u.approval_status} />
+              {u.surel_terkonfirmasi === false && (
+                <span
+                  className="pill !px-2 !py-0.5 text-[10px] bg-coral-tint text-coral"
+                  title="Pendaftar belum mengklik tautan verifikasi, jadi belum bisa masuk dan datanya belum bisa dinilai."
+                >
+                  surel belum dikonfirmasi
+                </span>
+              )}
             </p>
             <p className="text-xs text-ink-soft">{u.email} · {u.phone || "-"} · daftar {new Date(u.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })}</p>
+            {u.surel_terkonfirmasi === false && (
+              <p className="text-[11px] text-coral mt-0.5">
+                Akun ini belum pernah mengonfirmasi surel — ia tidak bisa masuk sebelum tautannya diklik.
+              </p>
+            )}
+            {pesanKirim[u.id] && <p className="text-[11px] text-ink-soft mt-0.5">{pesanKirim[u.id]}</p>}
             {u.address && (
               <p className="text-xs text-ink-soft mt-0.5 flex items-start gap-1">
                 <MapPin size={12} className="mt-0.5 shrink-0" /> {u.address}
               </p>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {u.ktp_url && <KtpViewer path={u.ktp_url} name={u.name} />}
+            {u.surel_terkonfirmasi === false && (
+              <button
+                className="btn-outline !px-3 !py-2 text-xs"
+                disabled={kirimId === u.id}
+                onClick={() => kirimUlang(u.id)}
+                title="Kirim tautan verifikasi baru (tautan lama kedaluwarsa setelah 1 jam)"
+              >
+                {kirimId === u.id ? <Loader2 size={14} className="animate-spin" /> : "Kirim ulang verifikasi"}
+              </button>
+            )}
             {u.approval_status !== "approved" && (
               <button className="btn-primary !px-4 !py-2 text-sm" disabled={onReview === null} onClick={() => onReview(u.id, "approved")}>
                 Setujui

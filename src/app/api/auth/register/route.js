@@ -56,6 +56,12 @@ export async function POST(request) {
     siteUrl: process.env.NEXT_PUBLIC_SITE_URL,
     origin: originDari(request),
     ip: ipDariHeader(request.headers),
+    // Jalur API = aplikasi Android. Aplikasi tidak bisa menampilkan tantangan
+    // Turnstile, jadi jalur ini hanya dijaga Turnstile bila TURNSTILE_WAJIB_API
+    // dinyalakan secara sadar; selama belum, yang menjaga adalah pembatas
+    // persisten per IP/alamat (src/lib/signup-guard.js).
+    turnstileToken: body?.turnstile_token ?? null,
+    asal: "api",
   });
 
   if (hasil.ok) {
@@ -80,12 +86,15 @@ export async function POST(request) {
         { status: 400 }
       );
     case "jeda":
+    case "jeda_alamat":
       return NextResponse.json(
         {
           ok: false,
           error: "jeda_per_alamat",
           sisaDetik: hasil.sisaDetik,
-          pesan: "Email verifikasi baru saja dikirim. Tunggu sebentar sebelum mendaftar lagi.",
+          pesan:
+            hasil.pesan ||
+            "Email verifikasi baru saja dikirim. Tunggu sebentar sebelum mendaftar lagi.",
         },
         { status: 429 }
       );
@@ -95,9 +104,30 @@ export async function POST(request) {
           ok: false,
           error: "kuota_ip",
           sisaDetik: hasil.sisaDetik,
-          pesan: "Terlalu banyak pendaftaran dari jaringan ini. Coba lagi nanti.",
+          pesan: hasil.pesan || "Terlalu banyak pendaftaran dari jaringan ini. Coba lagi nanti.",
         },
         { status: 429 }
+      );
+    case "batas_harian":
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "batas_harian",
+          sisaDetik: hasil.sisaDetik,
+          pesan: hasil.pesan || "Batas pendaftaran harian dari jaringan ini tercapai. Coba lagi nanti.",
+        },
+        { status: 429 }
+      );
+    // Verifikasi keamanan (Turnstile) gagal — TIDAK bergantung pada ada/tidaknya
+    // akun, jadi membedakannya tidak membocorkan apa pun.
+    case "turnstile":
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "verifikasi_keamanan",
+          pesan: "Verifikasi keamanan gagal. Muat ulang lalu coba lagi.",
+        },
+        { status: 400 }
       );
     case "env":
       console.error("[api/auth/register] lingkungan email belum siap:", hasil.pesan);
