@@ -1,7 +1,11 @@
 name: fixify_app
 description: "Fixify — Aplikasi pelanggan: booking teknisi terpercaya datang ke lokasi."
 publish_to: "none"
-version: 1.4.0+10
+# Versi DASAR saja — angka build (versionCode) TIDAK lagi ditulis di sini.
+# Setiap build CI menghitungnya sendiri lewat scripts/apk-version.mjs dan
+# mencatatnya di public/apk/manifest.json, jadi dua APK berbeda tidak mungkin
+# memakai nomor versi yang sama. Ubah X.Y.Z hanya saat pindah garis rilis.
+version: 1.4.0
 
 environment:
   sdk: ">=3.4.0 <4.0.0"

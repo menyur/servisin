@@ -20,7 +20,7 @@ langkah AAB di CI terhapus.
 | Area | Status | Bukti |
 |---|---|---|
 | Package name | ✅ `com.fixify.app` | `flutter_app/android/app/build.gradle.kts` |
-| Versi | ✅ `1.4.0+10` (versionName+versionCode) | `flutter_app/pubspec.yaml` |
+| Versi | ✅ otomatis: `1.4.0.<build>` (versionName) + `versionCode` = `<build>` tiap rilis | versi dasar: `flutter_app/pubspec.yaml`; penghitung: `scripts/apk-version.mjs` |
 | targetSdk | ✅ **36** (Android 16) | manifest rilis hasil build |
 | minSdk | ✅ 24 | manifest rilis |
 | AAB bertanda tangan rilis | ✅ 53,5 MB, `keytool -printcert` = SHA-1 `AB:AE:3B:…:68` | `flutter_app/build/app/outputs/bundle/release/app-release.aab` |
@@ -269,7 +269,7 @@ menyiapkannya.
 ## 8. Checklist sebelum menekan "Submit for review"
 
 **Sudah siap di repo (jangan perlu diubah):**
-- [x] Package `com.fixify.app` + versionCode unik (10) + targetSdk 36
+- [x] Package `com.fixify.app` + versionCode naik otomatis tiap rilis (tidak dipakai ulang) + targetSdk 36
 - [x] AAB bertanda tangan upload key (SHA-1 tercatat & cocok `known-sha1.txt`)
 - [x] Ikon 512×512, feature graphic 1024×500, 5 screenshot 9:16
 - [x] Teks listing (judul/deskripsi singkat/panjang/catatan rilis)

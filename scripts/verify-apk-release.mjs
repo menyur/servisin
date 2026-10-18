@@ -143,6 +143,30 @@ check(
   workflow.includes('"sizes"'),
 );
 
+// Versi rilis WAJIB dihitung otomatis. Sebelum ini nomor rilis dinaikkan
+// manual di pubspec; kalau lupa, dua APK berbeda terbit dengan versi sama dan
+// Play menolak unggahan berikutnya karena versionCode dipakai ulang.
+check(
+  "versi rilis dihitung otomatis (scripts/apk-version.mjs)",
+  workflow.includes("node scripts/apk-version.mjs"),
+);
+check(
+  "pubspec hanya memuat versi DASAR (angka build tidak ditulis manual)",
+  /^version:\s*\d+\.\d+\.\d+\s*$/m.test(baca("flutter_app/pubspec.yaml")),
+  "tulis version: X.Y.Z; angka +N kini dihitung scripts/apk-version.mjs",
+);
+check(
+  "APK & AAB dibangun dengan nomor versi hasil hitung itu",
+  (workflow.match(/--build-number=/g) || []).length >= 2,
+  `--build-number= muncul ${(workflow.match(/--build-number=/g) || []).length}x (butuh 2: APK + AAB)`,
+);
+check(
+  "manifest menyalin versi dari langkah otomatis, bukan grep pubspec",
+  workflow.includes("VERSION_NAME") &&
+    workflow.includes("VERSION_CODE") &&
+    !workflow.includes("grep -E '^version:'"),
+);
+
 // --- 5. Aturan ignore ----------------------------------------------------
 console.log("\n5) .gitignore");
 check(

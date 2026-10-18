@@ -5,6 +5,7 @@
   "description": "Servisin — platform pemesanan jasa serba bisa: Service AC, Tukang Rumah, Service Kendaraan.",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('.next',{recursive:true,force:true}); console.log('.next dihapus')\"",
+    "clean:cache": "node scripts/clean-dev-cache.mjs",
     "cleanup": "node scripts/weekly-cleanup.mjs",
     "cleanup:run": "node scripts/weekly-cleanup.mjs --yes",
     "dev": "next dev",
@@ -27,6 +28,7 @@
     "verify:notify": "node scripts/verify-e2e-push-notify.mjs",
     "verify:live": "node scripts/ci-probe-gate.mjs",
     "verify:flutter-version": "node scripts/check-flutter-version.mjs",
+    "verify:apk-version": "node scripts/apk-version.mjs --selftest",
     "verify:apk-release": "node scripts/verify-apk-release.mjs",
     "verify:released-apk": "node scripts/verify-released-apk.mjs",
     "verify:fonts": "node scripts/verify-font-family.mjs",

@@ -84,6 +84,11 @@ export function DownloadVariants() {
 
   if (state === "ready") {
     const tanggal = info.builtAt ? fmtTanggal(info.builtAt) : null;
+    // Sejak nomor rilis dihitung otomatis (scripts/apk-version.mjs),
+    // versionName sudah berakhiran nomor build — mis. "1.4.0.38". Menulis
+    // "· build 38" di sebelahnya hanya mengulang angka yang sama.
+    const buildTersirat =
+      info.build && String(info.version || "").endsWith(`.${info.build}`);
     return (
       <div>
         {info.version ? (
@@ -91,7 +96,7 @@ export function DownloadVariants() {
             <ShieldCheck size={13} className="text-mint shrink-0" />
             <span>
               Versi <strong className="text-navy">{info.version}</strong>
-              {info.build ? <> · build {info.build}</> : null}
+              {info.build && !buildTersirat ? <> · build {info.build}</> : null}
               {tanggal ? <> · dibangun {tanggal}</> : null}
               {" "}— cocokkan checksum setelah unduh untuk memastikan file utuh
             </span>

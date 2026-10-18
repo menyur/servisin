@@ -26,6 +26,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
+import { parseVersiDasar } from "./apk-version.mjs";
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SELFTEST = process.argv.includes("--selftest");
 
@@ -43,13 +45,6 @@ const baca = (p) => readFileSync(join(ROOT, p), "utf8");
 const ada = (p) => existsSync(join(ROOT, p));
 
 // --- Pembantu murni (diuji lewat --selftest) --------------------------------
-
-/** Versi Flutter `X.Y.Z+B` → { versionName, versionCode } atau null. */
-export function parseVersion(teks) {
-  const m = /^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$/m.exec(String(teks || ""));
-  if (!m) return null;
-  return { versionName: m[1], versionCode: Number(m[2]) };
-}
 
 /** Ukuran PNG dari header IHDR (tanpa memuat seluruh berkas). */
 export function ukuranPng(buf) {
@@ -102,9 +97,12 @@ if (SELFTEST) {
     console.log(`${ok ? "lulus" : "GAGAL"}  ${nama}`);
   };
 
-  cek("versi valid terbaca", parseVersion("version: 1.4.0+10")?.versionCode === 10);
-  cek("versi tanpa build ditolak", parseVersion("version: 1.4.0") === null);
-  cek("versi kosong ditolak", parseVersion("") === null);
+  cek("versi dasar terbaca", parseVersiDasar("version: 1.4.0")?.versiDasar === "1.4.0");
+  cek(
+    "build manual lama tetap dibaca sebagai pagar",
+    parseVersiDasar("version: 1.4.0+10")?.buildManual === 10,
+  );
+  cek("versi kosong ditolak", parseVersiDasar("") === null);
 
   const png = (w, h) => {
     const b = Buffer.alloc(24);
@@ -147,23 +145,59 @@ console.log("=".repeat(72));
 // 1. Android: paket, versi, SDK
 const gradle = baca("flutter_app/android/app/build.gradle.kts");
 const pubspec = baca("flutter_app/pubspec.yaml");
-const versi = parseVersion(pubspec);
-cek("pubspec.yaml memuat versi X.Y.Z+build", versi !== null, "contoh benar: version: 1.4.0+10");
+const versi = parseVersiDasar(pubspec);
+cek(
+  "pubspec.yaml memuat versi dasar X.Y.Z",
+  versi !== null,
+  "build TIDAK lagi ditulis di pubspec — dihitung CI lewat scripts/apk-version.mjs",
+);
 cek("applicationId = com.fixify.app", /applicationId\s*=\s*"com\.fixify\.app"/.test(gradle), "Play menolak penggantian package name setelah aplikasi dibuat");
 cek("compileSdk >= 35", /compileSdk\s*=\s*(\d+)/.test(gradle) && Number(/compileSdk\s*=\s*(\d+)/.exec(gradle)[1]) >= 35);
 
-const berkasManifest = [
-  "flutter_app/build/app/intermediates/packaged_manifests/release/processReleaseManifestForPackage/AndroidManifest.xml",
-  "flutter_app/build/app/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml",
-].find((p) => ada(p));
-if (berkasManifest && versi) {
-  const mf = baca(berkasManifest);
+// Build CI memakai `--split-per-abi`, sehingga AGP menaruh manifest rilis di
+// subfolder per-ABI dan menambahkan offset 1000 × indeks ABI pada versionCode
+// (arm64 = +2000, armv7a = +1000). Daftar ini penting: tanpa jalur per-ABI,
+// gate DIAM-DIAM melewati pemeriksaan versi justru pada build yang terbit
+// (pernah terjadi: "metadata manifest rilis belum bisa diperiksa").
+const kandidatManifest = [
+  {
+    berkas: "flutter_app/build/app/intermediates/packaged_manifests/release/processReleaseManifestForPackage/AndroidManifest.xml",
+    offsetAbi: 0,
+  },
+  {
+    berkas: "flutter_app/build/app/intermediates/packaged_manifests/release/processReleaseManifestForPackage/arm64-v8a/AndroidManifest.xml",
+    offsetAbi: 2000,
+  },
+  {
+    berkas: "flutter_app/build/app/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml",
+    offsetAbi: 0,
+  },
+  {
+    berkas: "flutter_app/build/app/intermediates/merged_manifests/release/processReleaseManifest/arm64-v8a/AndroidManifest.xml",
+    offsetAbi: 2000,
+  },
+];
+const dipilih = kandidatManifest.find((k) => ada(k.berkas));
+if (dipilih && versi) {
+  const mf = baca(dipilih.berkas);
   const vc = /android:versionCode="(\d+)"/.exec(mf)?.[1];
   const vn = /android:versionName="([^"]+)"/.exec(mf)?.[1];
   const ts = Number(/android:targetSdkVersion="(\d+)"/.exec(mf)?.[1] || 0);
   const ms = Number(/android:minSdkVersion="(\d+)"/.exec(mf)?.[1] || 0);
-  cek("manifest rilis: versionCode = pubspec", vc === String(versi.versionCode), `manifest=${vc} pubspec=${versi.versionCode}`);
-  cek("manifest rilis: versionName = pubspec", vn === versi.versionName, `manifest=${vn} pubspec=${versi.versionName}`);
+  // Skema otomatis: versionName = <versi dasar pubspec>.<build>. Yang diperiksa
+  // adalah KONSISTENSI keduanya — bukan angka tertentu — supaya gate ini tidak
+  // perlu tahu nomor run CI yang dipakai saat APK/AAB dibangun.
+  const build = Number(vc) - dipilih.offsetAbi;
+  cek(
+    "manifest rilis: versionName = <versi dasar>.<build>",
+    vn === `${versi.versiDasar}.${build}`,
+    `manifest=${vn} versionCode=${vc} offsetABI=${dipilih.offsetAbi} → build=${build}`,
+  );
+  cek(
+    "manifest rilis: build di atas build manual pubspec",
+    build > versi.buildManual,
+    `build=${build} pubspec=+${versi.buildManual}`,
+  );
   cek(`targetSdk >= ${BATAS.minTargetSdk}`, ts >= BATAS.minTargetSdk, `targetSdk=${ts}`);
   cek(`minSdk >= ${BATAS.minSdk}`, ms >= BATAS.minSdk, `minSdk=${ms}`);
   cek("izin POST_NOTIFICATIONS dideklarasikan", /android\.permission\.POST_NOTIFICATIONS/.test(mf));

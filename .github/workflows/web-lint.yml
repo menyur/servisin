@@ -139,6 +139,19 @@ jobs:
       - name: Verifikasi realtime panel admin
         run: npm run verify:admin-realtime
 
+      # Nomor rilis APK kini dihitung otomatis (scripts/apk-version.mjs). Kalau
+      # penghitungnya berhenti menaikkan angka, dua APK berbeda terbit dengan
+      # versi sama dan Play menolak unggahan berikutnya — kegagalan yang baru
+      # terlihat setelah build 20 menit selesai. Diuji murni di sini.
+      - name: Verifikasi penghitung versi APK otomatis
+        run: npm run verify:apk-version
+
+      # Jalur rilis APK (aset GitHub Release + manifest + pemakaian nomor versi
+      # hasil hitung otomatis di workflow build) diperiksa di sini supaya
+      # langkah versi itu tidak bisa hilang tanpa ada yang merah. Statis.
+      - name: Verifikasi jalur rilis APK
+        run: npm run verify:apk-release
+
       # Format stylish di lint.log enak dibaca manusia; untuk annotation kita
       # minta laporan JSON (antarmuka stabil) lalu ubah lewat skrip kecil:
       # tiap error jadi annotation dengan berkas + baris + kolom + aturannya,
