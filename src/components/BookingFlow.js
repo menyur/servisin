@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronLeft, Paperclip, Landmark, Banknote, Ticket } from "lucide-react";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
-import { calculateTotal, formatRupiah } from "@/lib/pricing";
+import { APP_FEE, calculateTotal, formatRupiah } from "@/lib/pricing";
 import { TIME_SLOTS } from "@/lib/booking-slots";
-import { createBooking, getTransferAccount } from "@/app/actions/bookings";
+import { createBooking, getTransferAccount, getAppFee } from "@/app/actions/bookings";
 import { getMyVouchers } from "@/app/actions/reviews";
 import { createClient } from "@/lib/supabase/client";
 import { optimizeImage } from "@/components/ServiceImageUpload";
@@ -29,6 +29,11 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   const [form, setForm] = useState({ notes: "", address: "", date: "", time: "", attachment: null });
   const [paymentMethod, setPaymentMethod] = useState("");
   const [transferAccount, setTransferAccount] = useState(null); // { bank, number, name } dari app_settings
+  // Biaya aplikasi yang SEDANG berlaku (diatur admin di panel). Mulai dari
+  // bawaan APP_FEE supaya rincian biaya tidak pernah tampil 0 sebelum setelan
+  // selesai dibaca; sesudah itu angka di layar = angka yang ditagihkan server
+  // (keduanya membaca setelan yang sama, src/lib/app-fee.js).
+  const [appFee, setAppFee] = useState(APP_FEE);
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
   const [result, setResult] = useState(null); // { booking, service, payment }
@@ -51,8 +56,8 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   // Harga per unit: ikut varian bila ada, kalau tidak pakai base_price layanan.
   const unitPrice = selectedOption ? selectedOption.price : selectedService?.base_price || 0;
   const totals = useMemo(
-    () => calculateTotal(unitPrice, appliedVoucher?.amount || 0),
-    [unitPrice, appliedVoucher]
+    () => calculateTotal(unitPrice, appliedVoucher?.amount || 0, appFee),
+    [unitPrice, appliedVoucher, appFee]
   );
 
   // ganti layanan → reset pilihan varian agar tidak nyasar
@@ -71,6 +76,12 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
     getTransferAccount()
       .then((a) => {
         if (alive) setTransferAccount(a);
+      })
+      .catch(() => {});
+    // Biaya aplikasi terbaru dari setelan admin — gagal → tetap pakai bawaan.
+    getAppFee()
+      .then((r) => {
+        if (alive && Number.isFinite(Number(r?.fee))) setAppFee(Number(r.fee));
       })
       .catch(() => {});
     return () => {
