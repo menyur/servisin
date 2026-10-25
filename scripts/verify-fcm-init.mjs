@@ -35,16 +35,43 @@
 // ============================================================================
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_FCM = path.join(ROOT, "src/lib/fcm.js");
 const SUMBER_MANIFEST = path.join(ROOT, "flutter_app/android/app/src/main/AndroidManifest.xml");
-const SUMBER_AKTIVITAS = path.join(
-  ROOT,
-  "flutter_app/android/app/src/main/kotlin/com/fixify/app/MainActivity.kt"
+/**
+ * Cari MainActivity.kt tanpa mengunci nama paket Android.
+ *
+ * Path dulu ditulis mati sebagai `kotlin/com/fixify/app/MainActivity.kt`.
+ * Ketika paket aplikasi pindah ke `id.fixify.app` (syarat Google Play), berkas
+ * itu ikut pindah dan skrip ini gagal dengan ENOENT — bukan regresi FCM, tetapi
+ * gate CI jadi merah dan menutupi pemeriksaan lain. Pencarian di bawah tetap
+ * menemukan berkasnya walau paket berganti lagi.
+ */
+function cariAktivitas(dir) {
+  let isi;
+  try {
+    isi = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const e of isi) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const ketemu = cariAktivitas(p);
+      if (ketemu) return ketemu;
+    } else if (e.name === "MainActivity.kt") {
+      return p;
+    }
+  }
+  return null;
+}
+
+const SUMBER_AKTIVITAS = cariAktivitas(
+  path.join(ROOT, "flutter_app/android/app/src/main/kotlin")
 );
 const SELF = fileURLToPath(import.meta.url);
 
@@ -217,6 +244,16 @@ check(
   Boolean(kanalManifest),
   String(kanalManifest ?? "(tidak ada) — notifikasi jatuh ke kanal fallback")
 );
+
+if (!SUMBER_AKTIVITAS) {
+  check(
+    "MainActivity.kt ditemukan di android/app/src/main/kotlin",
+    false,
+    "tidak ditemukan — kanal notifikasi tidak bisa diperiksa"
+  );
+  console.log("Regresi FCM: notifikasi Android bisa berhenti tanpa error yang terlihat.");
+  process.exit(1);
+}
 
 const aktivitas = readFileSync(SUMBER_AKTIVITAS, "utf8");
 const kanalAktivitas = /CHANNEL_ID\s*=\s*"([^"]+)"/.exec(aktivitas)?.[1] ?? null;
