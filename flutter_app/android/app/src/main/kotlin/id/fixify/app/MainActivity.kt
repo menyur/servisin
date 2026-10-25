@@ -122,9 +122,12 @@ class MainActivity : FlutterActivity() {
 
     private fun launchGoogleSignIn() {
         try {
-            val webClientId = getString(
-                resources.getIdentifier("default_web_client_id", "string", packageName)
-            )
+            // Rujukan LANGSUNG ke R, bukan resources.getIdentifier(...):
+            // getIdentifier bersifat refleksi sehingga resource-shrinker build
+            // rilis menganggapnya tak terpakai dan MEMBUANG default_web_client_id
+            // dari APK. Gejalanya "String resource ID #0x0" sebelum sempat
+            // menghubungi Google, lalu app jatuh ke OAuth browser.
+            val webClientId = getString(R.string.default_web_client_id)
             val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
                 .requestIdToken(webClientId)
                 .requestEmail()

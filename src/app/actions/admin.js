@@ -3,6 +3,22 @@
 import { createClient } from "@/lib/supabase/server";
 import { APP_FEE_MAKS, formatRupiah } from "@/lib/pricing";
 import { bacaAppFeeRinci } from "@/lib/app-fee";
+import {
+  normalisasiSlotCapacity,
+  SLOT_CAPACITY_DEFAULT,
+  SLOT_CAPACITY_MAX,
+  daftarTanggalWib,
+  kumpulkanTekananSlot,
+  ringkasSlotUsage,
+  slotSudahLewat,
+  tanggalWib as tanggalWibSlot,
+} from "@/lib/slot-capacity";
+import { TIME_SLOTS } from "@/lib/booking-slots";
+import {
+  SLOT_ACTIVE_STATUSES,
+  rencanakanPenugasanOtomatis,
+  susunKandidatTeknisi,
+} from "@/lib/slot-technicians";
 import { revalidateTag } from "next/cache";
 import { sendTechnicianAssignmentEmail, sendReportResolvedEmail, sendReceiptEmail, sendTechnicianBalanceReminderEmail } from "@/lib/email";
 import { buildReceiptPdf } from "@/lib/receipt-pdf";
@@ -17,10 +33,23 @@ import {
   ambangPiutangHari,
 } from "@/lib/pricing";
 import { bacaPiutangTerbuka } from "@/lib/piutang";
-import { debitTechnicianCommission, creditTechnicianBalance } from "@/lib/balance";
+import { debitTechnicianCommission, creditTechnicianBalance, sesuaikanSaldoTeknisi } from "@/lib/balance";
+import { alasanRefundSah, nominalRefundSah, ringkasRefund } from "@/lib/booking-refund";
+import { formatTerlambat, menitTerlambat, ringkasTerlambat } from "@/lib/late-start";
+import { bedaKolom, catatAuditAdmin } from "@/lib/admin-audit";
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
+import { commissionAlreadyCharged, technicianCancelNotice } from "@/lib/cancel-notice";
 import { kirimUlangVerifikasiPendaftaran } from "@/lib/signup-verification";
 import { ICONS } from "@/lib/icons";
+import { normalizeScorecardRow, PERIODE_HARI } from "@/lib/technician-scorecard";
+import {
+  formatRentangCuti,
+  geserTanggal,
+  hariIniWib,
+  normalisasiAreaLayanan,
+  normalisasiKeahlian,
+  normalisasiRentangCuti,
+} from "@/lib/technician-availability";
 import { revalidatePath } from "next/cache";
 import { ADMIN_NOTIFY_EVENTS, ADMIN_NOTIFY_EVENT_KEYS } from "@/lib/admin-notify-events";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -211,7 +240,10 @@ export async function getAllBookingsAdmin() {
 
   const { data } = await supabase
     .from("bookings")
-    .select("*, services(name, category_id), profiles!bookings_user_id_fkey(name, phone, email), technician:profiles!bookings_technician_id_fkey(id, name)")
+    .select(
+      "*, services(name, category_id), booking_items(label, unit_price, quantity, line_total, position), " +
+        "profiles!bookings_user_id_fkey(name, phone, email), technician:profiles!bookings_technician_id_fkey(id, name)"
+    )
     .order("created_at", { ascending: false });
 
   const bookings = data || [];
@@ -245,6 +277,28 @@ export async function getAllBookingsAdmin() {
     console.warn("[admin] rincian voucher pesanan dilewati:", e?.message);
   }
 
+  // Biaya tambahan yang diusulkan teknisi: admin perlu melihat alasan &
+  // status persetujuannya, bukan hanya total yang sudah berubah. Best-effort:
+  // tabel bisa belum ada pada database lama — kartu pesanan tetap tampil.
+  try {
+    const ids = bookings.map((b) => b.id);
+    const byBooking = new Map();
+    for (let i = 0; i < ids.length; i += 150) {
+      const { data } = await supabase
+        .from("booking_extra_charges")
+        .select("id, booking_id, amount, reason, status, photo_path, created_at, decided_at")
+        .in("booking_id", ids.slice(i, i + 150))
+        .order("created_at", { ascending: false });
+      for (const c of data || []) {
+        if (!byBooking.has(c.booking_id)) byBooking.set(c.booking_id, []);
+        byBooking.get(c.booking_id).push(c);
+      }
+    }
+    for (const b of bookings) b.extra_charges = byBooking.get(b.id) || [];
+  } catch (e) {
+    console.warn("[admin] rincian biaya tambahan dilewati:", e?.message);
+  }
+
   // Bucket bukti pembayaran kini PRIVAT (hasil audit) — kolom menyimpan path.
   // Tukar ke signed URL agar <img> admin tetap bisa menampilkan buktinya.
   const pathLike = bookings.filter((b) => b.payment_proof_url && !b.payment_proof_url.startsWith("http"));
@@ -259,7 +313,122 @@ export async function getAllBookingsAdmin() {
     for (const b of pathLike) b.payment_proof_url = urlById[b.id] || null;
   }
 
+  // Bukti pekerjaan (foto sebelum/sesudah) juga di bucket PRIVAT. Tukar path
+  // menjadi signed URL supaya admin bisa memeriksa bukti saat pelanggan
+  // mengklaim "belum selesai". Best-effort: kartu tetap tampil tanpa foto.
+  const withProof = bookings.filter((b) => b.before_photo_path || b.after_photo_path);
+  if (withProof.length > 0) {
+    await Promise.all(
+      withProof.map(async (b) => {
+        for (const [kolom, urlKey] of [
+          ["before_photo_path", "before_photo_url"],
+          ["after_photo_path", "after_photo_url"],
+        ]) {
+          const path = b[kolom];
+          if (!path) continue;
+          try {
+            const { data: signed } = await supabase.storage.from("booking-proofs").createSignedUrl(path, 3600);
+            b[urlKey] = signed?.signedUrl || null;
+          } catch {
+            b[urlKey] = null;
+          }
+        }
+      })
+    );
+  }
+
+  // Foto laporan no-show juga di bucket privat.
+  const withNoShow = bookings.filter((b) => b.no_show_photo_path);
+  if (withNoShow.length > 0) {
+    await Promise.all(
+      withNoShow.map(async (b) => {
+        try {
+          const { data: signed } = await supabase.storage
+            .from("booking-proofs")
+            .createSignedUrl(b.no_show_photo_path, 3600);
+          b.no_show_photo_url = signed?.signedUrl || null;
+        } catch {
+          b.no_show_photo_url = null;
+        }
+      })
+    );
+  }
+
   return { bookings };
+}
+
+/**
+ * Pencarian global panel admin: kode pesanan, nama/email/telepon pengguna.
+ *
+ * Sebelumnya admin harus menggulir tab Pesanan atau Pengguna untuk menemukan
+ * satu orang yang sedang di telepon. Fungsi ini hanya MEMBACA (tidak ada
+ * perubahan data) dan mengembalikan hasil yang sudah cukup untuk membuka tab
+ * yang ada — bukan tabel/tab baru.
+ */
+export async function searchAdminGlobal(rawQuery) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const q = String(rawQuery || "").trim();
+  if (q.length < 2) return { query: q, bookings: [], customers: [], technicians: [] };
+  // Karakter yang mengubah arti filter PostgREST dipisahkan dari pola LIKE.
+  const aman = q.replace(/[,()"\\%_]/g, " ").trim();
+  if (aman.length < 2) return { query: q, bookings: [], customers: [], technicians: [] };
+  const pola = `%${aman}%`;
+
+  const BOOKING_SEARCH_SELECT =
+    "*, services(name, category_id), booking_items(label, unit_price, quantity, line_total, position), " +
+    "profiles!bookings_user_id_fkey(name, phone, email), technician:profiles!bookings_technician_id_fkey(id, name)";
+
+  const [kodeRes, profilRes] = await Promise.all([
+    supabase
+      .from("bookings")
+      .select(BOOKING_SEARCH_SELECT)
+      .ilike("code", pola)
+      .order("created_at", { ascending: false })
+      .limit(8),
+    supabase
+      .from("profiles")
+      .select("id, name, email, phone, role, approval_status")
+      .or(`name.ilike.${pola},email.ilike.${pola},phone.ilike.${pola}`)
+      .order("name", { ascending: true })
+      .limit(20),
+  ]);
+
+  if (kodeRes.error) return { error: kodeRes.error.message };
+  if (profilRes.error) return { error: profilRes.error.message };
+
+  const profil = profilRes.data || [];
+  const customers = profil.filter((p) => p.role !== "technician").slice(0, 8);
+  const technicians = profil.filter((p) => p.role === "technician").slice(0, 8);
+  const ids = profil.map((p) => p.id);
+
+  let lewatOrang = [];
+  if (ids.length > 0) {
+    const daftarId = ids.join(",");
+    const { data, error } = await supabase
+      .from("bookings")
+      .select(BOOKING_SEARCH_SELECT)
+      .or(`user_id.in.(${daftarId}),technician_id.in.(${daftarId})`)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    if (error) return { error: error.message };
+    lewatOrang = data || [];
+  }
+
+  // Gabungkan hasil kode + hasil orang tanpa baris ganda, kode lebih dulu.
+  const unik = new Map();
+  for (const b of [...(kodeRes.data || []), ...lewatOrang]) {
+    if (!unik.has(b.id)) unik.set(b.id, b);
+  }
+
+  return {
+    query: q,
+    bookings: [...unik.values()].slice(0, 12),
+    customers,
+    technicians,
+  };
 }
 
 export async function updateBookingStatusAdmin(bookingId, status) {
@@ -270,22 +439,37 @@ export async function updateBookingStatusAdmin(bookingId, status) {
   const allowed = ["pending", "paid", "in_progress", "completed", "cancelled"];
   if (!allowed.includes(status)) return { error: "Status tidak valid." };
 
-  // catat kapan pesanan selesai (dipakai insentif penilaian & laporan)
-  const payload =
-    status === "completed"
-      ? { status, completed_at: new Date().toISOString() }
-      : { status };
-
+  // Catat stempel waktu yang dibutuhkan analitik siklus. Mengubah status lewat
+  // dropdown tidak boleh menghasilkan pesanan "selesai" tanpa completed_at,
+  // atau "dibayar" tanpa payment_confirmed_at — angka siklus jadi bolong.
   // data minimal untuk push (user_id selalu ada; teknisi opsional)
   const { data: cur } = await supabase
     .from("bookings")
-    .select("code, status, user_id, technician_id, address, services(name)")
+    .select(
+      "id, code, status, user_id, technician_id, address, total_price, payment_amount, " +
+        "payment_proof_url, payment_rejected, payment_confirmed_at, services(name)"
+    )
     .eq("id", bookingId)
     .single();
 
+  const sekarang = new Date().toISOString();
+  let payload = { status };
+  if (status === "completed") {
+    payload = { status, completed_at: sekarang };
+  } else if (status === "paid" && cur?.status !== "paid") {
+    // Hanya saat TRANSISI ke dibayar. Menyimpan ulang status "paid" tidak boleh
+    // memindahkan stempel waktu dan membuat analitik siklus terlihat lebih lambat.
+    payload = {
+      status,
+      payment_confirmed_at: sekarang,
+      payment_confirmed_by: admin.id,
+    };
+  }
+
   let { error } = await supabase.from("bookings").update(payload).eq("id", bookingId);
-  // kolom completed_at belum ada di DB → ulangi tanpa itu agar update status tetap jalan
-  if (error && /completed_at/.test(error.message)) {
+  // Database lama bisa belum punya kolom jejak waktu. Jangan gagalkan perubahan
+  // status hanya karena stempel analitik belum tersedia — ulangi tanpa stempel.
+  if (error && /completed_at|payment_confirmed/.test(error.message)) {
     ({ error } = await supabase.from("bookings").update({ status }).eq("id", bookingId));
   }
   if (error) return { error: error.message };
@@ -315,13 +499,48 @@ export async function updateBookingStatusAdmin(bookingId, status) {
       // Pembatalan oleh admin sebelumnya tidak memberi tahu pelanggan sama
       // sekali. Hanya kirim saat status benar-benar berubah agar tombol simpan
       // ulang di panel admin tidak menghasilkan notifikasi ganda.
+      //
+      // Uang yang sudah diterima tidak boleh menguap: catat kewajiban refund
+      // lebih dulu, lalu sebutkan di notifikasi supaya pelanggan tahu dana
+      // akan dikembalikan (bukan hanya "dibatalkan").
+      const uangMasuk =
+        cur.status === "paid" ||
+        Boolean(cur.payment_confirmed_at) ||
+        (cur.payment_proof_url != null && !cur.payment_rejected);
+      const refund = uangMasuk ? await catatRefundPembatalan(supabase, cur, admin.id) : null;
+
       await sendPushToUser(cur.user_id, {
         title: "Pesanan dibatalkan ❌",
         event: "order_cancelled",
-        body: `Pesanan ${cur.code} (${cur.services?.name || "layanan"}) dibatalkan admin. Buka Pesanan untuk melihat detail terbaru.`,
+        body: refund
+          ? `Pesanan ${cur.code} (${cur.services?.name || "layanan"}) dibatalkan. Pengembalian ${formatRupiah(refund.amount)} sedang diproses admin.`
+          : `Pesanan ${cur.code} (${cur.services?.name || "layanan"}) dibatalkan admin. Buka Pesanan untuk melihat detail terbaru.`,
         url: "/orders",
         tag: `booking-${bookingId}`,
       });
+
+      // Teknisi yang sudah ditugaskan juga harus tahu — sebelumnya pembatalan
+      // oleh admin hanya memberi tahu pelanggan, sehingga teknisi tetap datang
+      // ke lokasi. Kalimatnya sama dengan kotak masuk (lib/cancel-notice.js)
+      // dan tidak memuat nominal refund pelanggan.
+      if (cur.technician_id) {
+        const commissioned = await commissionAlreadyCharged(supabase, {
+          bookingId,
+          technicianId: cur.technician_id,
+        });
+        const notice = technicianCancelNotice({
+          code: cur.code,
+          serviceName: cur.services?.name || "layanan",
+          commissioned,
+        });
+        await sendPushToUser(cur.technician_id, {
+          title: notice.title,
+          event: "order_cancelled",
+          body: notice.body,
+          url: "/jobs",
+          tag: `booking-${bookingId}`,
+        });
+      }
     } else if (status === "completed") {
       await sendPushToUser(cur.user_id, {
         title: "Pesanan selesai ✨",
@@ -366,7 +585,8 @@ async function sendReceiptForBooking(supabase, bookingId) {
     const { data: b } = await supabase
       .from("bookings")
       .select(
-        "*, services(name), profiles!bookings_user_id_fkey(name, email, phone), technician:profiles!bookings_technician_id_fkey(name, phone)"
+        "*, services(name), booking_items(label, unit_price, quantity, line_total, position), " +
+          "profiles!bookings_user_id_fkey(name, email, phone), technician:profiles!bookings_technician_id_fkey(name, phone)"
       )
       .eq("id", bookingId)
       .single();
@@ -426,8 +646,22 @@ export async function updateServicePriceAdmin(serviceId, basePrice) {
   const price = Number(basePrice);
   if (!price || price < 0) return { error: "Harga tidak valid." };
 
+  const { data: lama } = await supabase
+    .from("services")
+    .select("name, base_price")
+    .eq("id", serviceId)
+    .maybeSingle();
+
   const { error } = await supabase.from("services").update({ base_price: price }).eq("id", serviceId);
   if (error) return { error: error.message };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_price",
+    entity: "service",
+    entityId: serviceId,
+    summary: `Ubah harga ${lama?.name || "layanan"}: ${formatRupiah(lama?.base_price ?? 0)} → ${formatRupiah(price)}`,
+    ...bedaKolom({ base_price: lama?.base_price }, { base_price: price }),
+  });
 
   revalidatePath("/admin");
   revalidateTag("services"); // harga juga tampil di landing page
@@ -454,6 +688,15 @@ export async function createServiceAdmin(input) {
   const description = (input.description || "").trim() || null;
   const durationEstimate = (input.durationEstimate || "").trim() || null;
   const priceNote = (input.priceNote || "mulai dari").trim() || "mulai dari";
+  // Harga per meter persegi (migrate-service-area-pricing.sql): layanan dijual
+  // per luas bidang; pelanggan mengisi panjang × lebar saat memesan.
+  const areaPricing = input.areaPricing === true;
+  const areaText = (input.areaNote || "").trim();
+  if (areaText.length > 200) return { error: "Keterangan luas maksimal 200 karakter." };
+  const areaNote = areaPricing ? areaText || null : null;
+  // Fitur jumlah pesanan (migrate-service-quantity-flag.sql): layanan boleh
+  // dipesan lebih dari satu kali dalam satu pesanan (harga × jumlah, 1..20).
+  const quantityEnabled = input.quantityEnabled === true;
 
   // sort_order paling akhir dalam kategori itu
   const { data: last } = await supabase
@@ -466,7 +709,7 @@ export async function createServiceAdmin(input) {
 
   const { data, error } = await supabase
     .from("services")
-    .insert({ name, category_id: categoryId, base_price: basePrice, description, duration_estimate: durationEstimate, price_note: priceNote, icon, image_url: (input.imageUrl || "").trim() || null, is_active: true, sort_order: sortOrder })
+    .insert({ name, category_id: categoryId, base_price: basePrice, description, duration_estimate: durationEstimate, price_note: priceNote, icon, image_url: (input.imageUrl || "").trim() || null, area_pricing: areaPricing, area_note: areaNote, quantity_enabled: quantityEnabled, is_active: true, sort_order: sortOrder })
     .select("*, categories(name)")
     .single();
   if (error) {
@@ -502,6 +745,25 @@ export async function updateServiceDetailAdmin(serviceId, input) {
   // imageUrl: URL baru dari upload, null = hapus foto, undefined = tidak diubah
   if (input.imageUrl !== undefined) patch.image_url = (input.imageUrl || "").trim() || null;
 
+  // Harga per meter persegi — hanya diubah bila panel mengirimnya, supaya
+  // pemanggil lama tidak diam-diam MEMATIKAN mode area sebuah layanan.
+  if (input.areaPricing !== undefined) {
+    patch.area_pricing = input.areaPricing === true;
+    const areaText = (input.areaNote || "").trim();
+    if (areaText.length > 200) return { error: "Keterangan luas maksimal 200 karakter." };
+    patch.area_note = patch.area_pricing ? areaText || null : null;
+  } else if (input.areaNote !== undefined) {
+    const areaText = (input.areaNote || "").trim();
+    if (areaText.length > 200) return { error: "Keterangan luas maksimal 200 karakter." };
+    patch.area_note = areaText || null;
+  }
+
+  // Fitur jumlah pesanan — undefined = tidak diubah (pemanggil lama tetap
+  // mempertahankan setelan yang sudah ada).
+  if (input.quantityEnabled !== undefined) {
+    patch.quantity_enabled = input.quantityEnabled === true;
+  }
+
   // warrantyDays: masa garansi pekerjaan (0 = tanpa garansi). undefined = tidak
   // diubah. Kolomnya ditambahkan migrate-warranty-claims.sql — bila DB belum
   // memilikinya, update diulang TANPA kolom ini supaya perubahan nama/harga
@@ -513,6 +775,13 @@ export async function updateServiceDetailAdmin(serviceId, input) {
     }
     patch.warranty_days = n;
   }
+
+  // Salinan keadaan sebelum diubah — dasar jejak audit "dari nilai apa".
+  const { data: sebelum } = await supabase
+    .from("services")
+    .select("name, description, price_note, icon, image_url, area_pricing, area_note, quantity_enabled, warranty_days")
+    .eq("id", serviceId)
+    .maybeSingle();
 
   let { data, error } = await supabase
     .from("services")
@@ -542,6 +811,39 @@ export async function updateServiceDetailAdmin(serviceId, input) {
     return { error: "Tidak ada baris yang berubah — kemungkinan policy admin belum aktif. Jalankan supabase/fix-admin-services.sql di SQL Editor." };
   }
 
+  const sesudah = data[0];
+  const beda = bedaKolom(
+    {
+      name: sebelum?.name,
+      description: sebelum?.description,
+      price_note: sebelum?.price_note,
+      icon: sebelum?.icon,
+      image_url: sebelum?.image_url,
+      area_pricing: sebelum?.area_pricing,
+      area_note: sebelum?.area_note,
+      quantity_enabled: sebelum?.quantity_enabled,
+      warranty_days: sebelum?.warranty_days,
+    },
+    {
+      name: sesudah?.name,
+      description: sesudah?.description,
+      price_note: sesudah?.price_note,
+      icon: sesudah?.icon,
+      image_url: sesudah?.image_url,
+      area_pricing: sesudah?.area_pricing,
+      area_note: sesudah?.area_note,
+      quantity_enabled: sesudah?.quantity_enabled,
+      warranty_days: sesudah?.warranty_days,
+    }
+  );
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_service",
+    entity: "service",
+    entityId: serviceId,
+    summary: `Ubah detail layanan ${sesudah?.name || serviceId}`,
+    ...beda,
+  });
+
   revalidatePath("/admin");
   revalidatePath("/"); // nama/deskripsi baru langsung tampil di landing page
   revalidateTag("services");
@@ -554,6 +856,12 @@ export async function toggleServiceActiveAdmin(serviceId, isActive) {
   const admin = await requireAdmin(supabase);
   if (!admin) return { error: "Akses ditolak." };
 
+  const { data: lama } = await supabase
+    .from("services")
+    .select("name, is_active")
+    .eq("id", serviceId)
+    .maybeSingle();
+
   const { error } = await supabase.from("services").update({ is_active: !!isActive }).eq("id", serviceId);
   if (error) {
     if (/row-level security/i.test(error.message || "")) {
@@ -562,9 +870,205 @@ export async function toggleServiceActiveAdmin(serviceId, isActive) {
     return { error: error.message };
   }
 
+  await catatAuditAdmin(supabase, admin, {
+    action: isActive ? "activate_service" : "deactivate_service",
+    entity: "service",
+    entityId: serviceId,
+    summary: `${isActive ? "Mengaktifkan" : "Menonaktifkan"} layanan ${lama?.name || serviceId}`,
+    before: { is_active: lama?.is_active ?? null },
+    after: { is_active: !!isActive },
+  });
+
   revalidatePath("/admin");
   revalidatePath("/");
   revalidateTag("services");
+  return { ok: true };
+}
+
+/**
+ * Id kategori dibentuk dari NAMA (slug) karena `categories.id` adalah text
+ * primary key yang juga dipakai sebagai nilai `profiles.skill` teknisi.
+ * Contoh: "Service Elektronik" → "service-elektronik".
+ */
+function slugKategori(nama) {
+  return String(nama || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+/**
+ * Tambah kategori layanan baru (tab Kategori).
+ * Id dibuat dari nama dan TIDAK bisa diubah setelah ada — layanan & keahlian
+ * teknisi merujuk ke id tersebut.
+ */
+export async function createCategoryAdmin(input) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const name = (input.name || "").trim();
+  if (!name) return { error: "Nama kategori wajib diisi." };
+  if (name.length > 60) return { error: "Nama kategori maksimal 60 karakter." };
+  const description = (input.description || "").trim() || null;
+  if (description && description.length > 200) return { error: "Deskripsi maksimal 200 karakter." };
+  const icon = ICON_NAMES.includes(input.icon) ? input.icon : "wrench";
+
+  const dasar = slugKategori(name);
+  if (!dasar) return { error: "Nama kategori harus mengandung huruf atau angka." };
+
+  // Id harus unik. Kategori yang sudah ada memakai id lamanya (mis. 'ac'),
+  // jadi slug baru tidak boleh bentrok walau namanya mirip.
+  const { data: semua } = await supabase.from("categories").select("id");
+  const dipakai = new Set((semua || []).map((c) => c.id));
+  let id = dasar;
+  for (let i = 2; dipakai.has(id); i++) id = `${dasar}-${i}`;
+
+  const { data: last } = await supabase
+    .from("categories")
+    .select("sort_order")
+    .order("sort_order", { ascending: false })
+    .limit(1);
+  const sortOrder = (last?.[0]?.sort_order ?? 0) + 1;
+
+  const { data, error } = await supabase
+    .from("categories")
+    .insert({ id, name, description, icon, sort_order: sortOrder, is_active: true })
+    .select("*")
+    .single();
+  if (error) {
+    if (/row-level security/i.test(error.message || "")) {
+      return { error: "Database menolak (RLS) — jalankan supabase/migrate-admin-categories.sql dulu." };
+    }
+    if (/is_active/.test(error.message || "")) {
+      return { error: "Kolom is_active belum ada — jalankan supabase/migrate-admin-categories.sql dulu." };
+    }
+    return { error: error.message };
+  }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "create_category",
+    entity: "category",
+    entityId: data.id,
+    summary: `Buat kategori ${data.name} (${data.id})`,
+    after: { id: data.id, name: data.name, icon: data.icon },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  revalidatePath("/booking");
+  revalidateTag("services");
+  revalidateTag("categories");
+  return { category: data };
+}
+
+/** Ubah nama/deskripsi/ikon/urutan kategori (id & status aktif terpisah). */
+export async function updateCategoryAdmin(categoryId, input) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(categoryId || "").trim();
+  if (!/^[a-z0-9-]+$/.test(id)) return { error: "Kategori tidak valid." };
+
+  const name = (input.name || "").trim();
+  if (!name) return { error: "Nama kategori tidak boleh kosong." };
+  if (name.length > 60) return { error: "Nama kategori maksimal 60 karakter." };
+  const description = (input.description || "").trim() || null;
+  if (description && description.length > 200) return { error: "Deskripsi maksimal 200 karakter." };
+
+  const patch = { name, description };
+  if (input.icon && ICON_NAMES.includes(input.icon)) patch.icon = input.icon;
+  if (input.sortOrder !== undefined && input.sortOrder !== "") {
+    const urutan = parseInt(input.sortOrder, 10);
+    if (Number.isNaN(urutan) || urutan < 0 || urutan > 999) {
+      return { error: "Urutan harus angka 0–999." };
+    }
+    patch.sort_order = urutan;
+  }
+
+  const { data: sebelum } = await supabase
+    .from("categories")
+    .select("name, description, icon, sort_order")
+    .eq("id", id)
+    .maybeSingle();
+
+  const { data, error } = await supabase
+    .from("categories")
+    .update(patch)
+    .eq("id", id)
+    .select("*");
+  if (error) {
+    if (/row-level security/i.test(error.message || "")) {
+      return { error: "Database menolak (RLS) — jalankan supabase/migrate-admin-categories.sql dulu." };
+    }
+    return { error: error.message };
+  }
+  if (!data || data.length === 0) {
+    return { error: "Tidak ada baris yang berubah — kemungkinan policy admin belum aktif." };
+  }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_category",
+    entity: "category",
+    entityId: id,
+    summary: `Ubah kategori ${data[0].name || id}`,
+    ...bedaKolom(
+      { name: sebelum?.name, description: sebelum?.description, icon: sebelum?.icon, sort_order: sebelum?.sort_order },
+      { name: data[0].name, description: data[0].description, icon: data[0].icon, sort_order: data[0].sort_order }
+    ),
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  revalidatePath("/booking");
+  revalidateTag("services");
+  revalidateTag("categories");
+  return { category: data[0] };
+}
+
+/**
+ * Aktif/nonaktifkan kategori. Nonaktif = disembunyikan dari katalog pelanggan
+ * (web & aplikasi); layanan, pesanan, dan keahlian teknisi tetap utuh.
+ */
+export async function toggleCategoryActiveAdmin(categoryId, isActive) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(categoryId || "").trim();
+  if (!/^[a-z0-9-]+$/.test(id)) return { error: "Kategori tidak valid." };
+
+  const { data: lama } = await supabase.from("categories").select("name, is_active").eq("id", id).maybeSingle();
+
+  const { error } = await supabase.from("categories").update({ is_active: !!isActive }).eq("id", id);
+  if (error) {
+    if (/row-level security/i.test(error.message || "")) {
+      return { error: "Database menolak (RLS) — jalankan supabase/migrate-admin-categories.sql dulu." };
+    }
+    if (/is_active/.test(error.message || "")) {
+      return { error: "Kolom is_active belum ada — jalankan supabase/migrate-admin-categories.sql dulu." };
+    }
+    return { error: error.message };
+  }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: isActive ? "activate_category" : "deactivate_category",
+    entity: "category",
+    entityId: id,
+    summary: `${isActive ? "Mengaktifkan" : "Menonaktifkan"} kategori ${lama?.name || id}`,
+    before: { is_active: lama?.is_active ?? null },
+    after: { is_active: !!isActive },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/");
+  revalidatePath("/booking");
+  revalidateTag("services");
+  revalidateTag("categories");
   return { ok: true };
 }
 
@@ -907,6 +1411,14 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
   // notifikasi palsu. Disetujui → tab Pekerjaan (langsung bisa ambil job);
   // ditolak → tab Profil (tempat data pendaftaran & kontak admin dilihat).
   if (target.approval_status !== approvalStatus) {
+    await catatAuditAdmin(supabase, admin, {
+      action: "decide_technician",
+      entity: "profile",
+      entityId: userId,
+      summary: `Status teknisi ${target.name || target.email || userId}: ${target.approval_status || "?"} → ${approvalStatus}`,
+      before: { approval_status: target.approval_status ?? null },
+      after: { approval_status: approvalStatus },
+    });
     if (approvalStatus === "approved") {
       await sendPushToUser(userId, {
         title: "Akun teknisi disetujui 🎉",
@@ -996,8 +1508,23 @@ export async function updateUserRoleAdmin(userId, role) {
   const allowed = ["customer", "technician", "admin"];
   if (!allowed.includes(role)) return { error: "Role tidak valid." };
 
+  const { data: lama } = await supabase
+    .from("profiles")
+    .select("name, email, role")
+    .eq("id", userId)
+    .maybeSingle();
+
   const { error } = await supabase.from("profiles").update({ role }).eq("id", userId);
   if (error) return { error: error.message };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_role",
+    entity: "profile",
+    entityId: userId,
+    summary: `Ubah peran ${lama?.name || lama?.email || userId}: ${lama?.role || "?"} → ${role}`,
+    before: { role: lama?.role ?? null },
+    after: { role },
+  });
 
   revalidatePath("/admin");
   revalidatePath("/", "layout"); // ganti role bisa mengubah badge pendaftar teknisi
@@ -1021,7 +1548,11 @@ export async function updateCommissionRateAdmin(userId, rate) {
   }
 
   // pastikan target memang teknisi
-  const { data: target } = await supabase.from("profiles").select("role, name").eq("id", userId).single();
+  const { data: target } = await supabase
+    .from("profiles")
+    .select("role, name, commission_rate")
+    .eq("id", userId)
+    .single();
   if (!target || target.role !== "technician") {
     return { error: "Hanya akun teknisi yang punya komisi." };
   }
@@ -1038,6 +1569,15 @@ export async function updateCommissionRateAdmin(userId, rate) {
     }
     return { error: error.message };
   }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_commission",
+    entity: "profile",
+    entityId: userId,
+    summary: `Ubah komisi ${target.name || userId}: ${target.commission_rate ?? "bawaan"}% → ${value}%`,
+    before: { commission_rate: target.commission_rate ?? null },
+    after: { commission_rate: value },
+  });
 
   revalidatePath("/admin");
   return { ok: true };
@@ -1136,10 +1676,49 @@ export async function assignNearestTechnicianAdmin(bookingId) {
   };
 }
 
+/**
+ * Catatan cuti seorang teknisi yang mencakup `tanggal`, atau null.
+ *
+ * Kegagalan baca TIDAK memblokir penugasan: bila migrasi cuti belum dijalankan,
+ * fitur ini harus mati dengan tenang, bukan menghentikan operasi harian.
+ */
+async function cutiTeknisiPada(supabase, technicianId, tanggal) {
+  if (!technicianId || !tanggal) return null;
+  const { data, error } = await supabase
+    .from("technician_leave")
+    .select("id, start_date, end_date, reason")
+    .eq("technician_id", technicianId)
+    .lte("start_date", tanggal)
+    .gte("end_date", tanggal)
+    .limit(1);
+  if (error) return null;
+  return data?.[0] || null;
+}
+
 export async function assignTechnicianAdmin(bookingId, technicianId) {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
   if (!admin) return { error: "Akses ditolak." };
+
+  // Cuti diperiksa SEBELUM baris diubah. Tanpa ini, jalur penugasan manual
+  // (modal slot & detail pesanan) tetap bisa menugaskan orang yang sudah
+  // dicatat libur — persis celah yang membuat pelanggan menunggu di lokasi.
+  if (technicianId) {
+    const [{ data: bookingCek }, { data: techCek }] = await Promise.all([
+      supabase.from("bookings").select("id, code, booking_date, technician_id").eq("id", bookingId).maybeSingle(),
+      supabase.from("profiles").select("id, name, role").eq("id", technicianId).maybeSingle(),
+    ]);
+    if (!bookingCek) return { error: "Pesanan tidak ditemukan." };
+    if (!techCek || techCek.role !== "technician") return { error: "Akun itu bukan teknisi." };
+    if (bookingCek.technician_id !== technicianId) {
+      const cuti = await cutiTeknisiPada(supabase, technicianId, bookingCek.booking_date);
+      if (cuti) {
+        return {
+          error: `${techCek.name} sedang cuti ${formatRentangCuti(cuti.start_date, cuti.end_date)}. Hapus catatan cuti di tab Kartu Skor Teknisi bila penugasan ini mendesak.`,
+        };
+      }
+    }
+  }
 
   const { error } = await supabase
     .from("bookings")
@@ -1493,6 +2072,14 @@ export async function createVoucherAdmin({ userId, amount, validDays, note }) {
     return { error: error.message };
   }
 
+  await catatAuditAdmin(supabase, admin, {
+    action: "create_voucher",
+    entity: "voucher",
+    entityId: data.code,
+    summary: `Buat voucher ${formatRupiah(Math.round(amt))} untuk ${target.name || userId} (${days} hari)`,
+    after: { code: data.code, amount: Math.round(amt), days, recipient: target.name || null },
+  });
+
   revalidatePath("/admin");
   return { ok: true, code: data.code, recipient: target.name };
 }
@@ -1503,6 +2090,14 @@ export async function deleteVoucherAdmin(voucherId) {
   const admin = await requireAdmin(supabase);
   if (!admin) return { error: "Akses ditolak." };
 
+  // Simpan isi voucher sebelum hilang: setelah DELETE, tidak ada lagi yang
+  // bisa menjelaskan voucher apa yang dibuang.
+  const { data: voucher } = await supabase
+    .from("vouchers")
+    .select("code, amount, user_id, source, used_at, expires_at")
+    .eq("id", voucherId)
+    .maybeSingle();
+
   const { error } = await supabase.from("vouchers").delete().eq("id", voucherId);
   if (error) {
     if (/violates row-level security/i.test(error.message || "")) {
@@ -1510,6 +2105,15 @@ export async function deleteVoucherAdmin(voucherId) {
     }
     return { error: error.message };
   }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "delete_voucher",
+    entity: "voucher",
+    entityId: voucherId,
+    summary: `Hapus voucher ${voucher?.code || voucherId}${voucher?.amount != null ? ` (${formatRupiah(voucher.amount)})` : ""}`,
+    before: voucher || null,
+    after: null,
+  });
 
   revalidatePath("/admin");
   return { ok: true };
@@ -1676,6 +2280,50 @@ export async function addTechnicianBalanceAdmin(technicianId, amount, note) {
   return { ok: true, balance: res.balance };
 }
 
+/**
+ * KOREKSI saldo teknisi oleh admin (turun maupun naik) — jalur perbaikan saat
+ * rekonsiliasi harian menemukan `saldo ≠ Σ mutasi`.
+ *
+ * Kenapa terpisah dari `addTechnicianBalanceAdmin`: aksi itu hanya bisa MENAMBAH
+ * dan menulis baris `topup` (setoran). Koreksi bertanda ini menulis baris
+ * `adjustment`, sehingga laporan "Total Setor Disetujui" tidak ikut naik hanya
+ * karena saldo pernah salah catat.
+ *
+ * Alasan wajib (min. 5 karakter) dan tersimpan di baris ledger; teknisi dikabari
+ * lewat push — saldo yang berkurang tanpa pemberitahuan akan terbaca sebagai
+ * uang hilang.
+ */
+export async function koreksiSaldoTeknisiAdmin(technicianId, delta, note) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const angka = Math.round(Number(delta));
+  if (!Number.isFinite(angka) || angka === 0) return { error: "Jumlah koreksi tidak boleh 0." };
+
+  const res = await sesuaikanSaldoTeknisi(supabase, technicianId, angka, note);
+  if (!res.ok) return { error: res.error };
+
+  const arah = res.delta < 0 ? "dikurangi" : "ditambah";
+  await sendPushToUser(technicianId, {
+    title: "Saldo dikoreksi admin",
+    event: "balance_adjusted",
+    body: `${formatRupiah(Math.abs(res.delta))} ${arah} dari saldomu oleh admin. Saldo sekarang ${formatRupiah(res.balanceAfter)}.`
+      .slice(0, 180),
+    url: "/technician",
+    tag: `balance-${technicianId}`,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return {
+    ok: true,
+    delta: res.delta,
+    balanceBefore: res.balanceBefore,
+    balanceAfter: res.balanceAfter,
+  };
+}
+
 /* ========================= PENARIKAN SALDO (WITHDRAWAL) ========================= */
 
 /**
@@ -1810,6 +2458,263 @@ export async function rejectWithdrawalAdmin(withdrawalId, reason) {
   return { ok: true };
 }
 
+/* =========================== PENGEMBALIAN DANA (REFUND) =========================== */
+
+/** Bucket privat bukti transfer balik (supabase/migrate-booking-refunds.sql). */
+const REFUND_BUCKET = "refund-proofs";
+
+/** Tukar path bukti transfer balik menjadi signed URL (bucket privat). */
+async function tandaTanganiBuktiRefund(supabase, refunds) {
+  const perlu = (refunds || []).filter((r) => r.proof_url && !/^https?:/i.test(r.proof_url));
+  if (perlu.length === 0) return;
+  const hasil = await Promise.all(
+    perlu.map(async (r) => {
+      const { data } = await supabase.storage.from(REFUND_BUCKET).createSignedUrl(r.proof_url, 3600);
+      return [r.id, data?.signedUrl || null];
+    })
+  );
+  const urlById = Object.fromEntries(hasil);
+  for (const r of perlu) r.proof_url = urlById[r.id] || null;
+}
+
+/**
+ * Daftar pengembalian dana untuk panel admin, terbaru dulu.
+ *
+ * Bukti transfer balik disimpan sebagai PATH di bucket privat, jadi di sini
+ * ditukar menjadi signed URL (1 jam) — pola yang sama dengan bukti setor
+ * teknisi. Gagal menandatangani satu baris tidak boleh menggagalkan daftar.
+ */
+export async function getBookingRefundsAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("booking_refunds")
+    .select(
+      "*, bookings!booking_refunds_booking_id_fkey(code, status, total_price, booking_date, booking_time, address, profiles!bookings_user_id_fkey(name, email, phone)), " +
+        "created_by_admin:profiles!booking_refunds_created_by_fkey(name), " +
+        "decided_by_admin:profiles!booking_refunds_decided_by_fkey(name)"
+    )
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  if (error) {
+    if (/relation|does not exist/i.test(error.message || "")) {
+      return { error: "Tabel refund belum ada — jalankan supabase/migrate-booking-refunds.sql dulu." };
+    }
+    return { error: error.message };
+  }
+
+  const refunds = data || [];
+  await tandaTanganiBuktiRefund(supabase, refunds);
+
+  // Ringkasan butuh SEMUA baris (daftar dibatasi 200) — kolomnya ringan.
+  const { data: semua } = await supabase
+    .from("booking_refunds")
+    .select("amount, status, created_at, decided_at")
+    .limit(5000);
+
+  return { refunds, ringkasan: ringkasRefund(semua || refunds) };
+}
+
+/**
+ * Catat kewajiban pengembalian dana untuk satu pesanan.
+ *
+ * Satu pesanan hanya boleh punya SATU baris refund: mengembalikan dana dua
+ * kali untuk pesanan yang sama adalah kerugian nyata. Karena itu bentrokan
+ * unique index diperlakukan sebagai "sudah tercatat", bukan error.
+ *
+ * Nilai balik: `{ ok, refund, sudahAda }` atau `{ error }`.
+ */
+export async function createBookingRefundAdmin(bookingId, { amount, reason, note } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  if (!nominalRefundSah(amount)) return { error: "Nominal pengembalian harus lebih dari 0." };
+  const nominal = Math.round(Number(amount));
+  const alasan = (reason || "").trim();
+  if (!alasanRefundSah(alasan)) return { error: "Tulis alasan pengembalian (minimal 5 karakter)." };
+
+  const { data: b } = await supabase
+    .from("bookings")
+    .select("id, code, user_id, status, total_price, payment_amount, payment_proof_url, payment_rejected, payment_confirmed_at")
+    .eq("id", bookingId)
+    .maybeSingle();
+  if (!b) return { error: "Pesanan tidak ditemukan." };
+
+  const { data: ada } = await supabase
+    .from("booking_refunds")
+    .select("id, status, amount")
+    .eq("booking_id", bookingId)
+    .maybeSingle();
+  if (ada) return { ok: true, sudahAda: true, refund: ada };
+
+  // Uang dianggap terkonfirmasi bila admin sudah menandai pesanan dibayar,
+  // ATAU bukti bayarnya sudah lunas diverifikasi. Bukti yang masih menunggu
+  // konfirmasi tetap boleh direfund, tetapi ditandai supaya admin memeriksa
+  // dulu sebelum mentransfer balik.
+  const terkonfirmasi = Boolean(b.payment_confirmed_at) || b.status === "paid" || b.status === "in_progress" || b.status === "completed";
+
+  const { data: refund, error } = await supabase
+    .from("booking_refunds")
+    .insert({
+      booking_id: bookingId,
+      user_id: b.user_id,
+      amount: nominal,
+      reason: alasan.slice(0, 500),
+      status: "pending",
+      source: "admin",
+      payment_confirmed: terkonfirmasi,
+      note: (note || "").trim().slice(0, 500) || null,
+      created_by: admin.id,
+    })
+    .select("*")
+    .single();
+  if (error) {
+    if (/duplicate|unique/i.test(error.message || "")) return { ok: true, sudahAda: true };
+    return { error: error.message };
+  }
+
+  // Pelanggan berhak tahu bahwa uangnya sedang diproses — tanpa push ini satu-
+  // satunya jejaknya adalah status yang berubah diam-diam di layar detail.
+  await sendPushToUser(b.user_id, {
+    title: "Pengembalian dana dicatat 💸",
+    event: "refund_update",
+    body: `Pengembalian ${formatRupiah(nominal)} untuk pesanan ${b.code} sedang diproses admin.`,
+    url: "/orders",
+    tag: `refund-${refund.id}`,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/orders");
+  return { ok: true, refund };
+}
+
+/**
+ * Tandai dana SUDAH ditransfer balik ke pelanggan.
+ * `proofPath` = path objek di bucket privat (diunggah dari panel admin).
+ */
+export async function completeBookingRefundAdmin(refundId, { proofPath, note } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: refund } = await supabase
+    .from("booking_refunds")
+    .select("id, booking_id, user_id, amount, status, bookings!booking_refunds_booking_id_fkey(code)")
+    .eq("id", refundId)
+    .maybeSingle();
+  if (!refund) return { error: "Pengembalian dana tidak ditemukan." };
+  if (refund.status !== "pending") return { error: "Pengembalian ini sudah diputuskan sebelumnya." };
+
+  const patch = {
+    status: "done",
+    decided_by: admin.id,
+    decided_at: new Date().toISOString(),
+    rejection_reason: null,
+  };
+  if (proofPath) patch.proof_url = proofPath;
+  if (note && note.trim()) patch.note = note.trim().slice(0, 500);
+
+  const { error } = await supabase
+    .from("booking_refunds")
+    .update(patch)
+    .eq("id", refundId)
+    .eq("status", "pending"); // penjaga balapan: hanya pending yang bisa diselesaikan
+  if (error) return { error: error.message };
+
+  const kode = refund.bookings?.code ? ` ${refund.bookings.code}` : "";
+  await sendPushToUser(refund.user_id, {
+    title: "Dana sudah dikembalikan ✅",
+    event: "refund_update",
+    body: `Pengembalian ${formatRupiah(refund.amount)} untuk pesanan${kode || " kamu"} sudah ditransfer. Cek rekeningmu.`,
+    url: "/orders",
+    tag: `refund-${refund.id}`,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/orders");
+  return { ok: true };
+}
+
+/** Tolak pengembalian (mis. bukti bayar ternyata tidak sah) + alasan. */
+export async function rejectBookingRefundAdmin(refundId, reason) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const clean = (reason || "").trim();
+  if (!alasanRefundSah(clean)) return { error: "Tulis alasan penolakan (minimal 5 karakter)." };
+
+  const { data: refund } = await supabase
+    .from("booking_refunds")
+    .select("id, user_id, amount, status, bookings!booking_refunds_booking_id_fkey(code)")
+    .eq("id", refundId)
+    .maybeSingle();
+  if (!refund) return { error: "Pengembalian dana tidak ditemukan." };
+  if (refund.status !== "pending") return { error: "Pengembalian ini sudah diputuskan sebelumnya." };
+
+  const { error } = await supabase
+    .from("booking_refunds")
+    .update({
+      status: "rejected",
+      rejection_reason: clean.slice(0, 500),
+      decided_by: admin.id,
+      decided_at: new Date().toISOString(),
+    })
+    .eq("id", refundId)
+    .eq("status", "pending");
+  if (error) return { error: error.message };
+
+  await sendPushToUser(refund.user_id, {
+    title: "Pengembalian dana ditolak ❌",
+    event: "refund_update",
+    body: `Pengembalian ${formatRupiah(refund.amount)} ditolak: ${clean}`.slice(0, 190),
+    url: "/orders",
+    tag: `refund-${refund.id}`,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/orders");
+  return { ok: true };
+}
+
+/**
+ * Catat refund otomatis saat ADMIN membatalkan pesanan yang uangnya sudah
+ * masuk. Tanpa ini, pembatalan oleh admin tetap mengembalikan dana di luar
+ * sistem — persis celah yang ditutup berkas migrasi refund.
+ */
+async function catatRefundPembatalan(supabase, booking, adminId) {
+  if (!booking?.user_id) return null;
+  const nominal = Math.round(Number(booking.payment_amount) || Number(booking.total_price) || 0);
+  if (nominal <= 0) return null;
+  const { data, error } = await supabase
+    .from("booking_refunds")
+    .insert({
+      booking_id: booking.id,
+      user_id: booking.user_id,
+      amount: nominal,
+      reason: "Pesanan dibatalkan admin",
+      status: "pending",
+      source: "admin",
+      payment_confirmed: Boolean(booking.payment_confirmed_at) || booking.status === "paid",
+      created_by: adminId,
+    })
+    .select("id, amount")
+    .single();
+  if (error) {
+    // Bentrokan unique = refund sudah tercatat (mis. pelanggan membatalkan
+    // lebih dulu). Bukan kegagalan pembatalan.
+    if (!/duplicate|unique/i.test(error.message || "")) {
+      console.error("Gagal mencatat refund pembatalan:", error.message);
+    }
+    return null;
+  }
+  return data;
+}
+
 /**
  * Ambil baris ledger saldo beserta kolom piutang (`uncovered_amount`).
  *
@@ -1854,11 +2759,16 @@ export async function getFinanceSummaryAdmin() {
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  const [txRes, wdRes, balRes, bkRes, recRes] = await Promise.all([
+  const [txRes, wdRes, balRes, bkRes, recRes, refundRes] = await Promise.all([
     pilihTransaksiSaldo(supabase),
     supabase.from("balance_withdrawals").select("amount, status, created_at").limit(5000),
     supabase.from("profiles").select("id, balance, commission_rate").eq("role", "technician"),
     supabase.from("bookings").select("id, total_price, app_fee, technician_id").eq("status", "completed").limit(5000),
+    // Pengembalian dana pelanggan (supabase/migrate-booking-refunds.sql). Uang
+    // yang keluar karena pembatalan BUKAN pendapatan platform — tanpa kartu
+    // ini, laporan hanya memperlihatkan uang masuk. Gagal baca (migrasi belum
+    // jalan) tidak boleh menggagalkan seluruh ringkasan.
+    supabase.from("booking_refunds").select("amount, status, created_at, decided_at").limit(5000),
     // Pelunasan piutang (supabase/migrate-piutang-recovery.sql). Bila migrasinya
     // belum dijalankan, laporan tetap terbuka — piutangnya cuma belum terpasang
     // ke setoran yang menutupnya (`migrasiJalan: false`).
@@ -2031,6 +2941,14 @@ export async function getFinanceSummaryAdmin() {
     },
     technicianCredit,
     technicianDebt: receivableTechnician,
+    // ---- Pengembalian dana pelanggan ----
+    // `pending` = kewajiban yang BELUM ditransfer (dana harus disiapkan),
+    // `done` = uang yang benar-benar sudah keluar. Keduanya dipisah supaya
+    // laporan tidak membaca kewajiban sebagai uang keluar (atau sebaliknya).
+    refunds: {
+      ...ringkasRefund(refundRes.error ? [] : refundRes.data || []),
+      migrasiJalan: !refundRes.error,
+    },
     month: {
       topup: sum(topups.filter(inMonth), (t) => t.amount),
       commission: monthCommission,
@@ -2298,22 +3216,47 @@ export async function decidePiutangWriteoffAdmin(writeoffId, approve, note) {
   return { ok: true, status: "approved", ...data };
 }
 
+/**
+ * Alasan manusiawi dari catatan baris penyesuaian.
+ *
+ * Catatan disimpan sebagai "Koreksi saldo oleh admin — <alasan>"; panel hanya
+ * perlu bagian alasannya. Prefix lain (penghapusan piutang) ikut dibersihkan agar
+ * kolom "Alasan" tidak berbunyi seperti judul sistem.
+ */
+function alasanPenyesuaian(note) {
+  const teks = String(note || "").trim();
+  if (!teks) return "tidak dicatat";
+  return teks
+    .replace(/^Koreksi saldo oleh admin\s*—\s*/i, "")
+    .replace(/^Penghapusan piutang disetujui admin\s*—\s*/i, "")
+    .trim();
+}
+
 export async function getTechnicianBalancesAdmin() {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);
   if (!admin) return { error: "Akses ditolak." };
 
-  const [techRes, txRes, wdRes] = await Promise.all([
+  // `created_by` (migrate-balance-adjustment-audit.sql) dibaca dengan fallback:
+  // bila migrasinya belum jalan, kolom itu belum ada dan permintaan dengan kolom
+  // tersebut GAGAL — seluruh tab menjadi kosong. Tanpa kolomnya, saldo tetap
+  // tampil; kolom "Admin" saja yang kosong ("tidak tercatat").
+  const kolomTx =
+    "id, technician_id, type, amount, commission_amount, booking_id, note, created_by, created_at";
+  const bacaTx = (kolom) => supabase.from("balance_transactions").select(kolom);
+
+  const [techRes, wdRes] = await Promise.all([
     supabase
       .from("profiles")
       .select("id, name, email, phone, balance, commission_rate, approval_status")
       .eq("role", "technician")
       .order("name", { ascending: true }),
-    supabase
-      .from("balance_transactions")
-      .select("id, technician_id, type, amount, commission_amount, booking_id, created_at"),
     supabase.from("balance_withdrawals").select("technician_id, amount, status"),
   ]);
+  let txRes = await bacaTx(kolomTx);
+  if (txRes.error && /created_by/i.test(txRes.error.message || "")) {
+    txRes = await bacaTx(kolomTx.replace("created_by, ", ""));
+  }
 
   if (techRes.error && /relation|does not exist|column/i.test(techRes.error.message || "")) {
     return { error: "Kolom/tabel saldo belum ada — jalankan supabase/migrate-technician-balance.sql dulu." };
@@ -2392,6 +3335,41 @@ export async function getTechnicianBalancesAdmin() {
     total_cut: Math.abs(Number(r.amount) || 0),
   }));
 
+  // ---- Riwayat KOREKSI saldo (baris `adjustment`) ----
+  // Satu-satunya perubahan saldo yang TIDAK berasal dari setoran/potongan pesanan:
+  // koreksi admin (migrate-admin-balance-adjustment.sql) dan penghapusan piutang.
+  // Ditampilkan beserta alasan dan admin pelakunya (created_by) supaya audit tidak
+  // perlu membuka SQL. Baris lama tanpa pelaku ditandai "tidak tercatat" — jangan
+  // menebak siapa yang melakukannya.
+  const KOREKSI_LIMIT = 100;
+  const semuaKoreksi = txs
+    .filter((x) => x.type === "adjustment")
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const koreksiTampil = semuaKoreksi.slice(0, KOREKSI_LIMIT);
+  const pelakuIds = [...new Set(koreksiTampil.map((r) => r.created_by).filter(Boolean))];
+  const pelakuById = new Map();
+  if (pelakuIds.length) {
+    for (const p of await fetchProfilesByIds(supabase, pelakuIds)) {
+      pelakuById.set(p.id, p.name || p.email || "-");
+    }
+  }
+  const adjustments = koreksiTampil.map((r) => ({
+    id: r.id,
+    created_at: r.created_at,
+    technician_id: r.technician_id,
+    technician_name: nameById.get(r.technician_id) || "-",
+    amount: Number(r.amount) || 0,
+    reason: alasanPenyesuaian(r.note),
+    admin_name: r.created_by ? pelakuById.get(r.created_by) || "admin" : null,
+  }));
+  const adjustmentTotal = {
+    count: semuaKoreksi.length,
+    shown: adjustments.length,
+    limit: KOREKSI_LIMIT,
+    naik: semuaKoreksi.reduce((s, r) => s + Math.max(0, Number(r.amount) || 0), 0),
+    turun: semuaKoreksi.reduce((s, r) => s + Math.max(0, -(Number(r.amount) || 0)), 0),
+  };
+
   const summary = {
     totalBalance: sum(technicians, (t) => t.balance),
     totalAvailable: sum(technicians, (t) => t.available),
@@ -2417,6 +3395,8 @@ export async function getTechnicianBalancesAdmin() {
       amount: sum(feeRows, ledgerAppFee),
       limit: REPORT_LIMIT,
     },
+    adjustments,
+    adjustmentTotal,
     summary,
   };
 }
@@ -2684,6 +3664,12 @@ export async function savePaymentSettingsAdmin({ bank, number, name }) {
     return { error: "Nama bank dan nomor rekening wajib diisi." };
   }
 
+  const { data: sebelum } = await supabase
+    .from("app_settings")
+    .select("transfer_bank_name, transfer_account_number, transfer_account_name")
+    .eq("id", 1)
+    .maybeSingle();
+
   const { error } = await supabase
     .from("app_settings")
     .update({
@@ -2699,6 +3685,27 @@ export async function savePaymentSettingsAdmin({ bank, number, name }) {
     }
     return { error: error.message };
   }
+
+  // Nomor rekening adalah tujuan uang pelanggan: perubahan tujuan transfer
+  // WAJIB meninggalkan jejak admin, bukan hanya nilai terakhirnya.
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_payment_settings",
+    entity: "settings",
+    entityId: "1",
+    summary: `Ubah rekening transfer: ${sebelum?.transfer_bank_name || "-"} ${sebelum?.transfer_account_number || "-"} → ${bank.trim()} ${number.trim()}`,
+    ...bedaKolom(
+      {
+        transfer_bank_name: sebelum?.transfer_bank_name ?? null,
+        transfer_account_number: sebelum?.transfer_account_number ?? null,
+        transfer_account_name: sebelum?.transfer_account_name ?? null,
+      },
+      {
+        transfer_bank_name: bank.trim(),
+        transfer_account_number: number.trim(),
+        transfer_account_name: (name || "").trim(),
+      }
+    ),
+  });
 
   revalidatePath("/admin");
   return { ok: true };
@@ -2849,6 +3856,14 @@ export async function saveAppFeeAdmin({ fee } = {}) {
     return { error: `Biaya aplikasi harus antara Rp0 dan Rp${APP_FEE_MAKS.toLocaleString("id-ID")}.` };
   }
 
+  // Nilai lama dibaca SEBELUM update supaya jejak audit bisa menyebut angka
+  // sebelum/sesudah — bukan hanya angka akhirnya.
+  const { data: sebelum } = await supabase
+    .from("app_settings")
+    .select("app_fee")
+    .eq("id", 1)
+    .maybeSingle();
+
   const { data, error } = await supabase
     .from("app_settings")
     .update({ app_fee: n, updated_at: new Date().toISOString() })
@@ -2873,6 +3888,15 @@ export async function saveAppFeeAdmin({ fee } = {}) {
     };
   }
 
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_app_fee",
+    entity: "settings",
+    entityId: "1",
+    summary: `Biaya aplikasi Rp${Number(sebelum?.app_fee ?? 0).toLocaleString("id-ID")} → Rp${Number(data.app_fee).toLocaleString("id-ID")}`,
+    before: { app_fee: sebelum?.app_fee ?? null },
+    after: { app_fee: Number(data.app_fee) },
+  });
+
   // Halaman yang menampilkan tarif ikut disegarkan supaya pelanggan & teknisi
   // tidak melihat angka lama setelah admin menyimpan.
   revalidatePath("/admin");
@@ -2880,6 +3904,457 @@ export async function saveAppFeeAdmin({ fee } = {}) {
   revalidatePath("/panduan-teknisi");
   revalidatePath("/panduan-pelanggan");
   return { ok: true, fee: Number(data.app_fee) };
+}
+
+/* ================= PENGATURAN KUOTA SLOT JADWAL ================= */
+
+/**
+ * Pantauan kuota beberapa hari ke depan untuk panel admin.
+ *
+ * Hanya mengembalikan JUMLAH (bukan data pelanggan) dan hanya slot yang sudah
+ * penuh / hampir penuh. Tujuannya satu: admin melihat tekanan jadwal SEBELUM
+ * pelanggan berikutnya ditolak, lalu menambah teknisi atau menyesuaikan kuota.
+ *
+ * Ambang "hampir penuh" ada di src/lib/slot-capacity.js (sisa 1 kursi, atau
+ * 25% kapasitas) supaya web dan probe memakai aturan yang sama.
+ */
+export async function getSlotPressureAdmin({ days = 7 } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const jumlahHari = Math.min(14, Math.max(1, Math.round(Number(days)) || 7));
+  const sekarang = new Date();
+  const hariIni = tanggalWibSlot(sekarang);
+  const tanggal = daftarTanggalWib(jumlahHari, sekarang);
+
+  const perTanggal = await Promise.all(
+    tanggal.map(async (date) => {
+      const { data, error } = await supabase.rpc("booking_slot_usage", { p_date: date });
+      let slots = ringkasSlotUsage(error ? null : data);
+      // Slot hari ini yang sudah lewat tidak akan bisa dipesan lagi — jangan
+      // tampilkan sebagai peringatan yang sudah tidak bisa ditindaklanjuti.
+      if (!error && date === hariIni) {
+        slots = slots.filter((s) => !slotSudahLewat(date, s.slot, sekarang));
+      }
+      return { date, slots, error: error?.message || null };
+    })
+  );
+
+  const gagal = perTanggal.find((t) => t.error);
+  if (gagal) {
+    const pesan = /function|does not exist|schema cache/i.test(gagal.error || "")
+      ? "Pantauan kuota belum aktif — jalankan supabase/migrate-slot-capacity.sql di Supabase SQL Editor."
+      : gagal.error;
+    return { error: pesan, alerts: [], full: 0, near: 0, days: jumlahHari };
+  }
+
+  const ringkas = kumpulkanTekananSlot(perTanggal);
+  const capacity =
+    perTanggal.flatMap((t) => t.slots).find((s) => s.capacity != null)?.capacity ?? null;
+
+  return {
+    days: jumlahHari,
+    mulai: tanggal[0],
+    sampai: tanggal[tanggal.length - 1],
+    capacity,
+    ...ringkas,
+  };
+}
+
+/**
+ * Data untuk aksi cepat "Atur teknisi" pada satu slot.
+ *
+ * Menjawab pertanyaan lanjutan setelah banner kuota: pesanan mana yang belum
+ * punya teknisi, siapa yang SIAP pada jam itu (tidak bentrok), dan siapa yang
+ * skill/areanya cocok. Penugasan lewat [assignSlotTechnicianAdmin] memakai
+ * jalur yang sama dengan dropdown Pesanan — email + push tetap terkirim.
+ *
+ * Catatan penting: menugaskan teknisi TIDAK menambah kuota slot. Kuota adalah
+ * jumlah pesanan; aksi ini memastikan pesanan yang sudah masuk punya orangnya.
+ */
+export async function getSlotTechniciansAdmin({ date, slot } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const tanggal = String(date || "").trim();
+  const jam = String(slot || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(tanggal) || !TIME_SLOTS.includes(jam)) {
+    return { error: "Tanggal atau slot jadwal tidak valid." };
+  }
+
+  const [ordersRes, techRes, usageRes, dayRes, cutiRes] = await Promise.all([
+    supabase
+      .from("bookings")
+      .select(
+        "id, code, status, address, area, quantity, technician_id, service_id, created_at, " +
+          "services(name, category_id), " +
+          "customer:profiles!bookings_user_id_fkey(name), " +
+          "technician:profiles!bookings_technician_id_fkey(id, name)"
+      )
+      .eq("booking_date", tanggal)
+      .eq("booking_time", jam)
+      .in("status", SLOT_ACTIVE_STATUSES)
+      .order("created_at", { ascending: true }),
+    supabase
+      .from("profiles")
+      .select("id, name, skill, service_area, avatar_url")
+      .eq("role", "technician")
+      .eq("approval_status", "approved")
+      .order("name", { ascending: true }),
+    supabase.rpc("booking_slot_usage", { p_date: tanggal }),
+    // Beban kerja HARI ITU (quantity, bukan jumlah baris): dasar peringkat
+    // penugasan otomatis agar pekerjaan tidak menumpuk pada satu teknisi.
+    supabase
+      .from("bookings")
+      .select("technician_id, quantity")
+      .eq("booking_date", tanggal)
+      .in("status", SLOT_ACTIVE_STATUSES),
+    // Cuti pada tanggal slot. Tabel yang belum dimigrasikan bukan kegagalan
+    // modal — teknisi hanya tidak ditandai cuti.
+    supabase
+      .from("technician_leave")
+      .select("id, technician_id, start_date, end_date, reason")
+      .lte("start_date", tanggal)
+      .gte("end_date", tanggal),
+  ]);
+
+  if (ordersRes.error) return { error: ordersRes.error.message };
+  if (techRes.error) return { error: techRes.error.message };
+
+  const orders = ordersRes.data || [];
+  const techRows = techRes.data || [];
+  const techIds = techRows.map((t) => t.id);
+
+  // Rating + pekerjaan yang sedang berjalan dikumpulkan sekali. Keduanya
+  // bersifat informasi tambahan: gagal baca tidak boleh menggagalkan modal.
+  const [reviewsRes, activeRes] = await Promise.all([
+    techIds.length
+      ? supabase.from("reviews").select("technician_id, rating").in("technician_id", techIds)
+      : Promise.resolve({ data: [], error: null }),
+    techIds.length
+      ? supabase
+          .from("bookings")
+          .select("technician_id, code, booking_date, booking_time")
+          .eq("status", "in_progress")
+          .in("technician_id", techIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const rating = new Map();
+  for (const r of reviewsRes.error ? [] : reviewsRes.data || []) {
+    const cur = rating.get(r.technician_id) || { sum: 0, count: 0 };
+    const nilai = Number(r.rating);
+    if (Number.isFinite(nilai)) {
+      cur.sum += nilai;
+      cur.count += 1;
+    }
+    rating.set(r.technician_id, cur);
+  }
+  const aktif = new Map();
+  for (const b of activeRes.error ? [] : activeRes.data || []) {
+    if (b.technician_id && !aktif.has(b.technician_id)) aktif.set(b.technician_id, b);
+  }
+  const bebanKerja = {};
+  for (const b of dayRes.error ? [] : dayRes.data || []) {
+    if (!b.technician_id) continue;
+    bebanKerja[b.technician_id] =
+      (Number(bebanKerja[b.technician_id]) || 0) + (Number(b.quantity) || 1);
+  }
+
+  const technicians = susunKandidatTeknisi({
+    bebanKerja,
+    leaves: cutiRes.error ? [] : cutiRes.data || [],
+    tanggal,
+    technicians: techRows.map((t) => {
+      const r = rating.get(t.id);
+      const kerja = aktif.get(t.id);
+      return {
+        ...t,
+        rating_avg: r?.count ? Math.round((r.sum / r.count) * 10) / 10 : null,
+        rating_count: r?.count || 0,
+        sedang_bertugas: kerja
+          ? {
+              code: kerja.code,
+              date: kerja.booking_date,
+              slot: kerja.booking_time,
+            }
+          : null,
+      };
+    }),
+    slotBookings: orders,
+  });
+
+  const usage = usageRes.error
+    ? null
+    : (usageRes.data || []).find((u) => String(u.slot) === jam) || null;
+  const capacity = usage?.capacity != null ? Number(usage.capacity) : null;
+  const booked = usage?.booked != null ? Number(usage.booked) : orders.length;
+
+  return {
+    date: tanggal,
+    slot: jam,
+    capacity,
+    booked,
+    remaining: capacity == null ? null : Math.max(0, capacity - booked),
+    full: capacity == null ? false : booked >= capacity,
+    orders: orders.map((o) => ({
+      id: o.id,
+      code: o.code,
+      status: o.status,
+      address: o.address || "",
+      area: o.area || "",
+      quantity: o.quantity || 1,
+      service_name: o.services?.name || "Layanan",
+      category_id: o.services?.category_id || null,
+      customer_name: o.customer?.name || "Pelanggan",
+      technician_id: o.technician_id || null,
+      technician_name: o.technician?.name || null,
+    })),
+    technicians,
+    leaves: cutiRes.error ? [] : cutiRes.data || [],
+    siap: technicians.filter((t) => t.tersedia).length,
+    cuti: technicians.filter((t) => t.cuti).length,
+    cutiError: cutiRes.error
+      ? /relation|does not exist|schema cache/i.test(cutiRes.error.message || "") || cutiRes.error.code === "PGRST205"
+        ? "Kalender cuti belum aktif — jalankan supabase/migrate-technician-availability.sql agar teknisi yang libur tidak ikut ditugaskan."
+        : cutiRes.error.message
+      : null,
+    migrasiBelum: usageRes.error
+      ? /function|does not exist|schema cache/i.test(usageRes.error.message || "")
+      : false,
+  };
+}
+
+/**
+ * Tugaskan teknisi pada pesanan dari panel kuota, dengan penjagaan bentrok.
+ *
+ * Server (bukan UI) yang memutuskan: teknisi yang sudah memegang pesanan aktif
+ * lain pada tanggal + jam yang sama ditolak. Pesanan selesai/dibatalkan tidak
+ * boleh diubah. Setelah lolos, jalur [assignTechnicianAdmin] dipakai supaya
+ * email penugasan + push ke teknisi/pelanggan tetap berjalan.
+ */
+export async function assignSlotTechnicianAdmin({ bookingId, technicianId } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const bid = String(bookingId || "").trim();
+  const tid = String(technicianId || "").trim();
+  if (!bid) return { error: "Pesanan tidak valid." };
+  if (!tid) return { error: "Pilih teknisi yang akan ditugaskan." };
+
+  const { data: booking, error: bookingErr } = await supabase
+    .from("bookings")
+    .select("id, code, status, booking_date, booking_time, technician_id")
+    .eq("id", bid)
+    .single();
+  if (bookingErr || !booking) return { error: "Pesanan tidak ditemukan." };
+  if (!SLOT_ACTIVE_STATUSES.includes(booking.status)) {
+    return {
+      error: `Pesanan ${booking.code} sudah ${booking.status} — penugasan teknisi hanya untuk pesanan aktif.`,
+    };
+  }
+
+  const { data: tech, error: techErr } = await supabase
+    .from("profiles")
+    .select("id, name, role, approval_status")
+    .eq("id", tid)
+    .single();
+  if (techErr || !tech) return { error: "Teknisi tidak ditemukan." };
+  if (tech.role !== "technician" || tech.approval_status !== "approved") {
+    return { error: "Akun itu bukan teknisi terverifikasi." };
+  }
+
+  if (booking.technician_id === tid) {
+    return { ok: true, unchanged: true, technician_name: tech.name };
+  }
+
+  const { data: bentrok, error: bentrokErr } = await supabase
+    .from("bookings")
+    .select("id, code")
+    .eq("technician_id", tid)
+    .eq("booking_date", booking.booking_date)
+    .eq("booking_time", booking.booking_time)
+    .in("status", SLOT_ACTIVE_STATUSES)
+    .neq("id", bid)
+    .limit(1);
+  if (bentrokErr) return { error: bentrokErr.message };
+  if (bentrok && bentrok.length > 0) {
+    return {
+      error: `${tech.name} sudah memegang pesanan ${bentrok[0].code} pada ${booking.booking_date} ${booking.booking_time}. Pilih teknisi lain atau pindahkan jadwal.`,
+    };
+  }
+
+  const res = await assignTechnicianAdmin(bid, tid);
+  if (res.error) return { error: res.error };
+  return { ok: true, technician_name: tech.name, code: booking.code };
+}
+
+/**
+ * Tugaskan OTOMATIS semua pesanan yang belum punya teknisi pada satu slot.
+ *
+ * Pemilihan kandidat memakai aturan yang sama dengan modal:
+ *   siap (tidak bentrok) → skill cocok → area cocok → beban kerja hari itu
+ *   paling ringan → rating.
+ *
+ * Satu pesanan satu teknisi; setelah dipilih, teknisi itu dianggap sudah
+ * memegang slot tersebut sehingga pesanan berikutnya memilih orang lain. Bila
+ * tidak ada kandidat, pesanan itu dilaporkan di `tanpaKandidat` — tidak dipaksa
+ * ke teknisi yang bentrok.
+ *
+ * Penulisan tetap per pesanan lewat [assignSlotTechnicianAdmin], supaya email +
+ * push penugasan berjalan sama seperti penugasan manual. Kegagalan satu pesanan
+ * tidak membatalkan pesanan lain; admin melihat daftar `gagal`.
+ */
+export async function autoAssignSlotTechniciansAdmin({ date, slot } = {}) {
+  const data = await getSlotTechniciansAdmin({ date, slot });
+  if (data.error) return { error: data.error };
+
+  const belum = (data.orders || []).filter((o) => !o.technician_id);
+  if (belum.length === 0) {
+    return {
+      ok: true,
+      total: 0,
+      assignments: [],
+      gagal: [],
+      tanpaKandidat: [],
+    };
+  }
+
+  const bebanKerja = {};
+  for (const t of data.technicians || []) {
+    bebanKerja[t.id] = Number(t.beban_hari) || 0;
+  }
+
+  const { rencana, tanpaKandidat } = rencanakanPenugasanOtomatis({
+    orders: data.orders || [],
+    technicians: data.technicians || [],
+    bebanKerja,
+    leaves: data.leaves || [],
+    tanggal: data.date || date,
+  });
+
+  const assignments = [];
+  const gagal = [];
+  for (const p of rencana) {
+    const res = await assignSlotTechnicianAdmin({
+      bookingId: p.order.id,
+      technicianId: p.technician.id,
+    });
+    if (res.error) {
+      gagal.push({
+        bookingId: p.order.id,
+        code: p.order.code,
+        error: res.error,
+      });
+    } else {
+      assignments.push({
+        bookingId: p.order.id,
+        code: p.order.code,
+        technicianId: p.technician.id,
+        technicianName: res.technician_name || p.technician.name,
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    total: belum.length,
+    assignments,
+    gagal,
+    tanpaKandidat: tanpaKandidat.map((t) => ({
+      bookingId: t.order.id,
+      code: t.order.code,
+      alasan: t.alasan,
+    })),
+  };
+}
+
+/**
+ * Kuota pesanan per slot yang sedang berlaku (app_settings.slot_capacity).
+ *
+ * `sumber: "bawaan"` berarti kolom/barisnya belum ada sehingga trigger memakai
+ * angka 2. Panel perlu membedakannya supaya admin tidak mengira setelannya
+ * sudah tersimpan padahal migrasi belum dijalankan.
+ */
+export async function getSlotCapacityAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("slot_capacity")
+    .eq("id", 1)
+    .maybeSingle();
+
+  if (error || data?.slot_capacity == null) {
+    return {
+      capacity: SLOT_CAPACITY_DEFAULT,
+      sumber: "bawaan",
+      catatan:
+        "Setelan kuota belum ada di database — yang berlaku sekarang angka bawaan. Jalankan supabase/migrate-slot-capacity.sql agar bisa diubah dari panel ini.",
+    };
+  }
+  return { capacity: Number(data.slot_capacity), sumber: "setelan", catatan: null };
+}
+
+/** Simpan kuota slot (1–20). Berlaku untuk pesanan BARU; pesanan yang sudah
+ *  dibuat tidak dihapus/dipindahkan — kuota tidak boleh membatalkan janji yang
+ *  sudah dibuat pelanggan. */
+export async function saveSlotCapacityAdmin({ capacity } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const n = normalisasiSlotCapacity(capacity);
+  if (n === null) {
+    return { error: `Kuota slot harus angka bulat 1–${SLOT_CAPACITY_MAX} pesanan.` };
+  }
+
+  const { data: sebelum } = await supabase
+    .from("app_settings")
+    .select("slot_capacity")
+    .eq("id", 1)
+    .maybeSingle();
+
+  const { data, error } = await supabase
+    .from("app_settings")
+    .update({ slot_capacity: n, updated_at: new Date().toISOString() })
+    .eq("id", 1)
+    .select("slot_capacity")
+    .maybeSingle();
+
+  if (error) {
+    if (/relation|does not exist|Could not find the table|schema cache|column/i.test(error.message || "")) {
+      return {
+        error:
+          "Setelan kuota slot belum ada — jalankan supabase/migrate-slot-capacity.sql di Supabase SQL Editor dulu.",
+      };
+    }
+    return { error: error.message };
+  }
+  if (data?.slot_capacity == null) {
+    return {
+      error:
+        "Kuota slot belum bisa disimpan (baris app_settings id = 1 tidak ditemukan). Jalankan supabase/migrate-slot-capacity.sql dulu.",
+    };
+  }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_slot_capacity",
+    entity: "settings",
+    entityId: "1",
+    summary: `Kuota per slot ${sebelum?.slot_capacity ?? "?"} → ${Number(data.slot_capacity)} pesanan`,
+    before: { slot_capacity: sebelum?.slot_capacity ?? null },
+    after: { slot_capacity: Number(data.slot_capacity) },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/booking");
+  return { ok: true, capacity: Number(data.slot_capacity) };
 }
 
 /* ============== JEJAK EMAIL ADMIN YANG GAGAL TERKIRIM ============== */
@@ -3126,8 +4601,9 @@ function tanggalWib() {
 
 /** Kolom yang dibutuhkan papan — satu tempat agar tidak ada yang tertinggal. */
 const BOARD_SELECT =
-  "id, code, status, booking_date, booking_time, address, total_price, payment_method, technician_id, completed_at, created_at, " +
-  "services(name), " +
+  "id, code, status, booking_date, booking_time, address, total_price, extra_charge_total, payment_method, technician_id, started_at, completed_at, created_at, quantity, area, cancelled_at, cancelled_reason, " +
+  "no_show_at, no_show_lat, no_show_lng, no_show_photo_path, no_show_note, customer_present_at, " +
+  "services(name), booking_items(label, unit_price, quantity, line_total, position), " +
   "customer:profiles!bookings_user_id_fkey(name, phone), " +
   "technician:profiles!bookings_technician_id_fkey(id, name, phone)";
 
@@ -3180,6 +4656,30 @@ export async function getDailyOpsBoardAdmin() {
   const perluTeknisi = perluRes.data || [];
   const menungguBayar = bayarRes.data || [];
 
+  // Terlambat mulai: slot sudah berjalan +15 menit tetapi teknisi belum
+  // menekan "Mulai". Dihitung dari jam dinding WIB (bukan zona server UTC).
+  const terlambat = ringkasTerlambat(jadwal);
+
+  // No-show: teknisi melaporkan pelanggan tidak ada. Signed URL dibuat untuk
+  // foto lokasi (bucket privat); satu kegagalan tidak menggagalkan papan.
+  const tidakAdaRaw = jadwal.filter((b) => b.no_show_at);
+  const tidakAda = await Promise.all(
+    tidakAdaRaw.map(async (b) => {
+      let foto_url = null;
+      if (b.no_show_photo_path) {
+        try {
+          const { data } = await supabase.storage
+            .from("booking-proofs")
+            .createSignedUrl(b.no_show_photo_path, 3600);
+          foto_url = data?.signedUrl || null;
+        } catch {
+          foto_url = null;
+        }
+      }
+      return { ...b, foto_url };
+    })
+  );
+
   // Antrean pelepasan tugas: hanya yang perlu ditindaklanjuti yang ditandai,
   // tetapi riwayatnya tetap ditampilkan sebagai konteks kualitas teknisi.
   let rilis = [];
@@ -3190,7 +4690,7 @@ export async function getDailyOpsBoardAdmin() {
       .select(
         "id, booking_id, reason, created_at, " +
           "technician:profiles!job_releases_technician_id_fkey(id, name), " +
-          "booking:bookings(code, status, technician_id, booking_date, booking_time, total_price, services(name))"
+          "booking:bookings(code, status, technician_id, booking_date, booking_time, total_price, quantity, services(name), booking_items(label, unit_price, quantity, line_total, position))"
       )
       .order("created_at", { ascending: false })
       .limit(40);
@@ -3277,6 +4777,8 @@ export async function getDailyOpsBoardAdmin() {
       menungguBayar,
       rilis,
       rilisError,
+      terlambat,
+      tidakAda,
       garansiTerbuka,
       piutang,
       piutangError,
@@ -3288,10 +4790,123 @@ export async function getDailyOpsBoardAdmin() {
         selesai: jadwal.filter((b) => b.status === "completed").length,
         dibatalkan: jadwal.filter((b) => b.status === "cancelled").length,
         rilisPerluTindak: rilis.filter((r) => r.perluTeknisiBaru).length,
+        terlambat: terlambat.length,
+        tidakAda: tidakAda.filter((b) => !b.customer_present_at).length,
         piutangJatuhTempo: piutang?.jatuhTempo.length ?? 0,
       },
     },
   };
+}
+
+/* ===================== TERLAMBAT MULAI: TINDAKAN CEPAT ===================== */
+
+/**
+ * Beri tahu pelanggan bahwa admin sedang menangani teknisi yang terlambat.
+ *
+ * Pesan ini SENGAJA tidak menjanjikan jam kedatangan baru: yang bisa dijanjikan
+ * hanya bahwa admin sedang menghubungi teknisi dan menyiapkan pengganti.
+ * Tombol di aplikasi mengarah ke detail pesanan.
+ */
+export async function notifyLateStartCustomerAdmin(bookingId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const { data: b } = await supabase
+    .from("bookings")
+    .select("id, code, user_id, status, technician_id, started_at, booking_date, booking_time, services(name)")
+    .eq("id", bookingId)
+    .maybeSingle();
+  if (!b) return { error: "Pesanan tidak ditemukan." };
+
+  const menit = menitTerlambat(b);
+  if (menit <= 0) {
+    return {
+      error: "Pesanan ini tidak sedang terlambat mulai (mungkin teknisi sudah menekan Mulai atau jadwalnya belum lewat).",
+    };
+  }
+
+  await sendPushToUser(b.user_id, {
+    title: "Kami sedang menangani jadwalmu ⏳",
+    event: "late_start",
+    body: `Pesanan ${b.code} (${b.services?.name || "layanan"}) sudah lewat ${formatTerlambat(menit)} dari jadwal dan teknisi belum mulai. Admin sedang menghubungi teknisi dan menyiapkan pengganti — tidak perlu memesan ulang.`,
+    url: "/orders",
+    tag: `late-${b.id}`,
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/orders");
+  return { ok: true, menit };
+}
+
+/**
+ * Lepas teknisi yang terlambat mulai supaya pesanan kembali ke kolam dan bisa
+ * ditugaskan ke pengganti. Hanya untuk pesanan `paid` yang BELUM dimulai:
+ * melepas pekerjaan yang sedang berjalan akan menghapus jejak pekerjaan nyata.
+ */
+export async function releaseLateTechnicianAdmin(bookingId, reason = "Terlambat mulai — dilepas admin") {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const clean = (reason || "").trim();
+  if (clean.length < 5) return { error: "Tulis alasan pelepasan (minimal 5 karakter)." };
+
+  const { data: b } = await supabase
+    .from("bookings")
+    .select("id, code, status, user_id, technician_id, started_at, booking_date, booking_time")
+    .eq("id", bookingId)
+    .maybeSingle();
+  if (!b) return { error: "Pesanan tidak ditemukan." };
+  if (b.status !== "paid") {
+    return { error: "Hanya pesanan yang sudah dibayar dan belum dikerjakan yang bisa dilepas." };
+  }
+  if (!b.technician_id) return { error: "Pesanan ini belum punya teknisi." };
+  if (b.started_at) return { error: "Teknisi sudah mulai bekerja — selesaikan lewat alur normal." };
+
+  const { data: tech } = await supabase
+    .from("profiles")
+    .select("name")
+    .eq("id", b.technician_id)
+    .maybeSingle();
+
+  const { error } = await supabase
+    .from("bookings")
+    .update({ technician_id: null, status: "paid", completed_at: null })
+    .eq("id", bookingId)
+    .eq("technician_id", b.technician_id)
+    .eq("status", "paid");
+  if (error) return { error: error.message };
+
+  // Teknisi perlu tahu tugasnya dicabut (jangan sampai tetap berangkat), dan
+  // pelanggan perlu tahu ada pengganti yang dicarikan.
+  await sendPushToUser(b.technician_id, {
+    title: "Tugas dilepas admin",
+    event: "job_released",
+    body: `Pesanan ${b.code} dilepas admin: ${clean}. Kamu tidak perlu datang ke lokasi.`,
+    url: "/jobs",
+    tag: `release-${b.id}`,
+  });
+  await sendPushToUser(b.user_id, {
+    title: "Kami carikan teknisi pengganti 🔁",
+    event: "late_start",
+    body: `Teknisi untuk pesanan ${b.code} belum bisa datang, jadi tugasnya dilepas. Admin sedang menugaskan teknisi pengganti.`,
+    url: "/orders",
+    tag: `late-${b.id}`,
+  });
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "release_technician",
+    entity: "booking",
+    entityId: b.id,
+    summary: `Lepas teknisi ${tech?.name || ""} dari pesanan ${b.code}: ${clean}`,
+    before: { technician_id: b.technician_id, status: b.status },
+    after: { technician_id: null, status: "paid" },
+  });
+
+  revalidatePath("/admin");
+  revalidatePath("/technician");
+  return { ok: true, code: b.code, technician: tech?.name || null };
 }
 
 // ============================================================================
@@ -3712,6 +5327,21 @@ export async function executeAccountDeletionAdmin(requestId, catatan = "") {
     pelaksanaDicatat = false;
   }
 
+  // Jejak audit permanen: baris permintaan sendiri bisa ikut terhapus bersama
+  // akun, sedangkan admin_audit_log sengaja tidak menyimpan data pribadi.
+  await catatAuditAdmin(supabase, admin, {
+    action: "execute_account_deletion",
+    entity: "account",
+    entityId: id,
+    summary: `Menjalankan hapus akun ${baris.email || "-"}${pelaksanaDicatat ? "" : " (jejak pelaksana gagal dicatat)"}`,
+    before: { status: baris.status },
+    after: {
+      status: "selesai",
+      aksesDicabut: hasil.aksesDicabut ?? null,
+      berkasDihapus: (hasil.berkasDihapus || []).length,
+    },
+  });
+
   const ringkas = ringkasEksekusi(hasil);
   revalidatePath("/admin");
   return {
@@ -3728,4 +5358,318 @@ export async function executeAccountDeletionAdmin(requestId, catatan = "") {
     surelTerkirim: Boolean(hasil.surel && !hasil.surel.error),
     pelaksanaDicatat,
   };
+}
+
+/**
+ * Kartu skor teknisi untuk panel admin.
+ *
+ * Rating bintang saja tidak cukup untuk memutuskan siapa yang layak diperluas
+ * area/keahliannya dan siapa yang perlu ditegur. Agregasi dikerjakan RPC
+ * `technician_scorecard` (supabase/migrate-technician-scorecard.sql) supaya
+ * admin tidak perlu mengunduh seluruh riwayat pekerjaan ke browser; ambang &
+ * putusan tinggal di src/lib/technician-scorecard.js agar aturannya satu dan
+ * bisa diuji tanpa database.
+ *
+ * `days` diklem server (1..3650) — jangan percaya angka dari klien.
+ */
+export async function getTechnicianScorecardAdmin(days = 90) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const n = Number(days);
+  const p_days = PERIODE_HARI.includes(Math.trunc(n))
+    ? Math.trunc(n)
+    : Math.min(Math.max(Math.trunc(Number.isFinite(n) ? n : 90), 1), 3650);
+
+  const { data, error } = await supabase.rpc("technician_scorecard", { p_days });
+
+  if (error) {
+    // Migrasi belum dijalankan → pesan yang menyuruh tindakan yang tepat,
+    // bukan "function does not exist" mentah di panel admin.
+    if (/does not exist|could not find|schema cache|PGRST202|42883/i.test(error.message || "") || error.code === "PGRST202") {
+      return {
+        error:
+          "Kartu skor belum aktif di database — jalankan supabase/migrate-technician-scorecard.sql, lalu muat ulang.",
+        migrasi: true,
+        days: p_days,
+      };
+    }
+    return { error: error.message, days: p_days };
+  }
+
+  return { days: p_days, rows: (data || []).map(normalizeScorecardRow) };
+}
+
+/* ========================= JEJAK AUDIT TINDAKAN ADMIN ========================= */
+
+/**
+ * Baca jejak audit (tambah-saja) untuk ditampilkan di panel admin.
+ *
+ * Pencarian dibatasi ke kolom teks yang aman: `summary` dan `admin_name`.
+ * Karakter `,` dan tanda kurung dibuang karena PostgREST menafsirkan keduanya
+ * sebagai pemisah filter — tanpa ini, kata seperti "harga, diskon" bisa
+ * mengubah bentuk kueri.
+ */
+export async function getAdminAuditLogAdmin({ entity, q, limit = 100 } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const jumlah = Math.min(Math.max(Math.trunc(Number(limit) || 100), 1), 300);
+  let kueri = supabase
+    .from("admin_audit_log")
+    .select("id, admin_id, admin_name, action, entity, entity_id, summary, before, after, created_at")
+    .order("created_at", { ascending: false })
+    .limit(jumlah);
+
+  const entitas = String(entity || "").trim();
+  if (entitas) kueri = kueri.eq("entity", entitas);
+
+  const cari = String(q || "").replace(/[,()]/g, " ").trim().slice(0, 80);
+  if (cari) {
+    kueri = kueri.or(`summary.ilike.%${cari}%,admin_name.ilike.%${cari}%`);
+  }
+
+  const { data, error } = await kueri;
+  if (error) {
+    if (/relation|does not exist|schema cache|PGRST205/i.test(error.message || "") || error.code === "PGRST205") {
+      return {
+        error:
+          "Jejak audit belum aktif — jalankan supabase/migrate-admin-audit-log.sql, lalu muat ulang.",
+        migrasi: true,
+      };
+    }
+    return { error: error.message };
+  }
+
+  return { rows: data || [] };
+}
+
+/* ============ KESIAPAN TEKNISI: KEAHLIAN, AREA, KALENDER CUTI ============ */
+
+/** Pesan seragam saat tabel kalender cuti belum ada. */
+const PESAN_CUTI_BELUM_ADA =
+  "Kalender cuti belum aktif di database — jalankan supabase/migrate-technician-availability.sql, lalu muat ulang.";
+
+function gagalTabelCuti(error) {
+  return /relation|does not exist|schema cache|PGRST205/i.test(error?.message || "") || error?.code === "PGRST205";
+}
+
+/**
+ * Data mentah untuk mengelola kesiapan teknisi: profil, kategori, dan cuti.
+ *
+ * Dipisahkan dari kartu skor karena sumbernya berbeda: kartu skor adalah
+ * agregasi RPC, sedangkan keahlian/area/cuti adalah kolom & tabel yang harus
+ * bisa DIUBAH. Keduanya dimuat halaman admin sekali di server.
+ */
+export async function getTechnicianReadinessAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const hari = hariIniWib();
+
+  const [techRes, kategoriRes, cutiRes] = await Promise.all([
+    supabase
+      .from("profiles")
+      .select("id, name, email, skill, service_area, approval_status, avatar_url")
+      .eq("role", "technician")
+      .order("name", { ascending: true }),
+    supabase.from("categories").select("id, name").order("sort_order", { ascending: true }),
+    // Cuti yang masih berlaku + yang akan datang. Yang sudah lama lewat tidak
+    // perlu dikirim ke browser; riwayatnya tetap ada di database.
+    supabase
+      .from("technician_leave")
+      .select("id, technician_id, start_date, end_date, reason, created_at")
+      .gte("end_date", geserTanggal(hari, -30))
+      .lte("start_date", geserTanggal(hari, 180))
+      .order("start_date", { ascending: true }),
+  ]);
+
+  if (techRes.error) return { error: techRes.error.message };
+
+  const leaves = cutiRes.error ? [] : cutiRes.data || [];
+  const cutiHariIni = new Map();
+  for (const c of leaves) {
+    if (c.start_date <= hari && hari <= c.end_date) cutiHariIni.set(c.technician_id, c);
+  }
+
+  return {
+    today: hari,
+    technicians: (techRes.data || []).map((t) => {
+      const cuti = cutiHariIni.get(t.id) || null;
+      return {
+        ...t,
+        cuti_hari_ini: cuti
+          ? { id: cuti.id, start_date: cuti.start_date, end_date: cuti.end_date, reason: cuti.reason || null }
+          : null,
+      };
+    }),
+    categories: kategoriRes.error ? [] : kategoriRes.data || [],
+    leaves,
+    cutiError: cutiRes.error
+      ? gagalTabelCuti(cutiRes.error)
+        ? PESAN_CUTI_BELUM_ADA
+        : cutiRes.error.message
+      : null,
+  };
+}
+
+/**
+ * Ubah keahlian & area layanan seorang teknisi dari panel admin.
+ *
+ * Keahlian divalidasi terhadap `categories.id` — bukan teks bebas — karena
+ * nilai yang sama dipakai `technician_matches_service()` di database. Menyimpan
+ * label bebas di sini akan membuat teknisi berhenti menerima pekerjaan tanpa
+ * ada yang menyadarinya.
+ */
+export async function saveTechnicianSkillAreaAdmin({ technicianId, skill, serviceArea } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(technicianId || "").trim();
+  if (!UUID_RE.test(id)) return { error: "Teknisi tidak valid." };
+
+  const { data: tech, error: errTech } = await supabase
+    .from("profiles")
+    .select("id, name, role, skill, service_area")
+    .eq("id", id)
+    .maybeSingle();
+  if (errTech) return { error: errTech.message };
+  if (!tech || tech.role !== "technician") return { error: "Akun itu bukan teknisi." };
+
+  const { data: kategori, error: errKategori } = await supabase.from("categories").select("id");
+  if (errKategori) return { error: errKategori.message };
+
+  const keahlian = normalisasiKeahlian(skill, (kategori || []).map((k) => k.id));
+  if (!keahlian.ok) return { error: keahlian.error };
+  const area = normalisasiAreaLayanan(serviceArea);
+  if (!area.ok) return { error: area.error };
+
+  if (keahlian.value === (tech.skill || null) && area.value === (tech.service_area || null)) {
+    return { ok: true, unchanged: true, skill: tech.skill || null, area: tech.service_area || null };
+  }
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ skill: keahlian.value, service_area: area.value })
+    .eq("id", id)
+    .eq("role", "technician");
+  if (error) return { error: error.message };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_technician_skill_area",
+    entity: "profile",
+    entityId: id,
+    summary: `Keahlian/area ${tech.name || id}: ${tech.skill || "-"} / ${tech.service_area || "-"} → ${keahlian.value || "-"} / ${area.value || "-"}`,
+    before: { skill: tech.skill || null, service_area: tech.service_area || null },
+    after: { skill: keahlian.value, service_area: area.value },
+  });
+
+  revalidatePath("/admin");
+  return { ok: true, skill: keahlian.value, area: area.value };
+}
+
+/**
+ * Catat cuti teknisi (rentang tanggal inklusif).
+ *
+ * Bentrok dengan catatan lain ditolak, bukan digabung diam-diam: dua catatan
+ * yang tumpang tindih membuat penghapusan satu catatan terlihat seperti cuti
+ * yang "hilang sebagian".
+ */
+export async function saveTechnicianLeaveAdmin({ technicianId, startDate, endDate, reason } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(technicianId || "").trim();
+  if (!UUID_RE.test(id)) return { error: "Teknisi tidak valid." };
+
+  const rentang = normalisasiRentangCuti({
+    startDate,
+    endDate,
+    reason,
+    hariIni: hariIniWib(),
+  });
+  if (!rentang.ok) return { error: rentang.error };
+
+  const { data: tech, error: errTech } = await supabase
+    .from("profiles")
+    .select("id, name, role")
+    .eq("id", id)
+    .maybeSingle();
+  if (errTech) return { error: errTech.message };
+  if (!tech || tech.role !== "technician") return { error: "Akun itu bukan teknisi." };
+
+  const { data: bentrok, error: errBentrok } = await supabase
+    .from("technician_leave")
+    .select("id, start_date, end_date")
+    .eq("technician_id", id)
+    .lte("start_date", rentang.end)
+    .gte("end_date", rentang.start)
+    .limit(1);
+  if (errBentrok) return { error: gagalTabelCuti(errBentrok) ? PESAN_CUTI_BELUM_ADA : errBentrok.message };
+  if (bentrok && bentrok.length > 0) {
+    return {
+      error: `Sudah ada catatan cuti ${formatRentangCuti(bentrok[0].start_date, bentrok[0].end_date)} yang tumpang tindih. Hapus atau ubah catatan itu dulu.`,
+    };
+  }
+
+  const { data, error } = await supabase
+    .from("technician_leave")
+    .insert({
+      technician_id: id,
+      start_date: rentang.start,
+      end_date: rentang.end,
+      reason: rentang.reason,
+      created_by: admin.id,
+    })
+    .select("id, technician_id, start_date, end_date, reason, created_at")
+    .single();
+  if (error) return { error: gagalTabelCuti(error) ? PESAN_CUTI_BELUM_ADA : error.message };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "create_technician_leave",
+    entity: "technician_leave",
+    entityId: data.id,
+    summary: `Cuti ${tech.name || id}: ${formatRentangCuti(rentang.start, rentang.end)}${rentang.reason ? ` (${rentang.reason})` : ""}`,
+    after: { technician_id: id, start_date: rentang.start, end_date: rentang.end, reason: rentang.reason },
+  });
+
+  revalidatePath("/admin");
+  return { ok: true, leave: data };
+}
+
+/** Hapus satu catatan cuti (mis. teknisi membatalkan liburnya). */
+export async function deleteTechnicianLeaveAdmin(leaveId) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const id = String(leaveId || "").trim();
+  if (!UUID_RE.test(id)) return { error: "Catatan cuti tidak valid." };
+
+  const { data: cuti, error: errBaca } = await supabase
+    .from("technician_leave")
+    .select("id, technician_id, start_date, end_date, reason")
+    .eq("id", id)
+    .maybeSingle();
+  if (errBaca) return { error: gagalTabelCuti(errBaca) ? PESAN_CUTI_BELUM_ADA : errBaca.message };
+  if (!cuti) return { error: "Catatan cuti tidak ditemukan." };
+
+  const { error } = await supabase.from("technician_leave").delete().eq("id", id);
+  if (error) return { error: gagalTabelCuti(error) ? PESAN_CUTI_BELUM_ADA : error.message };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "delete_technician_leave",
+    entity: "technician_leave",
+    entityId: id,
+    summary: `Hapus cuti ${formatRentangCuti(cuti.start_date, cuti.end_date)}${cuti.reason ? ` (${cuti.reason})` : ""}`,
+    before: { technician_id: cuti.technician_id, start_date: cuti.start_date, end_date: cuti.end_date },
+  });
+
+  revalidatePath("/admin");
+  return { ok: true };
 }

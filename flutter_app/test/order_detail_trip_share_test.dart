@@ -147,6 +147,10 @@ void main() {
       );
 
       expect(find.text('Teknisi sedang menuju lokasimu'), findsOneWidget);
+      // Pertanyaan "berapa lama lagi?" dijawab dari jarak yang dikirim server
+      // (350 m → ±1 menit), bukan ditebak dari koordinat di perangkat.
+      expect(find.text('±1 menit lagi'), findsOneWidget);
+      expect(find.text('perkiraan'), findsOneWidget);
       expect(find.text('Sekitar 350 m lagi · Diperbarui 12 detik lalu'),
           findsOneWidget);
       expect(find.byType(MiniPinMap), findsOneWidget);
@@ -173,6 +177,8 @@ void main() {
 
       expect(find.text('Diperbarui 12 detik lalu'), findsOneWidget);
       expect(find.textContaining('Sekitar'), findsNothing);
+      // Tanpa pin pelanggan tidak ada jarak — ETA apa pun hanya karangan.
+      expect(find.textContaining('menit lagi'), findsNothing);
 
       await _tutup(tester);
     });

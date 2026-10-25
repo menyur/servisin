@@ -11,6 +11,14 @@
  * teknisi). Konstanta ini bukan "tarif yang berlaku", melainkan jaring
  * pengaman supaya harga tidak pernah jatuh ke 0 karena gangguan pembacaan.
  */
+/**
+ * Keterangan harga pada SEMUA layanan: nominal katalog adalah harga jasa,
+ * tidak termasuk sparepart/suku cadang/bahan yang dipakai teknisi. Satu
+ * sumber untuk landing page, formulir booking, dan struk.
+ */
+export const HARGA_JASA_NOTE =
+  "Harga jasa — di luar sparepart, suku cadang, dan bahan.";
+
 export const APP_FEE = 5000;
 
 /** Batas tarif biaya aplikasi yang boleh disetel admin (0 = dimatikan). */
@@ -152,6 +160,37 @@ export function planBalanceCut({ balance = 0, commission = 0, fee = 0 } = {}) {
     resultingBalance,
     debt,
     partial: debt > 0,
+  };
+}
+
+/**
+ * Rencana KOREKSI saldo manual oleh admin (naik atau turun).
+ *
+ * Kenapa ada: rekonsiliasi harian bisa menemukan `profiles.balance` lebih besar
+ * daripada Σ mutasi — artinya saldo pernah berubah tanpa baris ledger. "Tambah
+ * Saldo" hanya bisa menaikkan, jadi tanpa koreksi turun selisih seperti itu
+ * tidak punya jalan perbaikan dari panel.
+ *
+ * Aturan yang dikunci di sini (dipakai server, UI, dan probe):
+ *   * `amount` baris ledger SELALU sama dengan `delta` — kalau berbeda satu
+ *     rupiah saja, invarian `saldo = Σ mutasi` pecah lagi di hari berikutnya;
+ *   * koreksi bertanda (negatif = menurunkan), jadi satu fungsi cukup;
+ *   * delta 0 bukan koreksi: menulis baris Rp 0 hanya mengotori riwayat.
+ *
+ * `debt` = besar piutang bila koreksi membuat saldo menjadi minus (boleh, sesuai
+ * kebijakan potongan penuh — tapi admin harus melihat akibatnya SEBELUM simpan).
+ */
+export function rencanaKoreksiSaldo({ balance = 0, delta = 0 } = {}) {
+  const saldo = Math.round(Number(balance) || 0);
+  const d = Math.round(Number(delta) || 0);
+  const hasil = saldo + d;
+  return {
+    saldo,
+    delta: d,
+    amount: d,
+    resultingBalance: hasil,
+    debt: Math.max(0, -hasil),
+    valid: d !== 0,
   };
 }
 

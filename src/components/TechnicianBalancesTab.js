@@ -1,10 +1,11 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { formatRupiah } from "@/lib/pricing";
-import { Wallet, Search, TrendingDown, TrendingUp, Landmark, Loader2, Hourglass, AlertTriangle, Bell, Plus, X, Receipt, ChevronDown, FileDown, Clock, ShieldAlert, CheckCircle2, XCircle } from "lucide-react";
+import { formatRupiah, rencanaKoreksiSaldo } from "@/lib/pricing";
+import { Wallet, Search, TrendingDown, TrendingUp, Landmark, Loader2, Hourglass, AlertTriangle, Bell, Plus, Minus, SlidersHorizontal, X, Receipt, ChevronDown, FileDown, Clock, ShieldAlert, CheckCircle2, XCircle } from "lucide-react";
 import {
   addTechnicianBalanceAdmin,
+  koreksiSaldoTeknisiAdmin,
   remindTechnicianBalanceAdmin,
   getAppFeeReportCsvAdmin,
   requestPiutangWriteoffAdmin,
@@ -44,18 +45,23 @@ export default function TechnicianBalancesTab({
   initialError,
   initialAppFeeReport = [],
   initialAppFeeTotal = null,
+  initialAdjustments = [],
+  initialAdjustmentTotal = null,
   initialPiutangUmur = null,
   ambangHari = null,
 }) {
   const [technicians, setTechnicians] = useState(initialTechnicians || []);
   const [appFeeReport, setAppFeeReport] = useState(initialAppFeeReport || []);
   const [appFeeTotal, setAppFeeTotal] = useState(initialAppFeeTotal);
+  const [adjustments, setAdjustments] = useState(initialAdjustments || []);
+  const [adjustmentTotal, setAdjustmentTotal] = useState(initialAdjustmentTotal);
   const [error, setError] = useState(initialError);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState("balance"); // balance | commission | app_fee | total_withdrawn | name
   const [needsAction, setNeedsAction] = useState(false); // saring saldo 0/minus
   const [showReport, setShowReport] = useState(false); // laporan biaya aplikasi
+  const [showAdjustments, setShowAdjustments] = useState(false); // riwayat koreksi saldo
   const [csvLoading, setCsvLoading] = useState(false);
 
   /** Unduh laporan potongan biaya aplikasi sebagai CSV (gaya ekspor admin lain). */
@@ -105,6 +111,8 @@ export default function TechnicianBalancesTab({
         setTechnicians(res.technicians || []);
         setAppFeeReport(res.appFeeReport || []);
         setAppFeeTotal(res.appFeeReportTotal || null);
+        setAdjustments(res.adjustments || []);
+        setAdjustmentTotal(res.adjustmentTotal || null);
         setPiutangUmur(res.piutangUmur || null);
         setError(null);
       }
@@ -112,6 +120,18 @@ export default function TechnicianBalancesTab({
       setLoading(false);
     }
   }
+
+  // Riwayat koreksi mengikuti kotak pencarian yang sama (nama teknisi / alasan / admin).
+  const adjustmentRows = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return adjustments;
+    return adjustments.filter(
+      (r) =>
+        (r.technician_name || "").toLowerCase().includes(s) ||
+        (r.reason || "").toLowerCase().includes(s) ||
+        (r.admin_name || "").toLowerCase().includes(s)
+    );
+  }, [adjustments, q]);
 
   const rows = useMemo(() => {
     const filtered = technicians.filter(
@@ -225,12 +245,31 @@ export default function TechnicianBalancesTab({
     return null;
   }
 
-  async function submitAdjust({ amount, note }) {
-    const res = await addTechnicianBalanceAdmin(adjustTech.id, amount, note);
-    if (res?.error) return res.error;
-    setToast(
-      `Saldo ${adjustTech.name || adjustTech.email} bertambah ${formatRupiah(Number(amount))} — total ${formatRupiah(res.balance)}.`
-    );
+  /**
+   * Sesuaikan saldo: "tambah" = setoran manual (baris `topup`, perilaku lama),
+   * "kurang" = KOREKSI turun (baris `adjustment`) untuk memperbaiki selisih
+   * `saldo ≠ Σ mutasi` yang ditemukan rekonsiliasi harian.
+   */
+  async function submitAdjust({ amount, note, arah }) {
+    const nominal = Math.abs(Math.round(Number(amount)));
+    if (!nominal) return "Jumlah harus lebih dari 0.";
+
+    if (arah === "kurang") {
+      const res = await koreksiSaldoTeknisiAdmin(adjustTech.id, -nominal, note);
+      if (res?.error) return res.error;
+      setToast(
+        `Saldo ${adjustTech.name || adjustTech.email} dikurangi ${formatRupiah(nominal)} — ` +
+          `${formatRupiah(res.balanceBefore)} → ${formatRupiah(res.balanceAfter)}. ` +
+          "Tercatat sebagai baris penyesuaian di riwayat mutasi, jadi saldo dan buku besar tetap sama."
+      );
+    } else {
+      const res = await addTechnicianBalanceAdmin(adjustTech.id, nominal, note);
+      if (res?.error) return res.error;
+      setToast(
+        `Saldo ${adjustTech.name || adjustTech.email} bertambah ${formatRupiah(nominal)} — total ${formatRupiah(res.balance)}.`
+      );
+    }
+
     setAdjustTech(null);
     await reload();
     return null;
@@ -465,20 +504,26 @@ export default function TechnicianBalancesTab({
                     {t.approval_status !== "approved" ? (
                       <span className="text-[11px] text-amber font-medium">({t.approval_status})</span>
                     ) : null}
-                    {low && (
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      {low && (
                         <span
                           className={`inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2 py-0.5 ${minus ? "text-coral bg-coral-tint" : "text-amber bg-amber-tint"}`}
                         >
                           <AlertTriangle size={11} /> {minus ? "Saldo minus" : "Saldo kosong"}
                         </span>
-                        <button
-                          type="button"
-                          onClick={() => setAdjustTech(t)}
-                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-deep bg-brand-tint rounded-full px-2 py-0.5 hover:bg-brand-tint/70"
-                        >
-                          <Plus size={11} /> Tambah saldo
-                        </button>
+                      )}
+                      {/* Selalu ada: koreksi turun hanya dibutuhkan saat saldo
+                          LEBIH besar dari mutasinya, yang bisa terjadi pada teknisi
+                          bersaldo normal — bukan hanya yang 0/minus. */}
+                      <button
+                        type="button"
+                        onClick={() => setAdjustTech(t)}
+                        title="Tambah atau kurangi saldo (koreksi tercatat di buku besar)"
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand-deep bg-brand-tint rounded-full px-2 py-0.5 hover:bg-brand-tint/70"
+                      >
+                        <SlidersHorizontal size={11} /> Sesuaikan saldo
+                      </button>
+                      {low && (
                         <button
                           type="button"
                           onClick={() => remind(t)}
@@ -487,8 +532,8 @@ export default function TechnicianBalancesTab({
                         >
                           {remindingId === t.id ? <Loader2 size={11} className="animate-spin" /> : <Bell size={11} />} Ingatkan setor
                         </button>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </td>
                   <td className={`px-4 py-3 text-right font-display font-bold ${minus ? "text-coral" : low ? "text-amber" : "text-navy"}`}>
                     {formatRupiah(t.balance)}
@@ -586,6 +631,83 @@ export default function TechnicianBalancesTab({
           </div>
         )}
       </div>
+
+      {/* Riwayat KOREKSI saldo: perubahan saldo di luar setoran/potongan pesanan.
+          Ditampilkan dengan alasan + admin pelakunya supaya audit tidak perlu
+          membuka SQL; baris lama tanpa pelaku ditandai "tidak tercatat". */}
+      <div className="card !p-0 mt-5 overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setShowAdjustments((v) => !v)}
+            aria-expanded={showAdjustments}
+            className="flex-1 min-w-0 flex items-center justify-between gap-3 text-left hover:opacity-80"
+          >
+            <span className="flex items-center gap-2 font-display font-semibold text-navy">
+              <SlidersHorizontal size={16} className="text-brand" /> Riwayat koreksi saldo
+            </span>
+            <span className="flex items-center gap-2 text-sm">
+              <strong className="font-display text-navy">{adjustmentTotal?.count ?? adjustments.length} koreksi</strong>
+              <ChevronDown size={16} className={`text-ink-soft transition-transform ${showAdjustments ? "rotate-180" : ""}`} />
+            </span>
+          </button>
+        </div>
+        {showAdjustments && (
+          <div className="border-t border-line">
+            {adjustmentRows.length === 0 ? (
+              <p className="px-4 py-8 text-center text-ink-soft text-sm">
+                {adjustments.length === 0
+                  ? "Belum ada koreksi saldo. Saldo hanya berubah lewat setoran, potongan pesanan, dan penarikan."
+                  : "Tidak cocok dengan pencarian."}
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-ink-soft border-b border-line">
+                      <th className="px-4 py-2.5 font-semibold">Waktu</th>
+                      <th className="px-4 py-2.5 font-semibold">Teknisi</th>
+                      <th className="px-4 py-2.5 font-semibold text-right">Perubahan</th>
+                      <th className="px-4 py-2.5 font-semibold">Alasan</th>
+                      <th className="px-4 py-2.5 font-semibold">Admin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adjustmentRows.map((r) => (
+                      <tr key={r.id} className="border-b border-line/60">
+                        <td className="px-4 py-2.5 text-ink-soft whitespace-nowrap">
+                          {new Date(r.created_at).toLocaleDateString("id-ID", {
+                            day: "numeric",
+                            month: "short",
+                            year: "numeric",
+                          })}
+                        </td>
+                        <td className="px-4 py-2.5 text-navy">{r.technician_name}</td>
+                        <td
+                          className={`px-4 py-2.5 text-right font-semibold whitespace-nowrap ${
+                            r.amount < 0 ? "text-coral" : "text-mint"
+                          }`}
+                        >
+                          {r.amount < 0 ? "−" : "+"}
+                          {formatRupiah(Math.abs(r.amount))}
+                        </td>
+                        <td className="px-4 py-2.5 text-ink-soft min-w-[14rem]">{r.reason}</td>
+                        <td className="px-4 py-2.5 text-ink-soft">{r.admin_name || "tidak tercatat"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="px-4 py-2.5 text-xs text-ink-soft border-t border-line">
+              Menampilkan {adjustmentRows.length} dari {adjustmentTotal?.count ?? adjustments.length} koreksi terbaru · total
+              penambahan {formatRupiah(adjustmentTotal?.naik ?? 0)} dan pengurangan {formatRupiah(adjustmentTotal?.turun ?? 0)}.
+              Koreksi adalah perubahan saldo di luar setoran dan potongan pesanan; alasan wajib diisi, dan admin pelakunya
+              dicatat lewat <code>created_by</code>. Baris lama tanpa pelaku ditandai &quot;tidak tercatat&quot; — tidak ditebak.
+            </p>
+          </div>
+        )}
+      </div>
       {adjustTech && (
         <AdjustBalanceModal technician={adjustTech} onClose={() => setAdjustTech(null)} onSubmit={submitAdjust} />
       )}
@@ -605,20 +727,35 @@ export default function TechnicianBalancesTab({
 }
 
 /**
- * Modal tambah saldo cepat dari baris saldo 0/minus — pakai aksi admin yang
- * sudah ada (addTechnicianBalanceAdmin) supaya aturan & auditnya sama.
+ * Modal SESUAIKAN SALDO — dua arah:
+ *   * "Tambah"  = setoran manual/bonus (baris `topup`, aksi lama);
+ *   * "Kurangi" = KOREKSI turun (baris `adjustment`), jalan perbaikan saat saldo
+ *     lebih besar daripada Σ mutasinya — penyebab paling umum selisih yang
+ *     ditemukan rekonsiliasi harian.
+ *
+ * Pratinjau saldo akhir memakai aturan MURNI `rencanaKoreksiSaldo()`
+ * (src/lib/pricing.js), jadi angka yang dilihat admin = angka yang ditulis
+ * server, termasuk akibatnya bila saldo menjadi minus (piutang).
  */
 function AdjustBalanceModal({ technician, onClose, onSubmit }) {
+  const [arah, setArah] = useState("tambah");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  const nominal = Math.abs(Math.round(Number(amount) || 0));
+  const rencana = rencanaKoreksiSaldo({
+    balance: technician.balance,
+    delta: arah === "kurang" ? -nominal : nominal,
+  });
+  const alasanCukup = arah !== "kurang" || note.trim().length >= 5;
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError("");
     setBusy(true);
-    const err = await onSubmit({ amount, note });
+    const err = await onSubmit({ amount: nominal, note, arah });
     setBusy(false);
     if (err) setError(err);
   }
@@ -633,7 +770,7 @@ function AdjustBalanceModal({ technician, onClose, onSubmit }) {
       <div className="card w-full max-w-sm">
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-display font-bold text-navy flex items-center gap-2">
-            <Plus size={18} className="text-brand" /> Tambah saldo
+            <SlidersHorizontal size={18} className="text-brand" /> Sesuaikan saldo
           </h3>
           <button onClick={onClose} className="text-ink-soft hover:text-navy" aria-label="Tutup">
             <X size={20} />
@@ -643,6 +780,29 @@ function AdjustBalanceModal({ technician, onClose, onSubmit }) {
           {technician.name || technician.email} · saldo sekarang {formatRupiah(technician.balance)}
         </p>
         <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label="Arah penyesuaian">
+            <button
+              type="button"
+              onClick={() => setArah("tambah")}
+              aria-pressed={arah === "tambah"}
+              className={`rounded-xl border px-3 py-2 text-sm font-semibold flex items-center justify-center gap-1.5 ${
+                arah === "tambah" ? "border-brand bg-brand text-white" : "border-line text-ink-soft hover:bg-brand-tint/40"
+              }`}
+            >
+              <Plus size={14} /> Tambah
+            </button>
+            <button
+              type="button"
+              onClick={() => setArah("kurang")}
+              aria-pressed={arah === "kurang"}
+              className={`rounded-xl border px-3 py-2 text-sm font-semibold flex items-center justify-center gap-1.5 ${
+                arah === "kurang" ? "border-coral bg-coral text-white" : "border-line text-ink-soft hover:bg-brand-tint/40"
+              }`}
+            >
+              <Minus size={14} /> Kurangi
+            </button>
+          </div>
+
           <div>
             <label className="label">Jumlah (Rp)</label>
             <input
@@ -656,21 +816,51 @@ function AdjustBalanceModal({ technician, onClose, onSubmit }) {
               required
             />
           </div>
+
+          {nominal > 0 && (
+            <p
+              className={`text-xs rounded-xl px-3 py-2 ${
+                rencana.resultingBalance < 0 ? "bg-coral-tint text-coral" : "bg-brand-tint/60 text-navy"
+              }`}
+            >
+              Saldo {formatRupiah(rencana.saldo)} → <strong>{formatRupiah(rencana.resultingBalance)}</strong>
+              {rencana.resultingBalance < 0 &&
+                ` · menjadi piutang ${formatRupiah(rencana.debt)} — teknisi tidak bisa mengambil pekerjaan baru sampai saldonya di atas 0.`}
+            </p>
+          )}
+
           <div>
-            <label className="label">Catatan</label>
+            <label className="label">{arah === "kurang" ? "Alasan koreksi (wajib)" : "Catatan"}</label>
             <input
               className="input"
-              placeholder="mis. koreksi saldo / bonus"
+              placeholder={
+                arah === "kurang" ? "mis. selisih Rp 5.000 dari rekonsiliasi 24 Okt" : "mis. bonus / setor tunai"
+              }
               value={note}
               onChange={(e) => setNote(e.target.value)}
+              required={arah === "kurang"}
+              minLength={arah === "kurang" ? 5 : undefined}
             />
           </div>
+
+          {arah === "kurang" && (
+            <p className="text-xs text-ink-soft">
+              Tercatat sebagai <strong>baris penyesuaian</strong> di riwayat mutasi — saldo dan buku besar kembali sama,
+              dan alasan di atas tersimpan sebagai jejak audit. Bukan setoran, jadi tidak menambah total setor.
+            </p>
+          )}
+
           {error && <p className="text-coral text-sm font-medium">{error}</p>}
-          <button className="btn-primary w-full flex items-center justify-center gap-2" disabled={busy}>
+          <button
+            className={`w-full flex items-center justify-center gap-2 ${arah === "kurang" ? "btn-primary !bg-coral" : "btn-primary"}`}
+            disabled={busy || nominal <= 0 || !alasanCukup}
+          >
             {busy ? (
               <>
                 <Loader2 size={16} className="animate-spin" /> Menyimpan...
               </>
+            ) : arah === "kurang" ? (
+              "Kurangi saldo"
             ) : (
               "Tambah saldo"
             )}

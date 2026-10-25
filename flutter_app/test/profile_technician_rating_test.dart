@@ -57,10 +57,11 @@ void main() {
       );
       expect(tester.takeException(), isNull);
 
-      // Posisi: tepat di bawah email, di atas kartu formulir — bagian identitas.
+      // Posisi: tepat di bawah nama di header, di atas kartu formulir — bagian
+      // identitas. (Email tidak lagi di header; ia pindah ke formulir data diri.)
       final rectPill = tester.getRect(find.byType(TechRatingPill));
       final pill = rectPill.center.dy;
-      expect(pill, greaterThan(tester.getCenter(find.text('andi@example.com')).dy));
+      expect(pill, greaterThan(tester.getCenter(find.text('Andi Teknisi').first).dy));
       expect(pill, lessThan(tester.getCenter(find.text('Ubah Data Diri')).dy));
 
       // Kartu form mengapung 24 px ke atas. Lencana harus benar-benar terlihat:

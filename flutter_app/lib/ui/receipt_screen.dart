@@ -14,7 +14,13 @@ import 'receipt_watermark.dart' as watermark;
 /// dari halaman detail pesanan (tombol "Lihat Struk").
 class ReceiptScreen extends StatefulWidget {
   final Booking booking;
-  const ReceiptScreen({super.key, required this.booking});
+
+  /// Status pengembalian dana (bila ada). Diisi pemanggil yang sudah memuat
+  /// RPC `booking_refund_info` — struk TIDAK memanggil jaringan sendiri agar
+  /// layar konfirmasi setelah memesan tetap instan dan bisa diuji tanpa server.
+  final BookingRefund? refund;
+
+  const ReceiptScreen({super.key, required this.booking, this.refund});
 
   @override
   State<ReceiptScreen> createState() => _ReceiptScreenState();
@@ -98,7 +104,11 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                 // RepaintBoundary: titik tangkap gambar untuk tombol Unduh Struk.
                 child: RepaintBoundary(
                   key: _boundaryKey,
-                  child: _ReceiptCard(booking: b, paymentLabel: _paymentLabel),
+                  child: _ReceiptCard(
+                    booking: b,
+                    paymentLabel: _paymentLabel,
+                    refund: widget.refund,
+                  ),
                 ),
               ),
             ),
@@ -163,7 +173,12 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
 class _ReceiptCard extends StatelessWidget {
   final Booking booking;
   final String paymentLabel;
-  const _ReceiptCard({required this.booking, required this.paymentLabel});
+  final BookingRefund? refund;
+  const _ReceiptCard({
+    required this.booking,
+    required this.paymentLabel,
+    this.refund,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -207,10 +222,31 @@ class _ReceiptCard extends StatelessWidget {
           const SizedBox(height: 14),
           _dashed(),
           const SizedBox(height: 12),
-          _row('Layanan', b.optionLabel == null ? b.serviceName : '${b.serviceName} — ${b.optionLabel}'),
+          // Setiap baris pesanan (booking_items) ditulis terpisah beserta harga
+          // satuan × jumlah dan total barisnya — sama dengan "Rincian" di
+          // halaman detail pesanan, supaya struk bisa dicocokkan per item.
+          if (b.items.isNotEmpty) ...[
+            _row(
+              'Layanan',
+              b.multiVarian
+                  ? '${b.serviceName} · ${b.items.length} varian'
+                  : b.serviceName,
+            ),
+            ...b.items.map(_itemRow),
+          ] else ...[
+            _row('Layanan', b.optionLabel == null ? b.serviceName : '${b.serviceName} — ${b.optionLabel}'),
+            if (b.quantity > 1) _row(b.quantityLabel, '${b.quantity} ${b.quantityWord}'),
+          ],
+          // Layanan per m²: luas dibekukan di pesanan, harga satuan per m².
+          if (b.area != null && b.area! > 0)
+            _row(
+              'Luas area',
+              '${formatArea(b.area)} · ${formatRupiah((b.subtotalPrice / b.area!).round())}/m²',
+            ),
           _row('Jadwal', '${formatDateShort(b.bookingDate)} • ${b.bookingTime}'),
           _row('Alamat', b.address, maxLines: 2),
           if (b.notes != null && b.notes!.isNotEmpty) _row('Catatan', b.notes!, maxLines: 2),
+          if (b.technicianName != null) _row('Teknisi', b.technicianName!),
           _row('Metode bayar', paymentLabel),
           // Status: badge berwarna (konsisten dengan kartu pesanan).
           // Teks panjang dibiarkan membungkus — tidak terpotong ellipsis.
@@ -222,7 +258,8 @@ class _ReceiptCard extends StatelessWidget {
               Flexible(
                 child: Align(
                   alignment: Alignment.centerRight,
-                  child: StatusBadge(b.status),
+                  child: StatusBadge(b.status,
+                      hasTechnician: b.technicianId != null),
                 ),
               ),
             ]),
@@ -230,8 +267,19 @@ class _ReceiptCard extends StatelessWidget {
           const SizedBox(height: 12),
           _dashed(),
           const SizedBox(height: 12),
-          _row('Subtotal', formatRupiah(b.subtotalPrice)),
+          _row(
+              b.area != null && b.area! > 0
+                  ? 'Subtotal (${formatArea(b.area)})'
+                  : b.quantity > 1
+                      ? 'Subtotal (${b.quantity} ${b.quantityWord})'
+                      : 'Subtotal',
+              formatRupiah(b.subtotalPrice)),
           _row('Biaya aplikasi', formatRupiah(b.appFee)),
+          // Hanya usulan yang DISETUJUI pelanggan yang masuk ke total.
+          if (b.extraChargeTotal > 0)
+            _row('Biaya tambahan (disetujui)',
+                formatRupiah(b.extraChargeTotal)),
+          _row('Info harga', hargaJasaNote, maxLines: 2),
           if (b.discountAmount > 0)
             _row('Diskon voucher', '− ${formatRupiah(b.discountAmount)}', color: AppColors.mint),
           const SizedBox(height: 10),
@@ -249,6 +297,27 @@ class _ReceiptCard extends StatelessWidget {
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 19)),
             ]),
           ),
+          // Pengembalian dana ditulis SETELAH total: struk yang dibuka ulang
+          // setelah pembatalan harus menjawab "uang saya sudah kembali atau
+          // belum?" tanpa membuka layar lain.
+          if (refund != null && refund!.ada) ...[
+            const SizedBox(height: 10),
+            _dashed(),
+            const SizedBox(height: 10),
+            _row(
+              'Pengembalian dana',
+              '${formatRupiah(refund!.amount)} · ${refund!.labelStatus}',
+              color: refund!.status == 'rejected'
+                  ? AppColors.coral
+                  : refund!.status == 'done'
+                      ? AppColors.mint
+                      : AppColors.amber,
+              maxLines: 2,
+            ),
+            if (refund!.status == 'rejected' &&
+                (refund!.rejectionReason ?? '').isNotEmpty)
+              _row('Alasan', refund!.rejectionReason!, maxLines: 2),
+          ],
           const SizedBox(height: 14),
           // Barcode dekoratif
           _FakeBarcode(code: b.code),
@@ -277,6 +346,39 @@ class _ReceiptCard extends StatelessWidget {
           children: List.generate(dashes, (_) => Container(width: 3, height: 1, color: AppColors.line)),
         );
       });
+
+  /// Satu baris pesanan: nama varian + jumlah/luas, total baris, dan
+  /// keterangan harga satuan (rupiah × jumlah, atau rupiah per m² untuk
+  /// layanan area) supaya angka bisa dicocokkan dengan detail pesanan.
+  Widget _itemRow(BookingItem it) {
+    final luas = it.area;
+    final satuan = luas != null && luas > 0
+        ? '${formatRupiah(it.unitPrice)} / m²'
+        : it.quantity > 1
+            ? '${formatRupiah(it.unitPrice)} × ${it.quantity}'
+            : null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 7),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        SizedBox(
+          width: 92,
+          child: Text(it.displayLabel,
+              style: const TextStyle(fontSize: 12.5, color: AppColors.inkSoft)),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(formatRupiah(it.lineTotal),
+                style: const TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w700, color: AppColors.navy)),
+            if (satuan != null)
+              Text(satuan,
+                  style: const TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
+          ]),
+        ),
+      ]),
+    );
+  }
 
   /// Baris rincian rata kiri: label dan nilai berdampingan mulai dari
   /// tepi kiri (gap tetap 12), nilai panjang membungkus di kolomnya —

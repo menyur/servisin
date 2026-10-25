@@ -18,6 +18,7 @@
     "lint": "eslint .",
     "verify:google": "node scripts/verify-google-provider.mjs",
     "verify:apk-signin": "node scripts/verify-apk-signin.mjs",
+    "verify:firebase-client": "node scripts/verify-firebase-client.mjs",
     "smoke:google": "node scripts/smoke-google-login.mjs",
     "verify:balance": "node scripts/verify-balance-debt.mjs",
     "verify:balance-negative": "node scripts/verify-debt-negative-balance.mjs",
@@ -67,9 +68,18 @@
     "verify:akun-aman-detail": "node scripts/verify-account-security.mjs --detail",
     "verify:akun-aman-offline": "node scripts/verify-account-security.mjs --selftest",
     "verify:rpc-grants": "node scripts/verify-rpc-grants.mjs",
+    "verify:area": "node scripts/verify-service-area-pricing.mjs",
+    "verify:area-offline": "node scripts/verify-service-area-pricing.mjs --selftest",
     "verify:rpc-grants-offline": "node scripts/verify-rpc-grants.mjs --selftest",
     "verify:admin-realtime": "node scripts/verify-admin-realtime.mjs",
     "verify:notif-badge": "node scripts/verify-flutter-notif-badges.mjs",
+    "verify:skor": "node scripts/verify-technician-scorecard.mjs",
+    "verify:bukti": "node scripts/verify-job-proofs.mjs",
+    "verify:langganan": "node scripts/verify-subscription.mjs",
+    "verify:langganan-live": "node scripts/verify-subscription-reminder-live.mjs",
+    "verify:slot": "node scripts/verify-slot-capacity.mjs",
+    "verify:slot-live": "node scripts/verify-slot-capacity-live.mjs",
+    "verify:analitik": "node scripts/verify-admin-analytics.mjs",
     "verify:chat-moderation": "node scripts/verify-chat-moderation.mjs",
     "verify:chat-moderation-selftest": "node scripts/verify-chat-moderation.mjs --selftest",
     "verify:chat-moderation-live": "node scripts/verify-chat-moderation-live.mjs",
@@ -84,14 +94,23 @@
     "verify:emulator": "node scripts/verify-emulator-ui.mjs",
     "apply:sql": "node scripts/apply-supabase-sql.mjs",
     "apply:sql-selftest": "node scripts/apply-supabase-sql.mjs --selftest",
-    "verify:app-fee-setting": "node scripts/verify-app-fee-setting.mjs"
+    "verify:app-fee-setting": "node scripts/verify-app-fee-setting.mjs",
+    "verify:refund": "node scripts/verify-booking-refunds.mjs",
+    "verify:jadwal": "node scripts/verify-booking-reminder.mjs",
+    "verify:rekonsiliasi": "node scripts/verify-balance-reconciliation.mjs",
+    "verify:rekonsiliasi-live": "node scripts/verify-balance-reconciliation.mjs --live",
+    "verify:kesiapan": "node scripts/verify-technician-availability.mjs",
+    "verify:audit": "node scripts/verify-admin-audit.mjs",
+    "verify:terlambat": "node scripts/verify-late-start.mjs",
+    "verify:alamat": "node scripts/verify-customer-address-book.mjs",
+    "verify:alamat-live": "node scripts/verify-customer-address-book.mjs --live"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.45.4",
     "firebase-admin": "^14.5.0",
     "lucide-react": "^0.454.0",
-    "next": "^16.3.5",
+    "next": "^16.4.2",
     "pdfkit": "^0.20.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -99,11 +118,13 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "1.20.12",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.4.0",
     "postcss": "^8.4.47",
     "prettier": "3.9.8",
-    "tailwindcss": "^3.4.14"
+    "tailwindcss": "^3.4.14",
+    "wrangler": "4.148.0"
   }
 }

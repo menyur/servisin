@@ -13,6 +13,9 @@ import {
   getAllReviewsAdmin,
   getDailyOpsBoardAdmin,
   getAccountDeletionSummaryAdmin,
+  getTechnicianScorecardAdmin,
+  getTechnicianReadinessAdmin,
+  getBookingRefundsAdmin,
 } from "@/app/actions/admin";
 import AdminDashboard from "@/components/AdminDashboard";
 import { bacaAppFeeRinci } from "@/lib/app-fee";
@@ -33,13 +36,14 @@ export default async function AdminPage() {
     );
   }
 
-  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes, boardRes, accountDeletionRes, appFeeRes] = await Promise.all([
+  const [bookingsRes, servicesRes, usersRes, reportsRes, vouchersRes, categoriesRes, depositsRes, withdrawalsRes, financeRes, bannersRes, techBalancesRes, reviewsRes, boardRes, accountDeletionRes, appFeeRes, scorecardRes, readinessRes, refundsRes] = await Promise.all([
     getAllBookingsAdmin(),
     getAllServicesAdmin(),
     getAllUsersAdmin(),
     getAllReportsAdmin(),
     getAllVouchersAdmin(),
-    supabase.from("categories").select("id, name").order("sort_order"),
+    // Kolom lengkap: tab Kategori butuh ikon, urutan, deskripsi & status aktif.
+    supabase.from("categories").select("*").order("sort_order"),
     getBalanceDepositsAdmin().catch(() => ({ error: "Gagal memuat pengajuan setor." })),
     getWithdrawalsAdmin().catch(() => ({ error: "Gagal memuat pengajuan penarikan." })),
     getFinanceSummaryAdmin().catch(() => ({ error: "Gagal memuat ringkasan keuangan." })),
@@ -56,6 +60,16 @@ export default async function AdminPage() {
     // memakainya hanya sebagai keterangan; angka yang ditagihkan tetap milik
     // pesanan itu sendiri. Gagal baca → tarif bawaan (bukan 0).
     bacaAppFeeRinci(supabase),
+    // Kartu skor teknisi (waktu tanggap, ketepatan jadwal, garansi). Dimuat di
+    // server agar tabnya tidak berkedip kosong; gagal → tab menjelaskan
+    // migrasi mana yang belum dijalankan.
+    getTechnicianScorecardAdmin(90).catch(() => ({ error: "Gagal memuat kartu skor teknisi." })),
+    // Keahlian/area/cuti: data yang bisa DIUBAH dari kartu skor. Gagal → tab
+    // tetap bisa menilai, hanya kontrol pengaturannya yang tidak tampil.
+    getTechnicianReadinessAdmin().catch(() => ({ error: "Gagal memuat kesiapan teknisi." })),
+    // Antrean pengembalian dana (supabase/migrate-booking-refunds.sql). Tabel
+    // yang belum dimigrasikan bukan kegagalan halaman — tabnya menjelaskan.
+    getBookingRefundsAdmin().catch(() => ({ error: "Gagal memuat pengembalian dana." })),
   ]);
 
   if (bookingsRes.error) {
@@ -90,6 +104,8 @@ export default async function AdminPage() {
       technicianBalancesError={techBalancesRes.error || null}
       initialTechnicianAppFee={techBalancesRes.appFeeReport || []}
       technicianAppFeeTotal={techBalancesRes.appFeeReportTotal || null}
+      initialAdjustments={techBalancesRes.adjustments || []}
+      initialAdjustmentTotal={techBalancesRes.adjustmentTotal || null}
       initialPiutangUmur={techBalancesRes.piutangUmur || null}
       piutangAmbangHari={techBalancesRes.ambangHari || null}
       initialReviews={reviewsRes.reviews || []}
@@ -99,6 +115,12 @@ export default async function AdminPage() {
       board={boardRes.board || null}
       boardError={boardRes.error || null}
       accountDeletionSummary={accountDeletionRes?.error ? null : accountDeletionRes}
+      initialScorecard={scorecardRes?.rows || []}
+      scorecardDays={scorecardRes?.days || 90}
+      scorecardError={scorecardRes?.error || null}
+      initialReadiness={readinessRes?.error ? null : readinessRes}
+      initialRefunds={refundsRes?.refunds || []}
+      initialRefundsSummary={refundsRes?.ringkasan || null}
     />
   );
 }

@@ -11,12 +11,22 @@ export default async function BookingPage({ searchParams }) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const { data: categories } = await supabase.from("categories").select("*").order("sort_order");
-  const { data: services } = await supabase
+  // Hanya kategori aktif — kategori yang dinonaktifkan admin hilang dari
+  // pilihan pelanggan, tetapi layanan & pesanan lamanya tetap tersimpan.
+  const { data: categories } = await supabase
+    .from("categories")
+    .select("*")
+    .eq("is_active", true)
+    .order("sort_order");
+  const { data: servicesRaw } = await supabase
     .from("services")
     .select("*")
     .eq("is_active", true)
     .order("sort_order");
+  // Layanan di kategori nonaktif tidak boleh muncul walau id-nya dipilih lewat
+  // tautan ?service=… (kategorinya tidak dirender sama sekali).
+  const kategoriAktif = new Set((categories || []).map((c) => c.id));
+  const services = (servicesRaw || []).filter((s) => kategoriAktif.has(s.category_id));
   // Varian layanan (mis. ukuran PK AC) — dipakai wizard untuk memaksa
   // pemilihan ukuran sebelum lanjut; tanpa varian harga = base_price.
   const { data: serviceOptions } = await supabase

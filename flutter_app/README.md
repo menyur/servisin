@@ -9,8 +9,8 @@ Supabase project yang sama dengan web. Kode UI full Dart — tidak ada WebView.
 |---|---|
 | Login / Daftar / Lupa sandi | Autentikasi Supabase, metadata `name/phone/address/role` (paritas dengan web) |
 | Beranda | Kategori + katalog layanan dari DB, pencarian, filter kategori, harga & durasi |
-| Wizard Booking (3 langkah) | Varian layanan (mis. ukuran PK), catatan + foto keluhan, tanggal & slot jam `08:00-17:00`, 4 metode bayar, voucher, ringkasan biaya (subtotal + biaya aplikasi 5rb − diskon) |
-| Pesanan | Daftar + filter status, badge pipeline, penanda bukti ditolak (**hanya untuk pesanan milik sendiri** — teknisi tak melihat status bukti pelanggan) |
+| Wizard Booking (3 langkah) | Varian layanan (mis. ukuran PK), catatan + foto keluhan, tanggal & slot jam `08:00-17:00` dengan sisa kuota (slot penuh dinonaktifkan), 4 metode bayar, voucher, ringkasan biaya (subtotal + biaya aplikasi 5rb − diskon) |
+| Pesanan | Daftar + filter status, badge pipeline, penanda bukti ditolak (**hanya untuk pesanan milik sendiri** — teknisi tak melihat status bukti pelanggan), tombol **Pesan lagi** (wizard terisi varian/jumlah/alamat/catatan lama) dan **langganan berkala** (pengingat jatuh tempo, tanpa tagihan otomatis) |
 | Detail Pesanan | Alur status, kirim/kirim-ulang bukti bayar (foto + nominal, bucket privat `payment-proofs`), alasan penolakan admin — keduanya **khusus pelanggan pemilik pesanan**, form penilaian teknisi (bintang + ulasan), buat laporan terkait pesanan |
 | Laporan | Daftar laporan + status + catatan admin, form buat laporan (judul, isi, kaitkan pesanan, lampiran) |
 | Voucher | Voucher aktif + peringatan masa berlaku < 7 hari |

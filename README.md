@@ -12,7 +12,8 @@ Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platfor
 - **Dashboard pelanggan**: riwayat pesanan, konfirmasi pembayaran + upload bukti (privat), cetak/unduh struk PDF, arsip struk, voucher, beri penilaian teknisi, laporan, pengaturan notifikasi
 - **Dashboard teknisi**: tugas masuk, ubah status pekerjaan, saldo dengan komisi per teknisi (setor/tarik dengan persetujuan admin + bukti transfer), histori pendapatan, dan **syarat saldo > 0 untuk mengambil pekerjaan baru** — saldo 0/minus mematikan tombol Ambil beserta alasannya ([aturnya](docs/balance-rule.md), ditegakkan server `claim_job`, bukti hidup `npm run verify:claim`)
 - **Panel admin**: pesanan (filter/sort/badge), konfirmasi & penolakan bukti bayar, kelola layanan + **varian ukuran**, pendaftar teknisi (approve + verifikasi KTP), laporan masuk, penilaian teknisi (siapa pengguna yang menilai + rekap per teknisi; satu baris = satu penilaian, lengkap dengan ulasan bila ditulis), kartu pesanan menampilkan rincian voucher yang dipakai (kode + nominal + asal), histori per pelanggan/teknisi, ringkasan keuangan, kelola voucher, kelola saldo teknisi, **saldo aktif per teknisi + laporan potongan biaya aplikasi** (tab "Saldo Aktif"), **menetapkan biaya aplikasi** yang ditagihkan ke pelanggan (tab "Biaya Aplikasi" — satu angka untuk harga web, RPC aplikasi, komisi teknisi, dan panduan; berlaku untuk pesanan baru), unduh CSV + laporan bulanan otomatis
-- **Notifikasi**: email (Resend — simulasi otomatis tanpa API key) + **Web Push** (VAPID) dengan preferensi per peristiwa
+- **Notifikasi**: email (Resend — simulasi otomatis tanpa API key) + **Web Push** (VAPID) dengan preferensi per peristiwa, termasuk **pengingat jadwal H-1** ke pelanggan & teknisi (sekali per pesanan lewat penanda `bookings.reminder_sent_at`; jadwal yang dipindah mengosongkan penandanya, lihat `npm run verify:jadwal`)
+- **Kesiapan teknisi & jejak admin**: papan harian menandai pesanan **terlambat mulai** (slot + 15 menit, WIB) dengan tombol kabari pelanggan / lepas tugas / tugaskan pengganti (`npm run verify:terlambat`); kartu skor teknisi kini bisa langsung mengubah **keahlian, area, dan cuti** (teknisi cuti tidak dipilih penugasan otomatis — `npm run verify:kesiapan`); perubahan harga, rekening, peran, voucher, dan hapus akun tercatat di tab **Jejak Audit** yang tambah-saja (`npm run verify:audit`)
 - **PWA + aplikasi Android**: ter-install dari Chrome, plus APK siap unduh di `/unduh`
 
 ## Tech stack
@@ -27,7 +28,7 @@ Aplikasi full-stack (Next.js App Router + Supabase + Tailwind CSS) untuk platfor
 
 1. Buat project di [supabase.com](https://supabase.com) (gratis).
 2. **SQL Editor** → jalankan `supabase/schema.sql`, lalu `supabase/seed.sql`.
-3. Jalankan juga file `supabase/migrate-*.sql` dan `supabase/fix-*.sql` (semuanya idempoten) — atau setidaknya yang terbaru: `fix-security-audit.sql`, `migrate-push-subscriptions.sql`, `migrate-notification-prefs.sql`, `migrate-technician-balance.sql`, `migrate-service-options.sql`, `migrate-reviews.sql`, `migrate-reports.sql`, `migrate-vouchers.sql`, `migrate-receipt-archives.sql`, `migrate-monthly-report-archives.sql`, `migrate-approval-status.sql`, `migrate-commission-rate.sql`, `migrate-technician-ktp.sql`, `fix-technician-skill-matching.sql`.
+3. Jalankan juga file `supabase/migrate-*.sql` dan `supabase/fix-*.sql` (semuanya idempoten) — atau setidaknya yang terbaru: `fix-security-audit.sql`, `migrate-push-subscriptions.sql`, `migrate-notification-prefs.sql`, `migrate-technician-balance.sql`, `migrate-service-options.sql`, `migrate-reviews.sql`, `migrate-reports.sql`, `migrate-vouchers.sql`, `migrate-receipt-archives.sql`, `migrate-monthly-report-archives.sql`, `migrate-approval-status.sql`, `migrate-commission-rate.sql`, `migrate-technician-ktp.sql`, `fix-technician-skill-matching.sql`, `migrate-technician-scorecard.sql`, `migrate-booking-reminder.sql`, `migrate-admin-audit-log.sql`, `migrate-technician-availability.sql`.
 4. Buat bucket Storage: jalankan `node scripts/setup-storage.mjs` (butuh service role key di `.env.local`) — lalu jalankan bagian policy di `supabase/setup-storage-buckets.sql`.
 5. Salin **Project URL** dan **anon public key** dari Settings → API.
 
@@ -116,6 +117,7 @@ fixify/
   docs/bersihkan-data-uji.md -> alat pembersih data uji & pesanan lama (dry-run default, `--ya` untuk eksekusi)
   docs/upload-play.md  -> langkah unggah AAB & APK ke Google Play, klik-per-klik (AAB wajib untuk track rilis; APK hanya lewat Internal app sharing)
   docs/bersihkan-cache.md -> penjaga cache build lokal (ambang 4 GB, AAB diarsipkan sebelum cache dihapus)
+  docs/refund-pelanggan.md -> alur pengembalian dana pesanan yang dibatalkan (aturan, tab admin, batasan)
   scripts/             -> setup-storage.mjs, weekly-cleanup.mjs, dsb.
   src/app/             -> halaman (landing, booking, track, dashboard, technician, admin, unduh, panduan)
   src/app/actions/     -> semua Server Actions (auth, bookings, admin, technician, reviews, reports, push)

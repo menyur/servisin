@@ -1,4 +1,6 @@
-import { formatRupiah } from "@/lib/pricing";
+import { HARGA_JASA_NOTE, formatRupiah } from "@/lib/pricing";
+import { formatArea } from "@/lib/area-pricing";
+import { bookingItems, bookingQuantity } from "@/lib/booking-quantity";
 
 /**
  * Struk pesanan untuk dicetak (window.print()).
@@ -8,6 +10,17 @@ import { formatRupiah } from "@/lib/pricing";
 export default function ReceiptContent({ booking, customerName, customerPhone }) {
   const b = booking;
   const created = b.created_at ? new Date(b.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" }) : "-";
+  // Jumlah unit (bookings.quantity): hanya ditulis bila lebih dari satu, sama
+  // dengan struk aplikasi Flutter. Pesanan web/lama tanpa kolom ini = 1.
+  const qty = bookingQuantity(b);
+  // Rincian per varian (bookings_items). >1 baris = tampilkan per baris;
+  // pesanan lama/web tanpa baris item tetap memakai ringkasan lama.
+  const items = bookingItems(b);
+  const multi = items.length > 1;
+  // Luas area (m²) untuk layanan per meter persegi (cat dinding). Harga satuan
+  // pesanan seperti ini adalah rupiah per m², bukan per unit.
+  const area = Number(b.area) > 0 ? Number(b.area) : null;
+  const isArea = area !== null;
 
   return (
     <div className="receipt-root" style={{ fontFamily: "'Inter', sans-serif", color: "#10202B" }}>
@@ -32,6 +45,12 @@ export default function ReceiptContent({ booking, customerName, customerPhone })
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Nama Pelanggan</td><td>{customerName || "-"}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Telepon</td><td>{customerPhone || "-"}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Layanan</td><td>{b.services?.name || "-"}{b.option_label ? ` — ${b.option_label}` : ""}</td></tr>
+          {qty > 1 && (
+            <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Jumlah Unit</td><td>{qty} unit</td></tr>
+          )}
+          {isArea && (
+            <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Luas Area</td><td style={{ fontWeight: 600, color: "#0B3556" }}>{formatArea(area)}</td></tr>
+          )}
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Jadwal</td><td>{b.booking_date} · {b.booking_time}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272", verticalAlign: "top" }}>Alamat</td><td>{b.address}</td></tr>
           <tr><td style={{ padding: "3px 0", color: "#4C6272" }}>Metode Bayar</td><td>{paymentLabel(b.payment_method)}</td></tr>
@@ -48,12 +67,46 @@ export default function ReceiptContent({ booking, customerName, customerPhone })
         </tbody>
       </table>
 
+      {/* Rincian tiap varian — hanya bila pesanan memuat lebih dari satu baris. */}
+      {multi && (
+        <div style={{ borderTop: "2px dashed #D7E7F0", paddingTop: 12, marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, color: "#0B3556", fontSize: 11, marginBottom: 6 }}>
+            RINCIAN LAYANAN
+          </div>
+          <table width="100%" style={{ fontSize: 12, borderCollapse: "collapse" }}>
+            <tbody>
+              {items.map((it, i) => (
+                <tr key={`${it.label}-${i}`}>
+                  <td style={{ padding: "3px 0" }}>{it.label} ×{it.quantity}</td>
+                  <td style={{ textAlign: "right" }}>{formatRupiah(it.lineTotal)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Rincian biaya */}
       <div style={{ borderTop: "2px dashed #D7E7F0", paddingTop: 12, marginBottom: 14 }}>
         <table width="100%" style={{ fontSize: 13, borderCollapse: "collapse" }}>
           <tbody>
-            <tr><td style={{ padding: "4px 0" }}>Subtotal layanan</td><td style={{ textAlign: "right" }}>{formatRupiah(b.subtotal_price)}</td></tr>
+            {isArea ? (
+              <tr><td style={{ padding: "4px 0" }}>Harga per m²</td><td style={{ textAlign: "right" }}>{formatRupiah(area > 0 ? Number(b.subtotal_price) / area : 0)}</td></tr>
+            ) : (
+              !multi && qty > 1 && (
+                <tr><td style={{ padding: "4px 0" }}>Harga satuan</td><td style={{ textAlign: "right" }}>{formatRupiah(Number(b.subtotal_price || 0) / qty)}</td></tr>
+              )
+            )}
+            <tr><td style={{ padding: "4px 0" }}>Subtotal layanan{isArea ? ` (${formatArea(area)})` : qty > 1 ? ` (${qty} unit)` : ""}</td><td style={{ textAlign: "right" }}>{formatRupiah(b.subtotal_price)}</td></tr>
             <tr><td style={{ padding: "4px 0" }}>Biaya aplikasi</td><td style={{ textAlign: "right" }}>{formatRupiah(b.app_fee)}</td></tr>
+            {Number(b.extra_charge_total) > 0 && (
+              <tr><td style={{ padding: "4px 0" }}>Biaya tambahan (disetujui)</td><td style={{ textAlign: "right" }}>{formatRupiah(b.extra_charge_total)}</td></tr>
+            )}
+            <tr>
+              <td colSpan={2} style={{ padding: "2px 0 4px", color: "#4C6272", fontSize: 10.5 }}>
+                {HARGA_JASA_NOTE}
+              </td>
+            </tr>
             {Number(b.discount_amount) > 0 && (
               <tr>
                 <td style={{ padding: "4px 0", color: "#2C8F63" }}>Diskon voucher</td>

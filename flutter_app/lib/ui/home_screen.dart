@@ -1,14 +1,18 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
+import '../app_update.dart';
 import '../format.dart';
 import '../category_thumbs.dart';
 import '../models.dart';
 import '../theme.dart';
 import 'booking_wizard.dart';
 import 'common.dart';
+import 'inbox_screen.dart';
+import 'update_banner.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,11 +30,68 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _activeCategory;
   Profile? _profile;
 
+  /// Versi APK yang lebih baru, bila ada. Null = tidak ada kabar baru (atau
+  /// server tidak bisa dihubungi) — beranda tidak boleh terganggu karenanya.
+  AppUpdateInfo? _pembaruan;
+
   @override
   void initState() {
     super.initState();
     _load();
+    _cekPembaruan();
   }
+
+  /// Tanya `/api/apk-status` sekali saat beranda dibuka.
+  ///
+  /// Diam total saat gagal: pemberitahuan versi adalah bonus, bukan syarat
+  /// beranda bisa dipakai (dan pengguna offline tidak perlu diberi galat).
+  Future<void> _cekPembaruan() async {
+    final info = await AppUpdate.check();
+    if (!mounted || info == null) return;
+    setState(() => _pembaruan = info);
+  }
+
+  Future<void> _bukaUnduhan() async {
+    final info = _pembaruan;
+    if (info == null) return;
+    try {
+      final ok = await launchUrl(Uri.parse(info.downloadUrl),
+          mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        showSnack(
+            context, 'Tidak ada aplikasi yang bisa membuka halaman unduhan.',
+            error: true);
+      }
+    } catch (e) {
+      if (mounted) showSnackError(context, e, 'Gagal membuka halaman unduhan.');
+    }
+  }
+
+  /// "Nanti": sembunyikan untuk versi ini saja (tersimpan di perangkat).
+  Future<void> _tundaPembaruan() async {
+    final versi = _pembaruan?.version;
+    if (versi == null) return;
+    await AppUpdate.dismiss(versi);
+    if (mounted) setState(() => _pembaruan = null);
+  }
+
+  /// Kotak masuk notifikasi — tersedia untuk pelanggan dan teknisi. Peran
+  /// menentukan sumber pesanan & teks kabarnya.
+  Future<void> _bukaInbox() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => InboxScreen(technician: _profile?.role == 'technician'),
+      ),
+    );
+  }
+
+  /// Lonceng dengan angka kabar belum dibaca (notifier global dari shell).
+  Widget _inboxBell() => ValueListenableBuilder<int>(
+        valueListenable: unseenInboxUpdates,
+        builder: (_, unread, __) =>
+            InboxBell(unread: unread, onTap: _bukaInbox),
+      );
 
   Future<void> _load() async {
     setState(() {
@@ -44,7 +105,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final svcs = await Api.fetchServices();
       final prof = await Api.myProfile();
       // Banner gagal dimuat tidak boleh menggagalkan beranda — fallback statis.
-      final banners = await Api.fetchBanners().catchError((_) => <PromoBanner>[]);
+      final banners =
+          await Api.fetchBanners().catchError((_) => <PromoBanner>[]);
       if (!mounted) return;
       setState(() {
         _categories = cats;
@@ -53,14 +115,19 @@ class _HomeScreenState extends State<HomeScreen> {
         _banners = banners;
       });
     } catch (e) {
-      if (mounted) setState(() => _error = 'Gagal memuat katalog. Periksa koneksi internet.');
+      if (mounted) {
+        setState(
+            () => _error = 'Gagal memuat katalog. Periksa koneksi internet.');
+      }
     }
   }
 
   List<Service> get _filtered {
     final all = _services ?? const <Service>[];
     var list = all;
-    if (_activeCategory != null) list = list.where((s) => s.categoryId == _activeCategory).toList();
+    if (_activeCategory != null) {
+      list = list.where((s) => s.categoryId == _activeCategory).toList();
+    }
     if (_query.isNotEmpty) {
       final q = _query.toLowerCase();
       list = list
@@ -87,11 +154,15 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: 'Halo, $firstName 👋',
                   subtitle: 'Teknisi terpercaya datang ke lokasimu',
                   actions: [
-                    _AvatarButton(onTap: () => mainTabIndex.value = 4, url: _profile?.avatarUrl)
+                    _inboxBell(),
+                    _AvatarButton(
+                        onTap: () => mainTabIndex.value = 4,
+                        url: _profile?.avatarUrl)
                   ],
                 ),
                 Expanded(
-                  child: ScreenStateView(loading: false, error: _error, onRetry: _load),
+                  child: ScreenStateView(
+                      loading: false, error: _error, onRetry: _load),
                 ),
               ]),
             )
@@ -105,16 +176,22 @@ class _HomeScreenState extends State<HomeScreen> {
                     title: 'Halo, $firstName 👋',
                     subtitle: 'Butuh bantuan apa hari ini?',
                     actions: [
-                      _AvatarButton(onTap: () => mainTabIndex.value = 4, url: _profile?.avatarUrl)
+                      _inboxBell(),
+                      _AvatarButton(
+                          onTap: () => mainTabIndex.value = 4,
+                          url: _profile?.avatarUrl)
                     ],
                     bottom: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
                       child: TextField(
                         onChanged: (v) => setState(() => _query = v),
-                        style: const TextStyle(color: AppColors.navy, fontSize: 14),
+                        style: const TextStyle(
+                            color: AppColors.navy, fontSize: 14),
                         decoration: InputDecoration(
-                          hintText: 'Cari layanan, misal: cuci AC, ganti oli...',
-                          hintStyle: const TextStyle(color: AppColors.inkSoft, fontSize: 13.5),
+                          hintText:
+                              'Cari layanan, misal: cuci AC, ganti oli...',
+                          hintStyle: const TextStyle(
+                              color: AppColors.inkSoft, fontSize: 13.5),
                           prefixIcon: const Icon(Icons.search, size: 22),
                           suffixIcon: _query.isEmpty
                               ? null
@@ -123,7 +200,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   onPressed: () => setState(() => _query = '')),
                           filled: true,
                           fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(vertical: 6),
+                          contentPadding:
+                              const EdgeInsets.symmetric(vertical: 6),
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(14),
                             borderSide: BorderSide.none,
@@ -138,6 +216,14 @@ class _HomeScreenState extends State<HomeScreen> {
                     offset: const Offset(0, -18),
                     child: const _StaticCarousel(),
                   ),
+
+                  // ===== Pemberitahuan versi baru (sekali per versi) =====
+                  if (_pembaruan != null)
+                    UpdateBanner(
+                      version: _pembaruan!.version,
+                      onUpdate: _bukaUnduhan,
+                      onLater: _tundaPembaruan,
+                    ),
 
                   // ===== Chip kategori (pintu masuk utama layanan) =====
                   if (_categories == null)
@@ -155,8 +241,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: _CategoryChip(
                             category: _categories![i],
                             active: _activeCategory == _categories![i].id,
-                            onTap: () => setState(() =>
-                                _activeCategory = _activeCategory == _categories![i].id ? null : _categories![i].id),
+                            onTap: () => setState(() => _activeCategory =
+                                _activeCategory == _categories![i].id
+                                    ? null
+                                    : _categories![i].id),
                           ),
                         ),
                       ),
@@ -199,7 +287,9 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(
             child: Text(c.name,
                 style: const TextStyle(
-                    fontSize: 17, fontWeight: FontWeight.w800, color: AppColors.navy)),
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.navy)),
           ),
         ]),
       ));
@@ -207,12 +297,16 @@ class _HomeScreenState extends State<HomeScreen> {
             index: e.key,
             child: _ServiceCard(
               service: e.value,
-              onBook: () => Navigator.pushNamed(context, '/booking', arguments: BookingArgs(service: e.value)),
+              onBook: () => Navigator.pushNamed(context, '/booking',
+                  arguments: BookingArgs(service: e.value)),
             ),
           )));
     }
     if (widgets.isEmpty) {
-      widgets.add(const ScreenStateView(loading: false, empty: true, emptyMessage: 'Tidak ada layanan yang cocok'));
+      widgets.add(const ScreenStateView(
+          loading: false,
+          empty: true,
+          emptyMessage: 'Tidak ada layanan yang cocok'));
     }
     return widgets;
   }
@@ -242,14 +336,15 @@ class _AvatarButton extends StatelessWidget {
           decoration: BoxDecoration(
             color: Colors.white.withValues(alpha: 0.22),
             shape: BoxShape.circle,
-            border: Border.all(color: Colors.white.withValues(alpha: 0.6), width: 1.5),
+            border: Border.all(
+                color: Colors.white.withValues(alpha: 0.6), width: 1.5),
           ),
           child: hasPhoto
               ? Image.network(
                   url!,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      const Icon(Icons.person_rounded, color: Colors.white, size: 22),
+                  errorBuilder: (_, __, ___) => const Icon(Icons.person_rounded,
+                      color: Colors.white, size: 22),
                 )
               : const Icon(Icons.person_rounded, color: Colors.white, size: 22),
         ),
@@ -581,7 +676,9 @@ class _StaticBannerSlide extends StatelessWidget {
 class _InfoStrip extends StatelessWidget {
   const _InfoStrip();
 
-  static const List<({IconData icon, Color color, String title, String desc, int tab})> _items = [
+  static const List<
+          ({IconData icon, Color color, String title, String desc, int tab})>
+      _items = [
     (
       icon: Icons.help_outline_rounded,
       color: Color(0xFF4338CA),
@@ -671,7 +768,8 @@ class _CategoryChip extends StatelessWidget {
   final Category category;
   final bool active;
   final VoidCallback onTap;
-  const _CategoryChip({required this.category, required this.active, required this.onTap});
+  const _CategoryChip(
+      {required this.category, required this.active, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -729,7 +827,10 @@ class _ServiceCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.line),
         boxShadow: [
-          BoxShadow(color: AppColors.navy.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 4)),
+          BoxShadow(
+              color: AppColors.navy.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 4)),
         ],
       ),
       child: Row(children: [
@@ -738,43 +839,66 @@ class _ServiceCard extends StatelessWidget {
           tag: 'service-${service.id}',
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
-          child: service.imageUrl != null
-              ? Image.network(service.imageUrl!, width: 58, height: 58, fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => ServiceThumbBox(iconKey: service.icon))
-              : ServiceThumbBox(iconKey: service.icon),
+            child: service.imageUrl != null
+                ? Image.network(service.imageUrl!,
+                    width: 58,
+                    height: 58,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) =>
+                        ServiceThumbBox(iconKey: service.icon))
+                : ServiceThumbBox(iconKey: service.icon),
           ),
         ),
         const SizedBox(width: 12),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Hero(
               tag: 'service-name-${service.id}',
               child: Material(
                 color: Colors.transparent,
                 child: Text(service.name,
-                    style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.navy, fontSize: 14.5)),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.navy,
+                        fontSize: 14.5)),
               ),
             ),
             if (service.description != null)
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Text(service.description!,
-                    maxLines: 2, overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12, color: AppColors.inkSoft)),
               ),
             const SizedBox(height: 6),
             Row(children: [
               Text(priceLabel,
-                  style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AppColors.brandDeep)),
+                  style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.brandDeep)),
               if (service.durationEstimate != null) ...[
                 const SizedBox(width: 8),
                 Flexible(
                   child: Text('• ${service.durationEstimate}',
-                      maxLines: 1, overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11.5, color: AppColors.inkSoft)),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 11.5, color: AppColors.inkSoft)),
                 ),
               ],
             ]),
+            // Harga katalog = jasa saja, bukan termasuk sparepart/bahan.
+            const Padding(
+              padding: EdgeInsets.only(top: 3),
+              child: Text(hargaJasaNote,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
+            ),
           ]),
         ),
         const SizedBox(width: 8),
@@ -784,17 +908,24 @@ class _ServiceCard extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(colors: [AppColors.brandDeep, AppColors.brand]),
+              gradient: const LinearGradient(
+                  colors: [AppColors.brandDeep, AppColors.brand]),
               borderRadius: BorderRadius.circular(10),
-              boxShadow: [BoxShadow(color: AppColors.brand.withValues(alpha: 0.35), blurRadius: 8, offset: const Offset(0, 3))],
+              boxShadow: [
+                BoxShadow(
+                    color: AppColors.brand.withValues(alpha: 0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3))
+              ],
             ),
             child: const Text('Pesan',
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13)),
           ),
         ),
       ]),
     );
   }
 }
-
-

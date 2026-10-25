@@ -34,6 +34,10 @@ void main() {
 
     final setoran = find.byKey(const ValueKey('notif-deposit_approved'));
     await tester.scrollUntilVisible(setoran, 200);
+    // Daftar bertambah seiring fitur baru; pastikan kartunya benar-benar utuh
+    // di layar sebelum diketuk, bukan hanya "mulai terlihat" di tepi bawah.
+    await tester.ensureVisible(setoran);
+    await tester.pumpAndSettle();
     expect(tester.widget<SwitchListTile>(setoran).value, isTrue);
     await tester.tap(setoran);
     await tester.pumpAndSettle();
@@ -56,6 +60,8 @@ void main() {
 
     final setoran = find.byKey(const ValueKey('notif-deposit_approved'));
     await tester.scrollUntilVisible(setoran, 200);
+    await tester.ensureVisible(setoran);
+    await tester.pumpAndSettle();
     await tester.tap(setoran);
     await tester.pumpAndSettle();
 
@@ -92,9 +98,25 @@ void main() {
   test('pelanggan tidak melihat switch saldo/pekerjaan teknisi', () {
     final groups = notificationGroupsFor(isTechnician: false);
     final keys = <String>[for (final g in groups) for (final e in g.events) e.key];
-    expect(keys, containsAll(['payment_confirmed', 'order_cancelled', 'warranty_update', 'voucher_received']));
+    expect(keys, containsAll([
+      'payment_confirmed',
+      'order_cancelled',
+      'subscription_due',
+      'warranty_update',
+      'voucher_received',
+    ]));
     expect(keys, isNot(contains('new_job_available')));
     expect(keys, isNot(contains('deposit_approved')));
+  });
+
+  test('teknisi bisa mematikan kabar "jadwal berubah"', () {
+    // Push order_rescheduled memang dikirim ke teknisi (route notify-booking-
+    // change); tanpa baris ini teknisi menerima kabar yang tidak bisa ia atur.
+    final keys = <String>[
+      for (final g in notificationGroupsFor(isTechnician: true))
+        for (final e in g.events) e.key,
+    ];
+    expect(keys, contains('order_rescheduled'));
   });
 
   test('semua key switch ada di daftar key server yang dikenal', () {
@@ -103,6 +125,8 @@ void main() {
     const serverKeys = {
       'payment_confirmed', 'payment_rejected', 'technician_assigned',
       'work_started', 'order_completed', 'order_cancelled', 'order_rescheduled',
+      'refund_update', 'booking_reminder', 'late_start', 'customer_no_show',
+      'extra_charge', 'subscription_due',
       'technician_near', 'technician_approved', 'technician_rejected',
       'new_job_available', 'job_released', 'report_replied',
       'report_status', 'chat_message', 'balance_reminder', 'balance_credited',

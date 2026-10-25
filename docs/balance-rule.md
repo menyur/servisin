@@ -97,6 +97,14 @@ claim_job → {"ok": false, "kode": "saldo_habis", "balance": 0, "error": "..."}
 | `supabase/migrate-piutang-writeoff.sql` | Penghapusan piutang **eksplisit**: kolom `balance_recoveries.kind` (`setoran`/`penghapusan`), tabel `piutang_writeoffs` (alasan wajib + satu pending per teknisi), dan RPC atomik `approve_piutang_writeoff` |
 | `src/lib/piutang-reminder.js` | Pengingat otomatis: pemilihan penerima lewat `pilihPengingatPiutang()` (murni), penanda `balance_reminder_at`, kirim push + email |
 | `src/app/api/cron/piutang-reminder/route.js` | Endpoint cron harian (jadwal di `vercel.json`), idempoten lewat penanda yang sama dengan pengingat manual |
+| `src/lib/balance-reconciliation.js` | Rekonsiliasi saldo: aturan murni `hitungRekonsiliasiSaldo()` + `cariPotonganBelumTercatat()`, pembacaan berhalaman (`.range`), dan pengiriman email ke admin saat selisih |
+| `src/app/api/cron/balance-reconciliation/route.js` | Endpoint cron harian (16:00 UTC / 23:00 WIB) — melaporkan selisih, **tidak** mengoreksinya |
+| `supabase/migrate-admin-balance-adjustment.sql` | RPC atomik `admin_adjust_technician_balance()`: satu baris `adjustment` + saldo berubah dalam satu transaksi, baris profil dikunci `for update` |
+| `supabase/migrate-balance-adjustment-audit.sql` | Kolom `balance_transactions.created_by` + RPC versi berjejak (`auth.uid()`) — dasar riwayat "siapa mengoreksi apa" |
+| `src/lib/balance.js` → `sesuaikanSaldoTeknisi()` | Jalur server koreksi saldo (RPC, bukan dua query terpisah); dipakai aksi admin |
+| `src/app/actions/admin.js` → `koreksiSaldoTeknisiAdmin()` | Aksi admin: `requireAdmin`, alasan wajib, push `balance_adjusted` ke teknisi |
+| `src/components/TechnicianBalancesTab.js` | Tombol **Sesuaikan saldo** di setiap baris + modal dua arah (Tambah/Kurangi) dengan pratinjau saldo akhir |
+| `scripts/verify-balance-reconciliation.mjs` | Probe: invarian saldo = Σ mutasi, ambang & derau pembulatan, deteksi potongan hilang, pembacaan berhalaman, kapan cron diam, wiring jadwal/auth. `--live` = baca data nyata tanpa email |
 | `scripts/verify-piutang-writeoff.mjs` | Probe offline: keranjang umur + aturan pengingat (idempoten) + wiring penghapusan (SQL, aksi admin, UI). Dengan `--live` ia juga membuktikan pada database nyata: umur dari ledger sungguhan, penanda pengingat tertulis, pengajuan ganda ditolak, teknisi ditolak RPC, dan persetujuan admin menutup piutang + menaikkan saldo sebagai satu transaksi (data uji dibersihkan, sisa 0) |
 | `scripts/verify-e2e-lifecycle.mjs` | Asersi E2E: potongan penuh = komisi + biaya app, idempoten, saldo berkurang tepat sekali, tidak ada sisa tak tertagih |
 | `scripts/verify-e2e-technician-claim.mjs` | Bukti perilaku hidup: saldo 0 → klaim ditolak (`saldo_habis`); saldo terisi → klaim berhasil |
@@ -261,6 +269,81 @@ terjadwal (`/api/cron/piutang-reminder`, harian):
 
 Mode uji: `?dry=1` (hitung saja, tanpa menulis) dan `?kirim=0` (tandai tanpa
 push/email), plus `?days=` / `?ulang=` untuk mengubah ambang & jeda.
+
+### Rekonsiliasi saldo harian (BERLAKU)
+
+Invarian `saldo = Σ mutasi` selama ini hanya diperiksa **kalau ada yang
+memeriksanya**: teknisi membuka layar Saldo (kartu "Ada selisih …") atau admin
+menjalankan probe manual. Dua kejadian itu bisa tidak pernah terjadi selama
+berbulan-bulan, padahal selisih di sini selalu berarti uang — saldo naik tanpa
+baris mutasi (koreksi langsung di database), potongan yang gagal tertulis, atau
+setoran tercatat dua kali.
+
+`/api/cron/balance-reconciliation` (harian, 16:00 UTC) menutup celah itu:
+
+* **yang dijumlahkan**: seluruh baris `balance_transactions` per teknisi, lalu
+dibandingkan dengan `profiles.balance`. Selisih ≥ Rp 1 dilaporkan (pecahan di
+bawah itu adalah derau pembulatan `numeric`, bukan temuan);
+* **pemeriksaan kedua**: pesanan `completed` berteknisi yang belum punya baris
+`earning` — komisi + biaya app yang tidak pernah masuk laporan walau saldonya
+"cocok";
+* **diam saat sehat**: tanpa selisih, tidak ada email sama sekali. Peringatan
+diulang tiap hari selama selisihnya masih ada — itu memang tujuannya;
+* **pembacaan berhalaman**: PostgREST memotong hasil (default 1000 baris). Data
+terpotong akan tampak sebagai selisih di SEMUA teknisi, jadi satu halaman yang
+gagal membatalkan seluruh pemeriksaan (`error`), bukan menghasilkan angka
+separuh;
+* **tidak mengoreksi apa pun**: koreksi otomatis menutupi penyebab yang justru
+perlu dilihat manusia. Email menyebut teknisi, saldo, Σ mutasi, dan selisihnya
+supaya penelusuran bisa langsung dimulai dari tab Saldo Aktif;
+* **bisa dimatikan per admin**: event `balance_mismatch` di tab "Notif Email
+Admin" (tabel `admin_notification_optouts`).
+
+Mode uji: `?dry=1` (hitung saja), `?kirim=0` (tanpa email), `?paksa=1` (kirim
+walau semua cocok), `?toleransi=` (ambang rupiah).
+
+### Koreksi saldo oleh admin (BERLAKU)
+
+Rekonsiliasi hanya bisa menunjuk selisih; koreksinya harus bisa dilakukan tanpa
+menulis SQL manual. Panel **Saldo Aktif → Sesuaikan saldo** punya dua arah:
+
+* **Tambah** — perilaku lama: baris `topup` (setoran manual/bonus), dihitung di
+  "Total Setor Disetujui";
+* **Kurangi** — **koreksi**: baris `adjustment` (bukan setoran), jadi total setor
+  tidak ikut berubah. Inilah jalan perbaikan ketika saldo lebih besar daripada
+  Σ mutasinya.
+
+Aturan yang membuat koreksi tidak menciptakan selisih baru:
+
+* **satu transaksi DB** (`admin_adjust_technician_balance`): baris ledger dan
+  kolom saldo ditulis bersama, dengan baris profil dikunci `for update` — dua
+  koreksi bersamaan mengantre, bukan saling menimpa. Menulis keduanya dari
+  aplikasi (dua query) akan gagal separuh saat jaringan putus dan menghasilkan
+  selisih yang besok muncul lagi;
+* **alasan wajib** (min. 5 karakter) dan disimpan di catatan baris ledger — itu
+  jejak audit yang membedakan koreksi sah dari perubahan saldo tanpa catatan;
+* **pratinjau** saldo akhir memakai aturan murni `rencanaKoreksiSaldo()`
+  (`src/lib/pricing.js`), termasuk peringatan bila koreksi membuat saldo minus
+  (= piutang, dan teknisi tidak bisa mengambil pekerjaan sampai saldo di atas 0);
+* hanya admin (`is_admin()` di dalam RPC + `requireAdmin` di aksi); teknisi yang
+  menembak langsung ditolak, anon tidak punya izin EXECUTE sama sekali;
+* teknisi **dikabari** lewat push (`balance_adjusted`): saldo yang berkurang tanpa
+  pemberitahuan akan terbaca sebagai uang hilang.
+
+Setelah koreksi, invarian `saldo = Σ mutasi` kembali utuh — persis yang diperiksa
+cron pada jadwal berikutnya.
+
+**Riwayat & audit.** Tab Saldo Aktif punya bagian **Riwayat koreksi saldo** (bisa
+dicari lewat kotak pencarian yang sama): waktu, teknisi, nominal bertanda, alasan,
+dan admin pelakunya. Pelaku dibaca dari `balance_transactions.created_by` yang
+diisi `auth.uid()` di dalam RPC — bukan dari catatan teks yang bisa dipalsukan atau
+salah ketik. Baris lama (sebelum migrasi audit) tampil sebagai **"tidak tercatat"**:
+menebak pelaku lebih buruk daripada mengaku kosong. Panel juga menampilkan total
+penambahan dan pengurangan, jadi koreksi yang berulang pada teknisi yang sama
+langsung terlihat.
+
+Bila migrasi audit belum dijalankan, panel tetap terbuka: kolom `created_by`
+dibaca dengan fallback, dan hanya kolom "Admin" yang kosong.
 
 ### Celah yang masih terbuka
 

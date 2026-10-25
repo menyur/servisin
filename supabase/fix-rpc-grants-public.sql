@@ -123,11 +123,14 @@ begin
       ('booking_slot_start(date, text)', 'authenticated, service_role'),
       ('booking_technician_info(uuid)', 'authenticated, service_role'),
       ('booking_warranty_info(uuid)', 'authenticated, service_role'),
+      -- Status pengembalian dana (migrate-booking-refunds.sql). Penjaganya di
+      -- dalam RPC: hanya pemilik pesanan, teknisi yang ditugaskan, atau admin.
+      ('booking_refund_info(uuid)', 'authenticated, service_role'),
       ('bookings_nearby(double precision, double precision, double precision, integer)', 'authenticated, service_role'),
       ('cancel_account_deletion()', 'authenticated, service_role'),
       ('cancel_booking(uuid, text)', 'authenticated, service_role'),
       ('claim_job(uuid)', 'authenticated, service_role'),
-      ('create_booking_security_definer(uuid, date, text, text, uuid, text, text, text, uuid, double precision, double precision)', 'authenticated, service_role'),
+      ('create_booking_security_definer(uuid, date, text, text, uuid, text, text, text, uuid, double precision, double precision, integer, jsonb, numeric)', 'authenticated, service_role'),
       ('create_warranty_claim(uuid, text)', 'authenticated, service_role'),
       ('decide_warranty_claim(uuid, text, text, date, text)', 'authenticated, service_role'),
       -- Durasi garansi efektif (migrate-warranty-settings.sql): dipakai RPC
@@ -141,11 +144,38 @@ begin
       ('reschedule_booking(uuid, date, text)', 'authenticated, service_role'),
       ('set_job_status(uuid, text)', 'authenticated, service_role'),
       ('technicians_nearby_booking(uuid, double precision)', 'authenticated, service_role'),
+      -- Kartu skor teknisi (migrate-technician-scorecard.sql): hanya admin, dan
+      -- penjaganya ADA DI DALAM badan fungsi (public.is_admin() → exception),
+      -- jadi teknisi yang menembak langsung tetap ditolak tanpa "permission denied".
+      ('technician_scorecard(integer)', 'authenticated, service_role'),
+      -- Kartu "Kinerja Saya" (migrate-technician-my-scorecard.sql): TIDAK
+      -- menerima id teknisi (selalu auth.uid()), jadi teknisi hanya bisa
+      -- membaca skornya sendiri; pelanggan mendapat 0 baris.
+      ('my_technician_scorecard(integer)', 'authenticated, service_role'),
+      -- Bukti foto sebelum/sesudah (migrate-job-proofs.sql): hanya teknisi yang
+      -- ditugaskan; penjaganya ada di dalam RPC (bukan sekadar izin EXECUTE).
+      ('attach_job_photo(uuid, text, text)', 'authenticated, service_role'),
+      -- Langganan servis berkala (migrate-service-subscriptions.sql): semuanya
+      -- memakai auth.uid() sebagai pemilik. Hanya pengingat — tidak ada RPC yang
+      -- membuat pesanan atau menagih.
+      ('subscribe_from_booking(uuid, integer)', 'authenticated, service_role'),
+      ('my_subscriptions()', 'authenticated, service_role'),
+      ('cancel_subscription(uuid)', 'authenticated, service_role'),
+      ('advance_subscription(uuid, integer)', 'authenticated, service_role'),
+      -- Kuota slot (migrate-slot-capacity.sql): pemakaian slot hanya berisi
+      -- jumlah, bukan data pesanan. Trigger kuota sendiri tidak diekspos.
+      ('slot_capacity_efektif()', 'authenticated, service_role'),
+      ('booking_slot_usage(date)', 'authenticated, service_role'),
       -- Penghapusan piutang (migrate-piutang-writeoff.sql): dipanggil panel admin.
       -- Diberikan ke `authenticated` (bukan anon) dan penjaganya ADA DI DALAM
       -- badan fungsi (`public.is_admin()` → jawaban `ok=false`), jadi teknisi yang
       -- menembak langsung tetap ditolak tanpa menimbulkan "permission denied".
       ('approve_piutang_writeoff(uuid, text)', 'authenticated, service_role'),
+      -- Koreksi saldo admin (migrate-admin-balance-adjustment.sql): jalan perbaikan
+      -- saat rekonsiliasi menemukan saldo ≠ Σ mutasi. Penjaganya di dalam fungsi
+      -- (`public.is_admin()`), jadi teknisi yang menembak langsung ditolak dengan
+      -- `ok=false`, bukan "permission denied".
+      ('admin_adjust_technician_balance(uuid, numeric, text)', 'authenticated, service_role'),
       ('upsert_my_location(double precision, double precision)', 'authenticated, service_role'),
       -- "Teknisi menuju lokasi" (migrate-technician-trip-share.sql):
       --   * 4 RPC dipanggil aplikasi (klien pelanggan & teknisi);

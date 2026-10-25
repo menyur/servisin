@@ -68,7 +68,7 @@ hanya menghapus kebingungan "paket mana yang benar" saat membaca manifes atau lo
 | # | Langkah | Status |
 |---|---|---|
 | 1 | App Android `id.fixify.app` didaftarkan di Firebase (`fixify-f337a`) + `google-services.json` baru dipasang | ✅ 18 Okt 2026 — entri `id.fixify.app` ada di berkas |
-| 2 | **SHA-1 rilis didaftarkan untuk app itu** (`AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68`) | ⛔ **belum** — `npm run verify:apk-signin` merah: tidak ada OAuth client bertipe Android untuk paket ini, jadi login Google akan gagal di perangkat (ApiException 10 / error 12500) walau build & unggahan lancar |
+| 2 | **SHA-1 rilis didaftarkan untuk app itu** (`AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68`) | ⛔ **belum** — `npm run verify:apk-signin` merah: tidak ada OAuth client bertipe Android untuk paket ini. Akibatnya jalur **native** (SDK Google) gagal (`ApiException 10`); login Google **tetap berjalan** karena app otomatis jatuh ke OAuth browser (terbukti di emulator, 18 Okt 2026). Bedanya: pengguna melewati satu lompatan browser dan idToken native tidak dipakai |
 | 3 | OAuth client **Android** untuk paket ini di Google Cloud Console (+ SHA-1 debug bila menguji di emulator) | belum — biasanya terbuat otomatis saat langkah 2 dikerjakan; setelah itu unduh ulang `google-services.json` agar buktinya ikut masuk berkas |
 | 4 | **Build AAB baru** setelah paket pindah | ✅ build 42 (lihat §1) |
 | 5 | Setelah rilis pertama **diterima** Play: tambahkan SHA-1 dari **Play Console → Test and release → Setup → App signing** ke client Android yang sama | belum (menunggu rilis diterima) |
@@ -254,7 +254,7 @@ Sumber: [App testing requirements for new personal developer accounts](https://s
 | *"APK tidak dapat diunggah"* pada aplikasi baru | aplikasi baru wajib AAB | unggah `.aab` (§3); APK hanya untuk Internal App Sharing (§5) |
 | *"harus memiliki nama paket …"* + *"otoritas penyedia konten … digunakan oleh developer lain"* | AAB masih ber-paket `com.fixify.app`, padahal paket itu milik developer lain dan aplikasi Play Anda memakai `id.fixify.app` | kerjakan §0.1 lalu **build ulang**; AAB lama tidak akan diterima |
 | Build gagal *"No matching client found for package name 'id.fixify.app'"* | `google-services.json` belum diganti untuk paket baru | daftarkan app Android `id.fixify.app` di Firebase (§0.1 langkah 1) |
-| Login Google gagal di APK (ApiException 10 / error 12500) setelah pindah paket | belum ada OAuth client Android untuk `id.fixify.app` + SHA-1 | buat client Android (§0.1 langkah 2) dan tambahkan SHA-1 Play App Signing (§0.1 langkah 3) |
+| Chrome/browser terbuka saat menekan "Masuk dengan Google" | jalur native gagal (`ApiException 10`/`12500`) karena belum ada OAuth client Android untuk `id.fixify.app` + SHA-1 | selesaikan login di browser (app menunggu deep link); untuk menghilangkan lompatan itu, buat client Android (§0.1 langkah 2) dan tambahkan SHA-1 Play App Signing (§0.1 langkah 3) |
 | *"Version code 41 telah digunakan"* | nomor build dipakai ulang | bangun rilis baru (nomor naik otomatis), jangan unggah ulang berkas lama |
 | Peringatan *upload key* berbeda / unggahan ditolak | AAB ditandatangani kunci lain | periksa keystore & secrets ([keystore-recovery.md](./keystore-recovery.md) §3); hindari reset kunci sebelum dicek |
 | Tester melihat "aplikasi tidak ditemukan" | belum menekan tautan opt-in | kirim ulang tautan opt-in (§4 langkah 2) |
@@ -268,7 +268,8 @@ Sumber: [App testing requirements for new personal developer accounts](https://s
 - [x] Paket pindah ke `id.fixify.app`: `applicationId` + `namespace` + `google-services.json` baru (build 42)
 - [x] AAB **baru** dibangun (build 42: paket `id.fixify.app`, versionCode 42, tanda tangan upload key)
 - [x] `npm run verify:play` lulus penuh (exit 0)
-- [ ] **SHA-1 rilis didaftarkan** untuk app Android `id.fixify.app` → `npm run verify:apk-signin` hijau (sekarang merah: login Google akan gagal tanpa ini)
+- [x] **Smoke login Google di build 42** lulus penuh di emulator (18 Okt 2026): `ADB=<adb> npm run smoke:google -- --device=<serial> --app=id.fixify.app` → exit 0 (provider Web, 3 deep link, app boot, sesi terbentuk)
+- [ ] **SHA-1 rilis didaftarkan** untuk app Android `id.fixify.app` → `npm run verify:firebase-client` hijau (gate CI: build APK **digagalkan** selama `google-services.json` belum memuat client Android ber-SHA-1 rilis; sekarang merah ⇒ jalur native gagal dan app jatuh ke OAuth browser)
 - [ ] Play App Signing diterima saat unggahan pertama
 - [ ] AAB diunggah ke **Internal testing** → tester opt-in → smoke uji di perangkat
 - [ ] APK (opsional) dibagikan lewat **Internal app sharing** (≤100 pengguna, 60 hari)

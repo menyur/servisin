@@ -6,8 +6,11 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api.dart';
+import '../balance_notice.dart';
 import '../chat_unread.dart';
+import '../inbox.dart';
 import '../job_filter.dart';
+import '../job_queue.dart';
 import '../models.dart';
 import '../report_seen.dart';
 import '../theme.dart';
@@ -225,7 +228,12 @@ class FloatingCard extends StatelessWidget {
 /// Badge status pesanan dengan warna semantik (mint=selesai, amber=diproses, coral=ditolak).
 class StatusBadge extends StatelessWidget {
   final BookingStatus status;
-  const StatusBadge(this.status, {super.key});
+
+  /// Pesanan sudah punya teknisi. `paid` + teknisi ada BUKAN "menunggu
+  /// penugasan" — lihat [BookingStatusX.labelFor].
+  final bool hasTechnician;
+
+  const StatusBadge(this.status, {super.key, this.hasTechnician = false});
 
   Color get _bg => switch (status) {
         BookingStatus.completed => AppColors.mintTint,
@@ -246,7 +254,7 @@ class StatusBadge extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration:
             BoxDecoration(color: _bg, borderRadius: BorderRadius.circular(999)),
-        child: Text(status.label,
+        child: Text(status.labelFor(hasTechnician: hasTechnician),
             style: TextStyle(
                 color: _fg, fontSize: 11, fontWeight: FontWeight.w700)),
       );
@@ -683,6 +691,17 @@ bool shouldGoHomeAfterSignIn(String currentRoute) =>
 final StreamController<BookingUpdate> bookingUpdatesTick =
     StreamController<BookingUpdate>.broadcast();
 
+/// Pesanan yang SUDAH diperbarui di dalam aplikasi (mis. pelanggan menyetujui
+/// biaya tambahan di layar detail).
+///
+/// Berbeda dari [bookingUpdatesTick] yang hanya membawa kabar "ada perubahan"
+/// (penerima lalu memuat ulang dari server), stream ini membawa OBJEK pesanan
+/// terbarunya. Daftar Pesanan bisa mengganti satu baris di tempat, jadi total
+/// baru terlihat seketika — tanpa menunggu tick realtime, tanpa kedipan
+/// indikator muat.
+final StreamController<Booking> bookingPatches =
+    StreamController<Booking>.broadcast();
+
 /// Posisi tab "Pesanan" pada bar navigasi — sama untuk pelanggan dan teknisi.
 const int kOrdersTabIndex = 1;
 
@@ -721,13 +740,23 @@ final ValueNotifier<int> openReportsRequest = ValueNotifier<int>(0);
 class NotificationTap {
   final String target;
 
-  /// Diisi notifikasi chat. Shell memakai ini untuk membuka detail pesanan
-  /// dan ruang chat, bukan sekadar mendarat di daftar Pesanan.
+  /// Diisi notifikasi yang menunjuk satu pesanan (chat, no-show, biaya
+  /// tambahan). Shell memakai ini untuk membuka detail pesanan, bukan sekadar
+  /// mendarat di daftar Pesanan.
   final String? bookingId;
+
+  /// `true` hanya untuk notifikasi chat: detail pesanan lalu percakapan
+  /// langsung dibuka di atasnya. No-show & biaya tambahan cukup detail —
+  /// pengguna harus melihat tombol "Saya di sini" / persetujuan, bukan chat.
+  final bool openChat;
   final DateTime at;
 
-  NotificationTap(this.target, {this.bookingId, DateTime? at})
-      : at = at ?? DateTime.now();
+  NotificationTap(
+    this.target, {
+    this.bookingId,
+    this.openChat = false,
+    DateTime? at,
+  }) : at = at ?? DateTime.now();
 }
 
 /// Batas umur titipan notifikasi. Saat diketuk, Android bisa MEMBANGUN ULANG
@@ -798,6 +827,21 @@ final ValueNotifier<int> unseenBookingUpdates = ValueNotifier<int>(0);
 /// dibuka/kembali aktif; kembali 0 begitu daftar Laporan dilihat.
 /// Aturan hitungnya: `countUnseenReports` di lib/report_seen.dart.
 final ValueNotifier<int> unseenReportUpdates = ValueNotifier<int>(0);
+
+/// Jumlah keputusan setor/tarik (disetujui/ditolak) yang belum dibaca teknisi.
+///
+/// Notifikasi DALAM APLIKASI: ditampilkan sebagai penanda di strip saldo tab
+/// Pekerjaan dan banner "Kabar saldo" di layar Saldo, tanpa bergantung pada
+/// push/izin notifikasi Android. Dihitung ulang dari server saat peran terbaca
+/// dan setiap app kembali ke depan layar (aturan: `unseenBalanceDecisions`).
+final ValueNotifier<int> unseenBalanceNotices = ValueNotifier<int>(0);
+
+/// Jumlah kabar Kotak Masuk yang belum dibaca (saldo + pesanan + laporan).
+///
+/// Satu sumber untuk lonceng di Beranda (pelanggan & teknisi) dan Pekerjaan:
+/// dihitung shell saat peran terbaca, setiap app kembali ke depan, dan tiap
+/// event realtime pesanan/laporan; turun ke 0 saat kotak masuk dibuka.
+final ValueNotifier<int> unseenInboxUpdates = ValueNotifier<int>(0);
 
 /// Jumlah pekerjaan tersedia SAAT INI untuk teknisi (badge di ikon tab
 /// Pekerjaan). Berbeda dengan dua badge di atas yang menghitung *kejadian
@@ -922,6 +966,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// timer & event realtime tiba bersamaan.
   bool _refreshingJobCount = false;
 
+  /// Kabar saldo yang sudah diumumkan lewat SnackBar pada sesi ini (kunci
+  /// `id:status`), supaya resume berulang tidak mengulang pesan yang sama.
+  final Set<String> _announcedBalanceNotices = <String>{};
+
+  /// Cegah beberapa permintaan hitung kabar kotak masuk bertumpuk.
+  bool _refreshingInbox = false;
+
   /// Tab sesuai peran: teknisi mendapat tab **Pekerjaan**
   /// (ambil pekerjaan) di posisi tengah, menggantikan Voucher.
   List<Widget> get _screens => _isTechnician
@@ -974,6 +1025,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     pendingNotificationTap.addListener(_onPendingNotification);
     if (widget.initialIndex == kOrdersTabIndex) unseenBookingUpdates.value = 0;
     _detectRole();
+    // Antrean luring dari sesi sebelumnya (app ditutup saat sinyal buruk).
+    unawaited(JobQueue.kirimSemua());
     _initBookingRealtime();
     _initReportRealtime();
     _initChatRealtime();
@@ -1040,6 +1093,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       }
       if (alihkanKeProfil) mainTabIndex.value = kProfileTabIndex;
       if (p.role == 'technician') _startJobCountRefresh();
+      // Kabar saldo (setoran/penarikan yang sudah diputuskan admin) — muncul
+      // walau push tidak sampai karena izin notifikasi HP mati.
+      if (p.role == 'technician') unawaited(_refreshBalanceNotices());
+      // Angka lonceng kotak masuk di Beranda — untuk kedua peran.
+      unawaited(_refreshInboxBadge());
       if (p.role == 'technician' && kurang.isNotEmpty) {
         _ingatkanLengkapiProfil();
       }
@@ -1140,8 +1198,11 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// tahu pengguna, lalu hitung ulang angka badge dari server — seluruh alurnya
   /// ada di [handleReportUpdate] supaya bisa diuji deterministik.
   void _onReportUpdate(String uid, ReportUpdate u) {
-    handleReportUpdate(context, u,
-        refreshBadge: () => unawaited(_refreshReportBadge(uid)));
+    handleReportUpdate(context, u, refreshBadge: () {
+      unawaited(_refreshReportBadge(uid));
+      // Balasan admin juga menambah kabar di kotak masuk.
+      unawaited(_refreshInboxBadge());
+    });
   }
 
   /// Kembali dari background/layar mati: websocket tidak menerima apa pun
@@ -1155,6 +1216,46 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     // Dart — hitung ulang dari server begitu app kembali ke depan.
     unawaited(ChatUnreadService.refresh());
     if (_isTechnician) unawaited(_refreshJobCount());
+    // Keputusan admin atas setor/tarik bisa tiba saat app di background.
+    if (_isTechnician) unawaited(_refreshBalanceNotices());
+    // Kabar pesanan/laporan yang tiba saat app tidak aktif.
+    unawaited(_refreshInboxBadge());
+    // Perubahan status pekerjaan yang tersimpan saat sinyal putus: kirim
+    // sekarang. Diam bila antrean kosong atau masih offline.
+    unawaited(JobQueue.kirimSemua());
+  }
+
+  /// Hitung jumlah kabar kotak masuk yang belum dibaca (sumber sama dengan
+  /// layar Kotak Masuk: `lib/inbox.dart`). Gagal → angka terakhir dipertahankan.
+  Future<void> _refreshInboxBadge() async {
+    if (_refreshingInbox) return;
+    _refreshingInbox = true;
+    try {
+      final data = await loadInbox(technician: _isTechnician);
+      if (!mounted) return;
+      unseenInboxUpdates.value = data.unread;
+    } catch (_) {
+      // badge basi lebih baik daripada badge hilang
+    } finally {
+      _refreshingInbox = false;
+    }
+  }
+
+  /// Perbarui kabar saldo teknisi: angka di strip saldo + SnackBar sekali per
+  /// keputusan (per sesi). SnackBar tidak menandai kabar sebagai "dibaca" —
+  /// penanda tetap ada sampai teknisi menekan "Mengerti" di layar Saldo.
+  Future<void> _refreshBalanceNotices() async {
+    if (!_isTechnician) return;
+    final notices = await loadUnseenBalanceDecisions();
+    if (!mounted) return;
+    unseenBalanceNotices.value = notices.length;
+
+    final baru = <BalanceRequest>[];
+    for (final n in notices) {
+      if (_announcedBalanceNotices.add('${n.id}:${n.status}')) baru.add(n);
+    }
+    final pesan = balanceNoticeSnack(baru);
+    if (pesan != null) showSnack(context, pesan);
   }
 
   /// Pasang langganan realtime bila user sudah login, atau bongkar bila
@@ -1163,7 +1264,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     final uid = Api.session?.user.id;
     if (uid != null && _realtimeUid == null) {
       _realtimeUid = uid;
-      _realtimeCleanup = Api.subscribeBookingUpdates(uid, _onBookingUpdate);
+      _realtimeCleanup = Api.subscribeBookingUpdates(
+        uid,
+        _onBookingUpdate,
+        // Admin memutuskan refund: tidak ada baris bookings yang berubah, jadi
+        // lonceng kotak masuk pelanggan dihitung ulang dari sini.
+        onRefundUpdate: () => unawaited(_refreshInboxBadge()),
+      );
     } else if (uid == null && _realtimeUid != null) {
       _teardownRealtime();
     }
@@ -1179,6 +1286,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// ringan dan siarkan tick agar layar terkait memuat ulang datanya.
   void _onBookingUpdate(BookingUpdate u) {
     bookingUpdatesTick.add(u);
+    // Status pesanan berubah = kabar baru di kotak masuk (kedua peran).
+    unawaited(_refreshInboxBadge());
 
     // Diamkan notif untuk event hasil aksi sendiri (mis. teknisi menandai
     // selesai) — snack-nya sudah tampil dari hasil RPC di layar pelaku.
@@ -1186,7 +1295,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
     String pesan;
     if (u.statusChanged) {
-      pesan = 'Pesanan #${u.code}: ${u.statusValue.label}';
+      pesan =
+          'Pesanan #${u.code}: ${u.statusValue.labelFor(hasTechnician: u.technicianId != null)}';
     } else if (u.technicianAssigned) {
       pesan = 'Teknisi sudah ditugaskan untuk pesanan #${u.code}.';
     } else {
@@ -1249,23 +1359,30 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _select(tabIndexForNotificationTarget(tap.target, _isTechnician));
     final bookingId = tap.bookingId;
     if (bookingId != null && bookingId.isNotEmpty) {
-      unawaited(_bukaPesananDariNotifikasi(bookingId));
+      unawaited(_bukaPesananDariNotifikasi(bookingId, openChat: tap.openChat));
     }
   }
 
-  /// Notifikasi chat → detail pesanan, lalu chat-nya langsung terbuka.
+  /// Notifikasi yang membawa id pesanan → detail pesanan itu.
+  ///
+  /// Chat membuka `/order-detail-chat` (detail + percakapan), sedangkan
+  /// no-show & biaya tambahan cukup `/order-detail` supaya tombol tindakan
+  /// ("Saya di sini" / setujui biaya) langsung terlihat tanpa tertutup chat.
   ///
   /// Kalau pesanan sudah tidak bisa dibaca (dihapus/dipindahkan), pengguna
   /// tetap mendarat di tab Pesanan; jangan biarkan notifikasi membuka layar
   /// kosong atau menggagalkan seluruh alur startup.
-  Future<void> _bukaPesananDariNotifikasi(String bookingId) async {
+  Future<void> _bukaPesananDariNotifikasi(
+    String bookingId, {
+    bool openChat = false,
+  }) async {
     try {
       final booking = await Api.fetchBookingById(bookingId);
       if (!mounted || booking == null) return;
       final navigator = navigatorKey.currentState;
       if (navigator == null) return;
       await navigator.pushNamed(
-        '/order-detail-chat',
+        openChat ? '/order-detail-chat' : '/order-detail',
         arguments: booking,
       );
     } catch (_) {
@@ -1341,7 +1458,8 @@ class _SesiTanpaProfilScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.person_off_outlined, size: 46, color: AppColors.inkSoft),
+                const Icon(Icons.person_off_outlined,
+                    size: 46, color: AppColors.inkSoft),
                 const SizedBox(height: 14),
                 const Text(
                   'Akunmu belum punya data profil',
@@ -1354,7 +1472,8 @@ class _SesiTanpaProfilScreen extends StatelessWidget {
                   'belum bisa dipakai (termasuk mengajukan hapus akun). Hubungi admin '
                   'lewat halaman Panduan, lalu masuk kembali setelah akunmu diperbaiki.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.inkSoft, fontSize: 13, height: 1.5),
+                  style: TextStyle(
+                      color: AppColors.inkSoft, fontSize: 13, height: 1.5),
                 ),
                 const SizedBox(height: 18),
                 // FilledButton bawaan tema — sengaja bukan GradientButton milik

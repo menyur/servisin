@@ -34,16 +34,22 @@ void main() {
 
   test('claimJob mengirim event technician_assigned saat sukses', () {
     final blok = _fungsi(api, 'claimJob');
-    expect(blok.contains("notifyBookingStatus(bookingId, 'technician_assigned')"),
+    expect(
+        blok.contains("notifyBookingStatus(bookingId, 'technician_assigned')"),
         isTrue,
-        reason: 'klaim pekerjaan harus memberi tahu pelanggan (teknisi ditugaskan)');
+        reason:
+            'klaim pekerjaan harus memberi tahu pelanggan (teknisi ditugaskan)');
     expect(blok.contains('if (ok)'), isTrue,
         reason: 'notifikasi hanya saat RPC sukses');
   });
 
   test('setJobStatus memetakan status ke event yang benar', () {
     final blok = _fungsi(api, 'setJobStatus');
-    expect(blok.contains("status == 'completed' ? 'order_completed' : 'work_started'"),
+    // Toleran terhadap pembungkusan baris `dart format` — yang dijaga adalah
+    // pemetaannya, bukan tata letak sumbernya.
+    expect(
+        RegExp(r"status\s*==\s*'completed'\s*\?\s*'order_completed'\s*:\s*'work_started'")
+            .hasMatch(blok),
         isTrue,
         reason: 'mulai → work_started, selesai → order_completed');
     expect(blok.contains('if (ok)'), isTrue);
@@ -61,10 +67,35 @@ void main() {
 /// Ambil isi satu DEKLARASI method `static … nama(` (bukan pemanggilannya)
 /// sampai method berikutnya. Cukup untuk pemeriksaan sumber; tidak perlu
 /// parser Dart penuh.
+///
+/// Toleran terhadap tipe kembalian yang dibungkus `dart format` ke baris
+/// berikutnya: mulai dari `static` TERAKHIR sebelum nama method, bukan dari
+/// baris yang harus memuat nama itu juga.
 String _fungsi(String sumber, String nama) {
-  final m = RegExp('\n  static [^\n]*?\\b$nama\\(').firstMatch(sumber);
-  if (m == null) return '';
-  final setelah = sumber.substring(m.start + 1);
-  final berikut = setelah.indexOf('\n  static ', 10);
-  return berikut > 0 ? setelah.substring(0, berikut) : setelah;
+  final baris = sumber.split('\n');
+  final pola = RegExp('\\b$nama\\(');
+  for (var i = 0; i < baris.length; i++) {
+    if (!pola.hasMatch(baris[i])) continue;
+    var mulai = i;
+    // Tipe kembalian bisa dibungkus ke baris sebelumnya oleh `dart format`;
+    // deklarasinya tetap dimulai dari baris yang diawali `static`.
+    if (!baris[i].trimLeft().startsWith('static ')) {
+      var j = i - 1;
+      while (j >= 0 && baris[j].trim().isEmpty) {
+        j--;
+      }
+      if (j < 0 || !baris[j].trimLeft().startsWith('static ')) continue;
+      // Baris `static … async {` yang menjadi AWAL BADAN method bukan tanda
+      // tangan: pemanggilan di baris berikutnya bukan deklarasinya.
+      if (baris[j].trimRight().endsWith('{')) continue;
+      mulai = j;
+    }
+    final blok = <String>[];
+    for (var k = mulai; k < baris.length; k++) {
+      if (k > mulai && baris[k].trimLeft().startsWith('static ')) break;
+      blok.add(baris[k]);
+    }
+    return blok.join('\n');
+  }
+  return '';
 }

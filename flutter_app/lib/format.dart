@@ -27,6 +27,19 @@ String formatRupiah(num n) {
   return _rupiah.format(n);
 }
 
+/// Luas area ala Indonesia: "12 m²", "12,5 m²", "12,25 m²".
+///
+/// Dipakai wizard & struk untuk layanan per meter persegi (cat dinding).
+/// Sengaja tidak memakai NumberFormat locale supaya tetap benar walau data
+/// locale belum termuat (cold start / deep link).
+String formatArea(num? area) {
+  final a = area?.toDouble();
+  if (a == null || !a.isFinite || a <= 0) return '-';
+  var teks = a.toStringAsFixed(2);
+  teks = teks.replaceFirst(RegExp(r'\.?0+$'), '');
+  return '${teks.replaceAll('.', ',')} m²';
+}
+
 String formatDateId(String isoDate) {
   final d = DateTime.tryParse(isoDate);
   if (d == null) return isoDate;

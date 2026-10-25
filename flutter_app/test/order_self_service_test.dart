@@ -95,10 +95,11 @@ void main() {
       expect(boleh(), isTrue);
     });
 
-    test('bukti bayar sudah diunggah & belum ditolak → TIDAK boleh', () {
-      // Belum ada alur refund: membatalkan setelah transfer hanya menyisakan
-      // uang tanpa jalan kembali, jadi pelanggan diarahkan ke admin.
-      expect(boleh(paymentProofUrl: 'proofs/x.jpg'), isFalse);
+    test('bukti bayar sudah diunggah → tetap boleh (refund mengantre otomatis)', () {
+      // Sejak migrate-booking-refunds.sql, server membuat baris pengembalian
+      // dana saat pembatalan. Memblokir di aplikasi hanya membuat tombol lebih
+      // ketat daripada server.
+      expect(boleh(paymentProofUrl: 'proofs/x.jpg'), isTrue);
     });
 
     test('bukti ditolak admin → boleh lagi (uang memang tidak diterima)', () {
@@ -275,12 +276,14 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('bukti bayar sudah diunggah: tombol batal/ubah jadwal tidak muncul',
+    testWidgets('bukti bayar sudah diunggah: tombol batal/ubah jadwal TETAP muncul',
         (tester) async {
+      // Uang yang sudah terkirim tidak lagi menyandera pelanggan — server
+      // membuat catatan refund otomatis, jadi aksinya harus terlihat.
       await _pump(tester, _booking(paymentProofUrl: 'proofs/x.jpg'), 'cust-1');
 
-      expect(find.text('Ubah Jadwal'), findsNothing);
-      expect(find.text('Batalkan'), findsNothing);
+      expect(find.text('Ubah Jadwal'), findsOneWidget);
+      expect(find.text('Batalkan'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 

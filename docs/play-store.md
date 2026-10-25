@@ -88,7 +88,9 @@ Langkah:
    manager — lihat [keystore-recovery](./keystore-recovery.md).
 3. Bila kunci OAuth Android Anda kelak berubah (rotasi keystore), perbarui juga
    SHA-1 di Google Cloud Console **dan** `flutter_app/android/known-sha1.txt`;
-   tanpa itu "Masuk dengan Google" gagal dengan error 12500 setelah aplikasi terbit.
+   tanpa itu jalur native "Masuk dengan Google" gagal (`ApiException 10`) dan app
+   terpaksa melewati OAuth browser — login tetap bisa, tetapi ada satu lompatan
+   ekstra bagi pengguna.
 
 ---
 

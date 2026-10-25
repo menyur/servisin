@@ -5,6 +5,9 @@
  */
 import PDFDocument from "pdfkit";
 
+import { bookingItems, bookingQuantity } from "./booking-quantity.js";
+import { formatArea } from "./area-pricing.js";
+
 function money(doc, left, right, bold = false) {
   doc
     .font(bold ? "Helvetica-Bold" : "Helvetica")
@@ -38,6 +41,14 @@ export function buildReceiptPdf({ booking, customerName, customerPhone }) {
   const done = new Promise((resolve) => doc.on("end", () => resolve(Buffer.concat(chunks))));
 
   const b = booking;
+  // Jumlah unit (bookings.quantity) — ditulis hanya bila lebih dari satu,
+  // sama dengan struk aplikasi Flutter dan ReceiptContent.
+  const qty = bookingQuantity(b);
+  const items = bookingItems(b);
+  const multi = items.length > 1;
+  // Luas area (m²) — harga satuan pesanan area adalah rupiah per m².
+  const area = Number(b.area) > 0 ? Number(b.area) : null;
+  const isArea = area !== null;
   const created = b.created_at
     ? new Date(b.created_at).toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })
     : "-";
@@ -63,6 +74,8 @@ export function buildReceiptPdf({ booking, customerName, customerPhone }) {
   row(doc, "Nama Pelanggan", customerName || "-");
   row(doc, "Telepon", customerPhone || "-");
   row(doc, "Layanan", b.services?.name || "-");
+  if (qty > 1) row(doc, "Jumlah Unit", `${qty} unit`);
+  if (isArea) row(doc, "Luas Area", formatArea(area));
   row(doc, "Jadwal", `${b.booking_date} · ${b.booking_time}`);
   row(doc, "Alamat", b.address);
   row(doc, "Metode Bayar", paymentLabel(b.payment_method));
@@ -83,8 +96,24 @@ export function buildReceiptPdf({ booking, customerName, customerPhone }) {
   // ---------- rincian biaya ----------
   doc.moveTo(48, doc.y + 8).lineTo(doc.page.width - 48, doc.y + 8).dash(3, { space: 3 }).strokeColor("#D7E7F0").stroke().undash();
   doc.y += 16;
-  money(doc, "Subtotal layanan", rupiah(b.subtotal_price));
+  // Multi-varian: satu baris harga per varian, lalu subtotal gabungan.
+  if (multi) {
+    for (const it of items) money(doc, `${it.label} ×${it.quantity}`, rupiah(it.lineTotal));
+  } else if (isArea) {
+    money(doc, "Harga per m²", rupiah(Number(b.subtotal_price || 0) / area));
+  } else if (qty > 1) {
+    money(doc, "Harga satuan", rupiah(Number(b.subtotal_price || 0) / qty));
+  }
+  money(
+    doc,
+    isArea ? `Subtotal layanan (${formatArea(area)})` : qty > 1 ? `Subtotal layanan (${qty} unit)` : "Subtotal layanan",
+    rupiah(b.subtotal_price)
+  );
   money(doc, "Biaya aplikasi", rupiah(b.app_fee));
+  // Hanya biaya tambahan yang DISETUJUI pelanggan yang masuk ke total.
+  if (Number(b.extra_charge_total) > 0) {
+    money(doc, "Biaya tambahan (disetujui)", rupiah(b.extra_charge_total));
+  }
   if (Number(b.discount_amount) > 0) {
     doc.fillColor("#2C8F63");
     money(doc, "Diskon voucher", "- " + rupiah(b.discount_amount));

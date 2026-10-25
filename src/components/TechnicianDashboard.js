@@ -13,6 +13,7 @@ import PushManager from "@/components/PushManager";
 import NotificationSettings from "@/components/NotificationSettings";
 import WithdrawModal from "@/components/WithdrawModal";
 import { formatRupiah, nonNegative, balanceShortfall } from "@/lib/pricing";
+import { serviceLabel } from "@/lib/booking-quantity";
 import { MapPin, Phone, Calendar, ClipboardList, FileBarChart, FilePlus2, Star, HelpCircle, Wallet, TrendingUp, TrendingDown, History, Loader2, Banknote, Bell } from "lucide-react";
 
 export default function TechnicianDashboard({ initialBookings, technicianName, commissionRate = 10, myRating = null, balance = 0, transactions = [], deposits = [], withdrawals = [] }) {
@@ -244,7 +245,7 @@ export default function TechnicianDashboard({ initialBookings, technicianName, c
                 <option value="">— Pilih pekerjaan —</option>
                 {bookings.map((b) => (
                   <option key={b.id} value={b.id}>
-                    {b.code} — {b.services?.name}{b.option_label ? ` (${b.option_label})` : ""} ({b.booking_date})
+                    {b.code} — {serviceLabel(b)} ({b.booking_date})
                   </option>
                 ))}
               </select>
@@ -401,7 +402,7 @@ function JobCard({ booking: b, busy, onMark, readOnly }) {
       <div className="flex justify-between items-start flex-wrap gap-2 mb-3">
         <div>
           <p className="font-display font-bold text-navy">{b.code}</p>
-          <p className="text-sm text-ink-soft">{b.services?.name}{b.option_label ? ` — ${b.option_label}` : ""}</p>
+          <p className="text-sm text-ink-soft">{serviceLabel(b)}</p>
         </div>
         <StatusPill status={b.status} />
       </div>

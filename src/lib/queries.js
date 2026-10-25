@@ -13,10 +13,17 @@ const getLandingDataCached = unstable_cache(
     // konteks per-request (cookies) di dalam cache callback.
     const supabase = createAdminClient();
     const [{ data: categories }, { data: services }] = await Promise.all([
-      supabase.from("categories").select("*").order("sort_order"),
+      // Kategori nonaktif (diatur admin) disembunyikan dari katalog publik.
+      supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
       supabase.from("services").select("*").eq("is_active", true).order("sort_order"),
     ]);
-    return { categories: categories || [], services: services || [] };
+    // Layanan milik kategori nonaktif tidak ikut ditampilkan (kategorinya
+    // tidak dirender, tetapi pencarian bisa saja masih memungutnya).
+    const aktif = new Set((categories || []).map((c) => c.id));
+    return {
+      categories: categories || [],
+      services: (services || []).filter((s) => aktif.has(s.category_id)),
+    };
   },
   ["landing-data-v1"],
   { tags: ["services", "categories"], revalidate: 300 }
@@ -27,7 +34,7 @@ export async function getLandingData(q = "") {
   if (q) {
     const supabase = createAdminClient();
     const [{ data: categories }, { data: services }] = await Promise.all([
-      supabase.from("categories").select("*").order("sort_order"),
+      supabase.from("categories").select("*").eq("is_active", true).order("sort_order"),
       supabase
         .from("services")
         .select("*")
@@ -35,7 +42,11 @@ export async function getLandingData(q = "") {
         .ilike("name", `%${q}%`)
         .order("sort_order"),
     ]);
-    return { categories: categories || [], services: services || [] };
+    const aktif = new Set((categories || []).map((c) => c.id));
+    return {
+      categories: categories || [],
+      services: (services || []).filter((s) => aktif.has(s.category_id)),
+    };
   }
   return getLandingDataCached();
 }

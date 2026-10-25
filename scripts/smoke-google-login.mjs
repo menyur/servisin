@@ -8,6 +8,9 @@
 //      (memanggil scripts/verify-google-provider.mjs).
 //   2. Intent-filter deep link benar-benar milik app ini (bukan browser):
 //      fixify://login-callback, fixify://reset-password, fixify://confirm.
+//      Bila ada aplikasi LAIN yang juga mengklaim skema fixify://, Android
+//      menampilkan pemilih (ResolverActivity) dan langkah ini merah — skrip
+//      menyebutkan paket yang harus dinonaktifkan beserta perintahnya.
 //   3. App terpasang & start bersih (logcat memuat BUILD_MARKER Dart).
 //   4. Deep link → SESI: URL callback diterima app, ditukar supabase_flutter,
 //      lalu tersimpan sebagai sesi yang diakui server.
@@ -31,8 +34,11 @@
 //
 // Pembacaan sesi di app: file SharedPreferences dibaca lewat `run-as`, yang
 // hanya bekerja pada build debuggable (flutter run / apk --debug). Pada APK
-// release, langkah 4 ditandai tidak konklusif kecuali layar beranda berhasil
-// dikenali uiautomator — skrip akan menyarankan build debug atau --manual.
+// release, langkah 4 dinilai dari ARAH LAYAR: app hanya pindah ke beranda bila
+// sesi benar-benar terbentuk (splash memilih /login saat tidak ada sesi). Syarat
+// bacanya: layanan aksesibilitas aktif (mis. TalkBack) agar semantik Flutter
+// muncul di uiautomator. Bila beranda pun tak terlihat, langkah ditandai tidak
+// konklusif dan skrip menyarankan build debug atau --manual.
 //
 // Exit code: 0 lulus · 1 ada langkah gagal · 3 tidak bisa dijalankan (adb/
 // device/app tidak ada, atau kredensial tidak tersedia untuk mode otomatis)
@@ -120,6 +126,18 @@ export function extractSessionFromPrefs(xml) {
 }
 
 /** Deep link callback berisi token — jalur kode sama dengan callback OAuth. */
+/**
+ * Kutip satu argumen agar sampai UTUH ke shell perangkat.
+ * `adb shell` menyatukan argv menjadi satu baris perintah lalu menjalankannya
+ * lewat `sh` di perangkat, sehingga `&` pada URL memotong sisa query — gejalanya
+ * app menerima `access_token` tanpa `expires_in` dan menolak callback.
+ */
+export function shellQuote(value) {
+  const s = String(value);
+  if (!/[&;|<>()*?$`'"\\\s]/.test(s)) return s;
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 export function buildCallbackUri(session, host = "login-callback") {
   const params = new URLSearchParams({
     access_token: session.access_token,
@@ -223,7 +241,7 @@ function makeFakeAdb(appId, mainActivity) {
     }
     if (text.startsWith("shell am start")) {
       // Deep link callback → "app" menukar token lalu menyimpannya.
-      const uri = args.find((a) => a.startsWith("fixify://")) ?? "";
+      const uri = (args.find((a) => /^'?fixify:\/\//.test(a)) ?? "").replace(/^'|'$/g, "");
       const token = /access_token=([^&]+)/.exec(uri)?.[1] ?? null;
       const refresh = /refresh_token=([^&#]+)/.exec(uri)?.[1] ?? null;
       if (token) state.sessionXml = xml({ accessToken: decodeURIComponent(token), refreshToken: decodeURIComponent(refresh ?? ""), userId: "00000000-1111-2222-3333-444444444444" });
@@ -234,6 +252,8 @@ function makeFakeAdb(appId, mainActivity) {
     if (text.includes("ls shared_prefs")) return ok("FlutterSharedPreferences.xml\n");
     if (text.includes("cat shared_prefs/")) return ok(state.sessionXml ?? xml(null));
     if (text.startsWith("shell cmd package resolve-activity")) return ok(`${mainActivity}\n`);
+    if (text.startsWith("shell cmd package query-activities"))
+      return ok(`      name=${mainActivity}\n      packageName=${appId}\n`);
     if (text.startsWith("shell uiautomator") || text.startsWith("shell cat") || text.startsWith("shell rm")) return ok("");
     return { ok: false, status: 1, stdout: "", stderr: `fake adb: perintah tidak dikenal: ${text}` };
   };
@@ -257,8 +277,34 @@ function stepServerConfig() {
   );
 }
 
+/** Paket-paket yang mengklaim URI ini (untuk membedakan "bukan app kita" vs "dua app"). */
+export function parseHandlerPackages(stdout) {
+  const pkgs = [];
+  for (const line of String(stdout ?? "").split(/\r?\n/)) {
+    const m = /^\s*packageName=(\S+)/.exec(line);
+    if (m && !pkgs.includes(m[1])) pkgs.push(m[1]);
+  }
+  return pkgs;
+}
+
+/**
+ * Siapa saja yang mengklaim URI. Android memilih SATU pemenang hanya bila
+ * kandidatnya tunggal; dengan dua aplikasi ber-skema sama ia menampilkan
+ * pemilih (ResolverActivity) — gejalanya persis "deep link tidak sampai ke app".
+ */
+function queryHandlerPackages(adb, uri) {
+  const res = adb([
+    "shell", "cmd", "package", "query-activities",
+    "-a", "android.intent.action.VIEW",
+    "-c", "android.intent.category.BROWSABLE",
+    "-d", uri,
+  ]);
+  return res.ok ? parseHandlerPackages(res.stdout) : [];
+}
+
 function stepDeepLinks(adb, mainActivity) {
   section("2. Intent-filter deep link milik app (bukan browser)");
+  const appPkg = mainActivity.split("/")[0];
   for (const uri of DEEP_LINKS) {
     const res = adb([
       "shell", "cmd", "package", "resolve-activity", "--brief",
@@ -268,7 +314,16 @@ function stepDeepLinks(adb, mainActivity) {
     ]);
     const component = parseResolveActivity(res.stdout);
     const ok = component === mainActivity;
-    record(`2. ${uri} → ${component ?? "(tidak ada aktivitas)"}`, ok, ok ? "" : `harap ${mainActivity}`);
+    let detail = ok ? "" : `harap ${mainActivity}`;
+    if (!ok) {
+      const lain = queryHandlerPackages(adb, uri).filter((p) => p !== appPkg);
+      if (lain.length) {
+        detail =
+          `skema fixify:// juga diklaim ${lain.join(", ")} → Android menampilkan pemilih, bukan app kita. ` +
+          `Nonaktifkan aplikasi lama dulu: adb shell pm disable-user --user 0 ${lain[0]} (kembalikan: pm enable ${lain[0]})`;
+      }
+    }
+    record(`2. ${uri} → ${component ?? "(tidak ada aktivitas)"}`, ok, detail);
   }
 }
 
@@ -301,7 +356,7 @@ async function stepLaunchFresh(adb, mainActivity) {
       return /BUILD_MARKER/.test(logs.stdout) ? logs.stdout : null;
     },
     MARKER_WAIT_MS,
-    1500,
+    600,
   );
   record(
     "3. App start bersih (logcat: BUILD_MARKER Dart)",
@@ -369,7 +424,7 @@ async function stepInjectSession(adb, ctx, env, baseline) {
       "shell", "am", "start",
       "-a", "android.intent.action.VIEW",
       "-c", "android.intent.category.BROWSABLE",
-      "-d", buildCallbackUri(session),
+      "-d", shellQuote(buildCallbackUri(session)),
     ]);
 
     const found = await waitFor(
@@ -398,16 +453,19 @@ async function stepInjectSession(adb, ctx, env, baseline) {
     }
 
     // Tanpa run-as (APK release): indikator lemah lewat layar beranda.
+    // Tanpa run-as (APK release yang beredar): app hanya pindah ke beranda BILA
+    // sesi terbentuk — splash memilih /login saat tidak ada sesi. Jadi beranda
+    // tepat setelah deep link sah = bukti sesi, walau isinya tidak bisa dibaca.
     const home = await waitFor("layar beranda", async () => (homeVisible(adb) ? true : null), 20_000, 4000);
     record(
-      "4. Sesi terbentuk (indikator terbatas: layar beranda)",
-      false,
+      "4. Sesi terbentuk (indikator: app pindah ke beranda)",
+      Boolean(home),
       home
-        ? "beranda terlihat, tapi token tidak terbaca (release build) — ulangi dengan build debug"
+        ? "beranda tampil setelah deep link; token tidak dibaca (release build) — semantik aksesibilitas aktif diperlukan"
         : "tidak konklusif: pakai build debug (run-as) atau mode --manual",
-      { skipped: true },
+      home ? {} : { skipped: true },
     );
-    return false;
+    return Boolean(home);
   } finally {
     if (temp) {
       const cleanup = await deleteTempUsers(admin, [temp]);
@@ -483,6 +541,17 @@ const FIXTURES = {
     { name: "tidak ada aktivitas", input: "No activity found\n", expect: null },
     { name: "nama komponen penuh", input: "id.fixify.app/id.fixify.app.MainActivity\n", expect: "id.fixify.app/id.fixify.app.MainActivity" },
   ],
+  handlers: [
+    {
+      name: "dua aplikasi ber-skema sama",
+      input:
+        "      name=id.fixify.app.MainActivity\n      packageName=id.fixify.app\n      name=com.fixify.app.MainActivity\n      packageName=com.fixify.app\n",
+      expect: ["id.fixify.app", "com.fixify.app"],
+    },
+    { name: "satu aplikasi", input: "      name=id.fixify.app.MainActivity\n      packageName=id.fixify.app\n", expect: ["id.fixify.app"] },
+    { name: "paket ganda tidak diduplikasi", input: "      packageName=id.fixify.app\n        packageName=id.fixify.app\n", expect: ["id.fixify.app"] },
+    { name: "tidak ada", input: "No activity found\n", expect: [] },
+  ],
   prefs: [
     {
       name: "sesi tersimpan (entitas XML)",
@@ -502,6 +571,7 @@ function runSelftest() {
   const cases = [
     ["parseAdbDevices", FIXTURES.devices, parseAdbDevices],
     ["parseResolveActivity", FIXTURES.resolve, parseResolveActivity],
+    ["parseHandlerPackages", FIXTURES.handlers, parseHandlerPackages],
     ["extractSessionFromPrefs", FIXTURES.prefs, extractSessionFromPrefs],
   ];
   for (const [label, fixtures, fn] of cases) {
@@ -521,6 +591,24 @@ function runSelftest() {
   if (!okUri) failed++;
   console.log(`${okUri ? "✅" : "❌"} buildCallbackUri · token di fragmen`);
   if (!okUri) console.log(`   dapat: ${uri}`);
+
+  const quoteCases = [
+    ["& dikutip", "fixify://login-callback#a=1&b=2", "'fixify://login-callback#a=1&b=2'"],
+    ["tanpa karakter khusus", "fixify://login-callback", "fixify://login-callback"],
+  ];
+  for (const [name, input, expect] of quoteCases) {
+    total++;
+    const got = shellQuote(input);
+    const ok = got === expect;
+    if (!ok) failed++;
+    console.log(`${ok ? "✅" : "❌"} shellQuote · ${name}`);
+    if (!ok) console.log(`   harap: ${expect}\n   dapat: ${got}`);
+  }
+  const q = shellQuote(uri);
+  total++;
+  const qOk = q.startsWith("'") && q.endsWith("'") && q.slice(1, -1) === uri;
+  if (!qOk) failed++;
+  console.log(`${qOk ? "✅" : "❌"} shellQuote · URL callback utuh`);
 
   console.log("-".repeat(72));
   if (failed) {

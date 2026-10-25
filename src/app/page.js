@@ -4,7 +4,7 @@ import InstallBanner from "@/components/InstallBanner";
 import { getLandingData } from "@/lib/queries";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
 import { HeroIllustration, CategoryThumb, ServiceThumb, TrustFast, TrustPro, TrustPrice, EmptyBoxIllustration, AcHeaderIllustration } from "@/components/Illustrations";
-import { formatRupiah } from "@/lib/pricing";
+import { HARGA_JASA_NOTE, formatRupiah } from "@/lib/pricing";
 
 const CATEGORY_HEADERS = {
   ac: AcHeaderIllustration,
@@ -144,6 +144,7 @@ export default async function HomePage({ searchParams }) {
                         <span className="text-xs text-ink-soft">{s.price_note}</span>
                         <span className="font-display font-bold text-brand text-lg">{formatRupiah(s.base_price)}</span>
                       </div>
+                      <p className="text-[11px] text-ink-soft mb-1.5">{HARGA_JASA_NOTE}</p>
                       <p className="text-xs text-ink-soft mb-4">Estimasi: {s.duration_estimate}</p>
                       <Link href={`/booking?service=${s.id}`} className="btn-outline w-full">
                         Pesan sekarang <ArrowRight size={16} />

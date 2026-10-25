@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * Aplikasi (Flutter) memberi tahu bahwa ada peristiwa yang perlu dinotifikasikan
- * ke ADMIN lewat EMAIL: pesanan baru, laporan baru, atau pengajuan setor saldo.
+ * ke ADMIN lewat EMAIL: pesanan baru, laporan baru, pengajuan setor saldo, atau
+ * pengajuan TARIK saldo.
  *
  * Kenapa route ini ada di samping antrean `admin_email_outbox`:
  *   Aplikasi menulis langsung ke Supabase, jadi tidak ada server action yang
@@ -32,6 +33,9 @@ const OWNERSHIP = {
   new_booking: { table: "bookings", column: "user_id" },
   new_report: { table: "reports", column: "author_id" },
   new_deposit: { table: "balance_deposits", column: "technician_id" },
+  // Pengajuan tarik saldo dari aplikasi: saldo sudah ditahan saat barisnya
+  // dibuat, jadi admin harus tahu ada uang menunggu ditransfer.
+  new_withdrawal: { table: "balance_withdrawals", column: "technician_id" },
 };
 
 export async function POST(request) {

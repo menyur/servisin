@@ -520,6 +520,92 @@ export async function sendAdminAccountDeletionEmail(adminEmails, req = {}) {
 }
 
 /**
+ * Ke admin: pemeriksaan saldo harian menemukan selisih antara `profiles.balance`
+ * dan jumlah seluruh mutasi di `balance_transactions`.
+ *
+ * Sebelum ini selisih hanya terlihat bila teknisi kebetulan membuka layar Saldo
+ * atau admin menjalankan probe manual — bisa berbulan-bulan tanpa ada yang tahu.
+ * Email ini menyebut angkanya per teknisi supaya admin bisa langsung menelusuri
+ * baris mutasinya, bukan sekadar tahu "ada yang salah".
+ *
+ * `info.berselisih` = hasil `hitungRekonsiliasiSaldo()` (src/lib/balance-reconciliation.js).
+ */
+export async function sendAdminBalanceMismatchEmail(adminEmails, info = {}) {
+  const rp = (v) => `Rp ${Number(v || 0).toLocaleString("id-ID")}`;
+  const batas = Math.max(1, Number(info.batasTampil) || 20);
+  const baris = (info.berselisih || []).slice(0, batas);
+  const sisa = Math.max(0, (info.berselisih || []).length - baris.length);
+  const potongan = info.potongan || {};
+
+  const tabel =
+    baris.length === 0
+      ? `<p style="color:#2C8F63;">Tidak ada selisih saldo.</p>`
+      : `
+      <table style="margin:16px 0;border-collapse:collapse;">
+        <tr style="text-align:left;color:#4C6272;">
+          <th style="padding:4px 12px 4px 0;">Teknisi</th>
+          <th style="padding:4px 12px;">Saldo profil</th>
+          <th style="padding:4px 12px;">Σ mutasi</th>
+          <th style="padding:4px 12px;">Selisih</th>
+          <th style="padding:4px 12px;">Mutasi terakhir</th>
+        </tr>
+        ${baris
+          .map(
+            (t) => `
+        <tr>
+          <td style="padding:4px 12px 4px 0;">${escHtml(t.nama)}${t.email ? `<br /><span style="color:#4C6272;font-size:12px;">${escHtml(t.email)}</span>` : ""}</td>
+          <td style="padding:4px 12px;">${rp(t.saldo)}</td>
+          <td style="padding:4px 12px;">${rp(t.ledger)}</td>
+          <td style="padding:4px 12px;font-weight:bold;color:#C3492F;">${t.selisih > 0 ? "+" : ""}${rp(t.selisih)}</td>
+          <td style="padding:4px 12px;color:#4C6272;">${t.terakhir ? escHtml(String(t.terakhir).slice(0, 10)) : "belum ada"}</td>
+        </tr>`
+          )
+          .join("")}
+      </table>
+      ${sisa > 0 ? `<p style="color:#4C6272;font-size:13px;">… dan ${sisa} teknisi lain (tidak ditampilkan).</p>` : ""}`;
+
+  const catatanPotongan =
+    potongan.jumlah > 0
+      ? `<p style="padding:12px 14px;background:#FDEDE9;border-radius:10px;">
+        Ada <strong>${potongan.jumlah} pesanan selesai</strong> yang belum punya baris potongan komisi
+        di buku besar${(potongan.contoh || []).length ? ` — mis. ${potongan.contoh
+          .slice(0, 5)
+          .map((x) => escHtml(x.kode || x.id))
+          .join(", ")}` : ""}. Potongannya belum masuk laporan keuangan sama sekali.
+      </p>`
+      : "";
+
+  const html = wrapper(
+    "Ada selisih saldo teknisi",
+    `
+      <p>Pemeriksaan otomatis harian membandingkan saldo tiap teknisi dengan jumlah seluruh
+      mutasi saldonya. Hasilnya: <strong>${Number(info.jumlahBerselisih) || 0} teknisi</strong>
+      tidak cocok (total selisih ${rp(info.totalSelisihAbs)} dari ${Number(info.totalTeknisi) || 0} teknisi).</p>
+      ${tabel}
+      ${catatanPotongan}
+      <p style="padding:12px 14px;background:#F4F7F9;border-radius:10px;">
+        Selisih berarti saldo profil berubah tanpa baris mutasi yang sepadan — biasanya koreksi
+        langsung di database, potongan yang gagal tertulis, atau setoran yang tercatat dua kali.
+        Buka panel <strong>Admin → tab Saldo Aktif</strong>, periksa riwayat mutasi teknisi tersebut,
+        lalu tekan <strong>Sesuaikan saldo → Kurangi</strong> (atau Tambah bila saldo kurang) setelah penyebabnya
+        jelas. Koreksi tercatat sebagai baris penyesuaian, jadi saldo dan buku besar kembali sama.
+      </p>
+      <p style="color:#4C6272;font-size:13px;">
+        Pemeriksaan ini berjalan otomatis setiap hari dan akan diulang besok selama selisihnya masih ada.
+        Untuk melihat hasilnya sekarang tanpa menunggu: <code>/api/cron/balance-reconciliation?dry=1</code>.
+      </p>
+    `
+  );
+
+  const jumlah = Number(info.jumlahBerselisih) || 0;
+  return sendMail({
+    to: adminEmails,
+    subject: `⚠ ${jumlah > 0 ? `${jumlah} saldo teknisi` : "Pemeriksaan saldo"} tidak cocok dengan mutasi — Fixify`,
+    html,
+  });
+}
+
+/**
  * Ke teknisi: pengingat setor saldo karena saldo 0/minus (komisi melebihi
  * setoran). Dipicu admin dari daftar "Saldo Aktif", ATAU otomatis oleh cron
  * pengingat piutang (/api/cron/piutang-reminder) yang mengisi `info.piutang` +

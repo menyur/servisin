@@ -75,6 +75,12 @@ jobs:
       - name: Verifikasi auth endpoint cron
         run: npm run verify:cron-auth
 
+      # Pengingat langganan berjalan tanpa terlihat: kalau penanda idempotennya
+      # hilang, cron harian mengirim push yang sama setiap hari; kalau route-nya
+      # tidak terjadwal, tidak ada pengingat sama sekali. Statis, tanpa jaringan.
+      - name: Verifikasi pengingat langganan servis
+        run: npm run verify:langganan
+
       # Tautan Kebijakan Privasi & Syarat di footer diperiksa di sini karena
       # kegagalannya juga senyap: halaman legalnya tetap hidup dan build tetap
       # hijau walau tautannya terhapus dari footer — pengguna (dan peninjau
@@ -122,6 +128,39 @@ jobs:
       # tanpa jejak). Statis, tanpa jaringan.
       - name: Verifikasi umur piutang & penghapusan
         run: npm run verify:piutang
+
+      # Rekonsiliasi saldo harian diperiksa di sini karena kegagalannya SENYAP
+      # dan selalu soal uang: saldo profil bisa berselisih dengan Σ mutasi
+      # tanpa ada yang tahu sampai teknisi kebetulan membuka layar Saldo.
+      # Yang diuji: invariannya, pembacaan berhalaman (data terpotong = selisih
+      # palsu di SEMUA teknisi), jadwal cron, dan bahwa cron TIDAK mengoreksi
+      # saldo sendiri. Statis, tanpa jaringan; mode --live jalan manual.
+      - name: Verifikasi rekonsiliasi saldo harian
+        run: npm run verify:rekonsiliasi
+
+      # Pengingat jadwal H-1 menyentuh pelanggan langsung. Kegagalan yang paling
+      # mahal bukan error, melainkan pengingat GANDA (cron di-retry) atau tidak
+      # pernah terkirim setelah jadwal dipindah. Keduanya dijaga di sini; mode
+      # --live membuktikan penanda idempoten pada database nyata.
+      - name: Verifikasi pengingat jadwal H-1
+        run: npm run verify:jadwal
+
+      # Deteksi "terlambat mulai" hanya berguna bila jamnya WIB (server UTC)
+      # dan tindakannya benar-benar terpasang di papan harian. Statis.
+      - name: Verifikasi deteksi terlambat mulai
+        run: npm run verify:terlambat
+
+      # Keahlian/area/cuti menentukan siapa yang ditugaskan. Yang dijaga:
+      # keahlian berupa id kategori (bukan label bebas), cuti benar-benar
+      # mengeluarkan kandidat, dan penjagaan ada di server + tabel. Statis.
+      - name: Verifikasi kesiapan teknisi (keahlian, area, cuti)
+        run: npm run verify:kesiapan
+
+      # Jejak audit yang bisa disunting bukan bukti. Statis: diff hanya kolom
+      # berubah, kolom sensitif disamarkan, kegagalan menulis tidak
+      # menggagalkan aksi utama, dan tab penampilnya terpasang.
+      - name: Verifikasi jejak audit admin
+        run: npm run verify:audit
 
       # Gerbang privasi "teknisi menuju lokasi" diperiksa di sini karena
       # kegagalannya SENYAP dan berbahaya: melepas satu penjagaan (mis. cek

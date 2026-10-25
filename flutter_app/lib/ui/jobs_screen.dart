@@ -4,12 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../api.dart';
+import '../balance_notice.dart';
 import '../format.dart';
+import '../inbox.dart';
 import '../job_filter.dart';
 import '../models.dart';
 import '../theme.dart';
 import 'balance_screen.dart';
 import 'common.dart';
+import 'inbox_screen.dart';
 import 'mini_pin_map.dart';
 import 'order_detail_screen.dart';
 import 'pin_preview_sheet.dart';
@@ -26,7 +29,17 @@ class JobsScreen extends StatefulWidget {
   final List<AvailableJob>? availableUji;
   final List<Booking>? assignedUji;
 
-  const JobsScreen({super.key, this.availableUji, this.assignedUji});
+  /// Seam uji: hitung ulang angka notifikasi (lonceng kotak masuk + penanda
+  /// saldo). Di produksi nilainya diambil dari server; seam ini membuat alur
+  /// "event realtime tiba → angka berubah" bisa diuji tanpa jaringan.
+  final Future<({int inbox, int saldo})> Function()? refreshNoticesUji;
+
+  const JobsScreen({
+    super.key,
+    this.availableUji,
+    this.assignedUji,
+    this.refreshNoticesUji,
+  });
 
   @override
   State<JobsScreen> createState() => _JobsScreenState();
@@ -37,6 +50,11 @@ class _JobsScreenState extends State<JobsScreen> {
   List<Booking>? _assigned;
   Profile? _profile;
   TechnicianBalanceSummary? _bal;
+
+  /// Keputusan setor/tarik yang belum dibaca → penanda di strip saldo
+  /// (notifikasi dalam aplikasi, tidak bergantung pada push).
+  int _unseenBalanceNotices = 0;
+
   String? _error;
   int _tab = 0; // 0 = tersedia, 1 = tugas saya
   String? _claimingId;
@@ -62,17 +80,105 @@ class _JobsScreenState extends State<JobsScreen> {
   // (dari web, admin, atau HP lain) → segarkan kedua daftar.
   StreamSubscription<void>? _tickSub;
 
+  // Realtime notifikasi: keputusan saldo (channel sendiri) & tanggapan laporan
+  // (tick dari shell) → angka lonceng & penanda saldo tanpa muat ulang tab.
+  ChatUnsubscribe? _balanceRealtimeCleanup;
+  String? _balanceRealtimeUid;
+  StreamSubscription<ReportUpdate>? _reportTickSub;
+
+  /// Pemeriksaan berkala sebagai jaring pengaman: realtime bisa tidak aktif
+  /// (publication belum disetel, websocket putus, app baru bangun).
+  Timer? _noticesTimer;
+  bool _refreshingNotices = false;
+
   @override
   void initState() {
     super.initState();
     _load(withLocation: true);
     _tickSub = bookingUpdatesTick.stream.listen((_) => _load());
+    // Admin menanggapi laporan → shell menyiarkan tick; angka lonceng ikut
+    // berubah tanpa menunggu tab dibuka ulang.
+    _reportTickSub = reportUpdatesTick.stream.listen((_) => _refreshNotices());
     // Pekerjaan tampil data pesanan teknisi — badge Pesanan ikut dianggap dilihat.
     unseenBookingUpdates.value = 0;
+    // Kabar saldo juga dihitung shell saat peran terbaca / app kembali ke
+    // depan layar; strip ikut berubah tanpa perlu memuat ulang daftar.
+    _unseenBalanceNotices = unseenBalanceNotices.value;
+    unseenBalanceNotices.addListener(_onBalanceNoticesChanged);
+    // Data uji = tanpa jaringan: jangan pasang channel/timer (akan ditolak
+    // Supabase dan meninggalkan timer di widget test).
+    if (widget.availableUji == null && widget.assignedUji == null) {
+      _initBalanceRealtime();
+      _noticesTimer =
+          Timer.periodic(const Duration(seconds: 60), (_) => _refreshNotices());
+    }
+  }
+
+  /// Langganan realtime keputusan saldo milik teknisi ini. Tanpa sesi / tanpa
+  /// Supabase, langganan dilewati (angka tetap diperbarui lewat pemeriksaan
+  /// berkala dan saat layar dimuat).
+  void _initBalanceRealtime() {
+    String uid;
+    try {
+      uid = Api.currentUserId ?? '';
+    } catch (_) {
+      return;
+    }
+    if (uid.isEmpty || _balanceRealtimeUid == uid) return;
+    _balanceRealtimeUid = uid;
+    _balanceRealtimeCleanup = Api.subscribeBalanceUpdates(uid, _refreshNotices);
+  }
+
+  /// Hitung ulang angka lonceng + penanda saldo TANPA memuat ulang daftar
+  /// pekerjaan (yang bisa memicu GPS). Gagal → angka terakhir dipertahankan.
+  Future<void> _refreshNotices() async {
+    if (_refreshingNotices) return;
+    _refreshingNotices = true;
+    try {
+      final segar =
+          await (widget.refreshNoticesUji ?? _loadNoticesFromServer)();
+      if (!mounted) return;
+      unseenBalanceNotices.value = segar.saldo;
+      // Lonceng Beranda & Pekerjaan membaca notifier yang sama.
+      unseenInboxUpdates.value = segar.inbox;
+    } catch (_) {
+      // biarkan angka terakhir — badge basi lebih baik daripada hilang
+    } finally {
+      _refreshingNotices = false;
+    }
+  }
+
+  Future<({int inbox, int saldo})> _loadNoticesFromServer() async {
+    final requests = await Api.fetchMyBalanceRequestsSafe();
+    final reports = await Api.fetchMyReportsSafe();
+    // Event bisa tiba sebelum daftar tugas selesai dimuat — ambil sekali agar
+    // kabar pesanan tidak hilang dari hitungan.
+    final assigned = _assigned ?? await Api.fetchAssignedJobsSafe();
+    final decisions = await loadUnseenBalanceDecisions(requests: requests);
+    final inbox = await countUnreadInboxFrom(
+      bookings: assigned,
+      requests: requests,
+      reports: reports,
+    );
+    return (inbox: inbox, saldo: decisions.length);
+  }
+
+  void _onBalanceNoticesChanged() {
+    if (!mounted) return;
+    final n = unseenBalanceNotices.value;
+    if (n == _unseenBalanceNotices) return;
+    setState(() => _unseenBalanceNotices = n);
   }
 
   @override
   void dispose() {
+    unseenBalanceNotices.removeListener(_onBalanceNoticesChanged);
+    _noticesTimer?.cancel();
+    _noticesTimer = null;
+    _balanceRealtimeUid = null;
+    _balanceRealtimeCleanup?.call();
+    _balanceRealtimeCleanup = null;
+    unawaited(_reportTickSub?.cancel());
     unawaited(_tickSub?.cancel());
     super.dispose();
   }
@@ -113,17 +219,38 @@ class _JobsScreenState extends State<JobsScreen> {
         Api.myProfile().catchError((_) => null),
         // saldo opsional — null bila migrasi balance belum dijalankan
         Api.fetchMyBalanceSummarySafe(),
+        // Sumber notifikasi: pengajuan saldo (setor/tarik) & laporan. Keduanya
+        // aman-gagal → daftar kosong, tidak mengganggu daftar pekerjaan.
+        Api.fetchMyBalanceRequestsSafe(),
+        Api.fetchMyReportsSafe(),
       ]);
+      final assigned = results[1] as List<Booking>;
+      final requests = results[4] as List<BalanceRequest>;
+      final reports = results[5] as List<Report>;
+      // Daur ulang data yang sudah dimuat: penanda strip saldo & angka lonceng
+      // kotak masuk — tanpa query tambahan.
+      final decisions = await loadUnseenBalanceDecisions(requests: requests);
+      final unreadInbox = await countUnreadInboxFrom(
+        bookings: assigned,
+        requests: requests,
+        reports: reports,
+      );
       if (!mounted) return;
+      // Melalui notifier global: penanda strip ikut segar saat shell
+      // menghitung ulang kabar di latar (app kembali ke depan layar).
+      // Ditulis SEBELUM setState agar listener tidak memicu setState bertumpuk.
+      unseenBalanceNotices.value = decisions.length;
+      unseenInboxUpdates.value = unreadInbox;
       setState(() {
         _available = results[0] as List<AvailableJob>;
-        _assigned = results[1] as List<Booking>;
+        _assigned = assigned;
         _profile = results[2] as Profile?;
         _bal = results[3] as TechnicianBalanceSummary?;
       });
     } catch (_) {
       if (mounted) {
-        setState(() => _error = 'Gagal memuat pekerjaan.\nPastikan migrasi teknisi-jobs sudah dijalankan.');
+        setState(() => _error =
+            'Gagal memuat pekerjaan.\nPastikan migrasi teknisi-jobs sudah dijalankan.');
       }
     }
   }
@@ -205,7 +332,8 @@ class _JobsScreenState extends State<JobsScreen> {
         context,
         lat: la,
         lng: ln,
-        onRoute: () => openRouteToDestination(context, lat: la, lng: ln, address: address),
+        onRoute: () =>
+            openRouteToDestination(context, lat: la, lng: ln, address: address),
       );
       return;
     }
@@ -216,7 +344,18 @@ class _JobsScreenState extends State<JobsScreen> {
   /// Dipakai strip saldo, kartu lowongan yang terkunci, dan tawaran setelah
   /// server menolak klaim karena saldo habis.
   Future<void> _bukaSaldo() async {
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => const BalanceScreen()));
+    await Navigator.push(
+        context, MaterialPageRoute(builder: (_) => const BalanceScreen()));
+    await _load();
+  }
+
+  /// Kotak masuk notifikasi (saldo + pesanan + laporan). Muat ulang setelah
+  /// kembali supaya angka lonceng & penanda saldo ikut turun.
+  Future<void> _bukaInbox() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const InboxScreen()),
+    );
     await _load();
   }
 
@@ -226,14 +365,18 @@ class _JobsScreenState extends State<JobsScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Ambil pekerjaan ini?'),
         content: Text(
-          '${job.serviceName}${job.optionLabel != null ? ' · ${job.optionLabel}' : ''}\n'
+          '${job.labelKartu}\n'
           '#${job.code} · ${formatDateShort(job.bookingDate)} ${job.bookingTime}\n'
           '${job.address}',
           style: const TextStyle(fontSize: 13, height: 1.45),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Ya, Ambil')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Batal')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Ya, Ambil')),
         ],
       ),
     );
@@ -258,8 +401,17 @@ class _JobsScreenState extends State<JobsScreen> {
         // tawarkan jalan keluarnya — bukan sekadar pesan error.
         await _tawarkanIsiSaldo(r.error);
         await _load();
+      } else if (r.kode == 'masih_bekerja') {
+        // Server menolak karena masih ada tugas aktif (aturan yang sama dengan
+        // tombol yang dimatikan di kartu). Bawa teknisi ke daftar tugasnya,
+        // bukan membiarkan ia menebak kenapa klaim gagal.
+        showSnack(context, r.error ?? 'Selesaikan pekerjaan aktifmu dulu.',
+            error: true);
+        setState(() => _tab = 1);
+        await _load();
       } else {
-        showSnack(context, r.error ?? 'Gagal mengambil pekerjaan.', error: true);
+        showSnack(context, r.error ?? 'Gagal mengambil pekerjaan.',
+            error: true);
         await _load(); // daftar mungkin berubah (diambil orang lain)
       }
     } catch (e) {
@@ -286,8 +438,12 @@ class _JobsScreenState extends State<JobsScreen> {
           style: const TextStyle(fontSize: 13, height: 1.45),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Nanti')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Isi Saldo')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Nanti')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Isi Saldo')),
         ],
       ),
     );
@@ -323,16 +479,30 @@ class _JobsScreenState extends State<JobsScreen> {
         ScreenHeader(
           title: 'Pekerjaan',
           subtitle: 'Ambil pekerjaan baru atau lanjutkan tugasmu',
+          actions: [
+            ValueListenableBuilder<int>(
+              valueListenable: unseenInboxUpdates,
+              builder: (_, unread, __) =>
+                  InboxBell(unread: unread, onTap: _bukaInbox),
+            ),
+          ],
           bottom: Column(mainAxisSize: MainAxisSize.min, children: [
             // Strip saldo — hidup hanya untuk teknisi (summary terisi).
-            if (_bal != null) _BalanceStrip(summary: _bal!, onTap: _bukaSaldo),
+            if (_bal != null)
+              BalanceStrip(
+                summary: _bal!,
+                unseenNotices: _unseenBalanceNotices,
+                onTap: _bukaSaldo,
+              ),
             SizedBox(
               height: 46,
               child: Row(children: [
                 if (_bal == null) const SizedBox(width: 16),
-                _pill('Tersedia', available.length, _tab == 0, () => setState(() => _tab = 0)),
+                _pill('Tersedia', available.length, _tab == 0,
+                    () => setState(() => _tab = 0)),
                 const SizedBox(width: 8),
-                _pill('Tugas Saya', assigned.length, _tab == 1, () => setState(() => _tab = 1)),
+                _pill('Tugas Saya', assigned.length, _tab == 1,
+                    () => setState(() => _tab = 1)),
               ]),
             ),
           ]),
@@ -342,10 +512,11 @@ class _JobsScreenState extends State<JobsScreen> {
             offset: const Offset(0, -8),
             child: _error != null
                 ? ScreenStateView(loading: false, error: _error, onRetry: _load)
-                :                  RefreshIndicator(
+                : RefreshIndicator(
                     onRefresh: () => _load(withLocation: true),
                     child: (_available == null || _assigned == null)
-                        ? ListView(children: const [ScreenStateView(loading: true)])
+                        ? ListView(
+                            children: const [ScreenStateView(loading: true)])
                         : _tab == 0
                             ? _availableList(available)
                             : _assignedList(assigned),
@@ -366,7 +537,8 @@ class _JobsScreenState extends State<JobsScreen> {
           color: active ? Colors.white : Colors.white.withValues(alpha: 0.18),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(
-              color: Colors.white.withValues(alpha: active ? 1.0 : 0.45), width: 1.4),
+              color: Colors.white.withValues(alpha: active ? 1.0 : 0.45),
+              width: 1.4),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           Text(label,
@@ -379,14 +551,18 @@ class _JobsScreenState extends State<JobsScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1.5),
               decoration: BoxDecoration(
-                color: active ? AppColors.brand : Colors.white.withValues(alpha: 0.28),
+                color: active
+                    ? AppColors.brand
+                    : Colors.white.withValues(alpha: 0.28),
                 borderRadius: BorderRadius.circular(999),
               ),
               child: Text('$count',
                   style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w800,
-                      color: active ? Colors.white : Colors.white.withValues(alpha: 0.95))),
+                      color: active
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.95))),
             ),
           ],
         ]),
@@ -400,7 +576,8 @@ class _JobsScreenState extends State<JobsScreen> {
         ScreenStateView(
             loading: false,
             empty: true,
-            emptyMessage: 'Belum ada pekerjaan tersedia.\nTarik ke bawah untuk menyegarkan.'),
+            emptyMessage:
+                'Belum ada pekerjaan tersedia.\nTarik ke bawah untuk menyegarkan.'),
       ]);
     }
 
@@ -479,19 +656,35 @@ class _JobsScreenState extends State<JobsScreen> {
     );
   }
 
-  Widget _card(AvailableJob job) => AvailableCard(
-        job: job,
-        claiming: _claimingId == job.id,
-        onClaim: () => _claim(job),
-        // Rute selalu tersedia selama alamat terbaca — tidak lagi menunggu pin.
-        onRoute: job.address.trim().isEmpty ? null : () => _routeToAvailableJob(job),
-        // Saldo 0/minus → tombol Ambil dimatikan dengan alasannya (aturan yang
-        // sama ditegakkan server di claim_job; ini supaya tombolnya tidak tampak
-        // bisa diketik tanpa hasil). Rute tetap aktif: melihat lokasi tidak
-        // memerlukan saldo.
-        blockedReason: _bal?.sebabTidakBolehAmbil,
-        onTopUp: _bal?.bolehAmbilPekerjaan == false ? _bukaSaldo : null,
-      );
+  Widget _card(AvailableJob job) {
+    // Satu pekerjaan aktif per teknisi (ditegakkan server di claim_job). Kartu
+    // tetap tampil supaya teknisi tahu ada lowongan, tetapi tombol Ambil mati
+    // dengan alasan yang jelas dan jalan menuju tugasnya.
+    final aktif = pekerjaanAktif(_assigned ?? const <Booking>[]);
+    final alasanAktif = aktif == null
+        ? null
+        : 'Selesaikan #${aktif.code} dulu — setelah pekerjaan itu selesai, kamu bisa mengambil pekerjaan baru.';
+    return AvailableCard(
+      job: job,
+      claiming: _claimingId == job.id,
+      onClaim: () => _claim(job),
+      // Rute selalu tersedia selama alamat terbaca — tidak lagi menunggu pin.
+      onRoute:
+          job.address.trim().isEmpty ? null : () => _routeToAvailableJob(job),
+      // Alasan aktif didahulukan: menawarkan "Isi Saldo" saat masalahnya tugas
+      // yang belum selesai akan menyesatkan.
+      blockedReason: alasanAktif ?? _bal?.sebabTidakBolehAmbil,
+      blockedIcon: alasanAktif != null
+          ? Icons.assignment_turned_in_rounded
+          : Icons.account_balance_wallet_rounded,
+      blockedActionLabel: alasanAktif != null ? 'Lihat Tugas' : null,
+      onBlockedAction:
+          alasanAktif != null ? () => setState(() => _tab = 1) : null,
+      onTopUp: alasanAktif == null && _bal?.bolehAmbilPekerjaan == false
+          ? _bukaSaldo
+          : null,
+    );
+  }
 
   Widget _assignedList(List<Booking> bookings) {
     if (bookings.isEmpty) {
@@ -499,7 +692,8 @@ class _JobsScreenState extends State<JobsScreen> {
         ScreenStateView(
             loading: false,
             empty: true,
-            emptyMessage: 'Belum ada tugas.\nAmbil pekerjaan dari tab Tersedia.'),
+            emptyMessage:
+                'Belum ada tugas.\nAmbil pekerjaan dari tab Tersedia.'),
       ]);
     }
     return ListView.separated(
@@ -580,19 +774,25 @@ class _AreaFilterBar extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Icon(Icons.location_on_rounded, size: 14, color: AppColors.brandDeep),
+          const Icon(Icons.location_on_rounded,
+              size: 14, color: AppColors.brandDeep),
           const SizedBox(width: 6),
           Expanded(
             child: Text(
               info,
               style: const TextStyle(
-                  fontSize: 12, fontWeight: FontWeight.w700, color: AppColors.brandDeep),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.brandDeep),
               overflow: TextOverflow.ellipsis,
             ),
           ),
           const SizedBox(width: 8),
           Text('$shown dari $total',
-              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.inkSoft)),
+              style: const TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.inkSoft)),
         ]),
         if (note != null) ...[
           const SizedBox(height: 4),
@@ -625,7 +825,8 @@ class _AreaFilterBar extends StatelessWidget {
         decoration: BoxDecoration(
           color: active ? AppColors.brandDeep : Colors.white,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: active ? AppColors.brandDeep : AppColors.line),
+          border:
+              Border.all(color: active ? AppColors.brandDeep : AppColors.line),
         ),
         child: Text(
           label,
@@ -641,8 +842,9 @@ class _AreaFilterBar extends StatelessWidget {
 }
 
 /// Format jarak pendek untuk badge kartu job: "850 m" / "2,3 km".
-String formatDistance(double meters) =>
-    meters < 1000 ? '${meters.round()} m' : '${(meters / 1000).toStringAsFixed(1)} km';
+String formatDistance(double meters) => meters < 1000
+    ? '${meters.round()} m'
+    : '${(meters / 1000).toStringAsFixed(1)} km';
 
 /// Badge "Ada titik lokasi" — pesanan punya pin lokasi pelanggan.
 /// Dipakai di kartu Tersedia & Tugas Saya (dashboard teknisi).
@@ -685,6 +887,12 @@ class AvailableCard extends StatelessWidget {
   /// Aksi "Isi saldo" saat [blockedReason] terisi (null = tanpa tombol itu).
   final VoidCallback? onTopUp;
 
+  /// Ikon & aksi pada baris alasan. Dipakai juga untuk "masih ada pekerjaan
+  /// aktif" — bukan hanya saldo, jadi ikon dompet tidak selalu tepat.
+  final IconData blockedIcon;
+  final String? blockedActionLabel;
+  final VoidCallback? onBlockedAction;
+
   const AvailableCard({
     super.key,
     required this.job,
@@ -693,6 +901,9 @@ class AvailableCard extends StatelessWidget {
     this.onRoute,
     this.blockedReason,
     this.onTopUp,
+    this.blockedIcon = Icons.account_balance_wallet_rounded,
+    this.blockedActionLabel,
+    this.onBlockedAction,
   });
 
   @override
@@ -716,10 +927,13 @@ class AvailableCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
               decoration: BoxDecoration(
-                  color: AppColors.brandTint, borderRadius: BorderRadius.circular(999)),
+                  color: AppColors.brandTint,
+                  borderRadius: BorderRadius.circular(999)),
               child: Text('#${job.code}',
                   style: const TextStyle(
-                      fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.brandDeep)),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.brandDeep)),
             ),
             // Badge "Ada titik lokasi": pelanggan memasang pin — teknisi
             // tahu sebelum mengambil. Tanpa koordinat eksak (privasi pin).
@@ -735,7 +949,8 @@ class AvailableCard extends StatelessWidget {
                     color: AppColors.mintTint,
                     borderRadius: BorderRadius.circular(999)),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.near_me_rounded, size: 11, color: AppColors.mint),
+                  const Icon(Icons.near_me_rounded,
+                      size: 11, color: AppColors.mint),
                   const SizedBox(width: 3),
                   Text(formatDistance(job.distanceM!),
                       style: const TextStyle(
@@ -748,20 +963,26 @@ class AvailableCard extends StatelessWidget {
             const Spacer(),
             Text(formatRupiah(job.totalPrice),
                 style: const TextStyle(
-                    fontSize: 14.5, fontWeight: FontWeight.w800, color: AppColors.navy)),
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.navy)),
           ]),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
           child: Text(
-            job.optionLabel == null ? job.serviceName : '${job.serviceName} · ${job.optionLabel}',
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppColors.navy),
+            job.labelKartu,
+            style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w800,
+                color: AppColors.navy),
           ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
           child: Column(children: [
-            _row(Icons.event_rounded, '${formatDateShort(job.bookingDate)} · ${job.bookingTime}'),
+            _row(Icons.event_rounded,
+                '${formatDateShort(job.bookingDate)} · ${job.bookingTime}'),
             const SizedBox(height: 5),
             _row(Icons.place_rounded, job.address),
             const SizedBox(height: 5),
@@ -778,7 +999,10 @@ class AvailableCard extends StatelessWidget {
                 onPressed: claiming || blockedReason != null ? null : onClaim,
                 icon: claiming
                     ? const SizedBox(
-                        width: 15, height: 15, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        width: 15,
+                        height: 15,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: Colors.white))
                     : const Icon(Icons.pan_tool_alt_rounded, size: 18),
                 label: Text(claiming ? 'Mengambil…' : 'Ambil Pekerjaan'),
               ),
@@ -790,7 +1014,8 @@ class AvailableCard extends StatelessWidget {
               OutlinedButton.icon(
                 onPressed: claiming ? null : onRoute,
                 icon: const Icon(Icons.navigation_rounded, size: 17),
-                label: const Text('Rute'),                // WAJIB minimumSize terbatas: tema global memakai lebar tak
+                label: const Text(
+                    'Rute'), // WAJIB minimumSize terbatas: tema global memakai lebar tak
                 // hingga (tombol selebar wadah), dan anak non-Expanded sebuah
                 // Row menerima lebar TAK TERBATAS → layout mati dengan error
                 // "BoxConstraints forces an infinite width" (seluruh kartu
@@ -809,24 +1034,35 @@ class AvailableCard extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.fromLTRB(11, 9, 6, 9),
               decoration: BoxDecoration(
-                  color: AppColors.amberTint, borderRadius: BorderRadius.circular(12)),
+                  color: AppColors.amberTint,
+                  borderRadius: BorderRadius.circular(12)),
               child: Row(children: [
-                const Icon(Icons.account_balance_wallet_rounded,
-                    size: 16, color: AppColors.amber),
+                Icon(blockedIcon, size: 16, color: AppColors.amber),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(blockedReason!,
                       style: const TextStyle(
                           fontSize: 11.5, height: 1.35, color: AppColors.ink)),
                 ),
-                if (onTopUp != null)
+                if (onBlockedAction != null && blockedActionLabel != null)
+                  TextButton(
+                    onPressed: onBlockedAction,
+                    style: TextButton.styleFrom(
+                        minimumSize: const Size(0, 34),
+                        padding: const EdgeInsets.symmetric(horizontal: 10)),
+                    child: Text(blockedActionLabel!,
+                        style: const TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w800)),
+                  )
+                else if (onTopUp != null)
                   TextButton(
                     onPressed: onTopUp,
                     style: TextButton.styleFrom(
                         minimumSize: const Size(0, 34),
                         padding: const EdgeInsets.symmetric(horizontal: 10)),
                     child: const Text('Isi Saldo',
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                        style: TextStyle(
+                            fontSize: 12, fontWeight: FontWeight.w800)),
                   ),
               ]),
             ),
@@ -835,12 +1071,14 @@ class AvailableCard extends StatelessWidget {
     );
   }
 
-  Widget _row(IconData icon, String text) => Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget _row(IconData icon, String text) =>
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(icon, size: 15, color: AppColors.brand),
         const SizedBox(width: 7),
         Expanded(
           child: Text(text,
-              style: const TextStyle(fontSize: 12.5, color: AppColors.inkSoft, height: 1.35)),
+              style: const TextStyle(
+                  fontSize: 12.5, color: AppColors.inkSoft, height: 1.35)),
         ),
       ]);
 }
@@ -866,7 +1104,8 @@ class AssignedJobCard extends StatelessWidget {
   });
 
   bool get _cancellable =>
-      booking.status == BookingStatus.paid || booking.status == BookingStatus.inProgress;
+      booking.status == BookingStatus.paid ||
+      booking.status == BookingStatus.inProgress;
 
   @override
   Widget build(BuildContext context) {
@@ -892,103 +1131,122 @@ class AssignedJobCard extends StatelessWidget {
                     : booking.status == BookingStatus.inProgress
                         ? AppColors.brand
                         : AppColors.amber,
-                borderRadius: const BorderRadius.horizontal(left: Radius.circular(18)),
+                borderRadius:
+                    const BorderRadius.horizontal(left: Radius.circular(18)),
               ),
             ),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 12, 14, 12),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                    decoration: BoxDecoration(
-                        color: AppColors.paper, borderRadius: BorderRadius.circular(999)),
-                    child: Text('#${booking.code}',
-                        style: const TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.navy)),
-                  ),
-                  // Pesanan punya pin — tanda sebelum buka detail & rute.
-                  if (booking.hasPin) ...[
-                    const SizedBox(width: 6),
-                    const _PinBadge(),
-                  ],
-                  const Spacer(),
-                  StatusBadge(booking.status),
-                ]),
-                const SizedBox(height: 7),
-                Text(
-                  booking.optionLabel == null
-                      ? booking.serviceName
-                      : '${booking.serviceName} · ${booking.optionLabel}',
-                  style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800, color: AppColors.navy),
-                ),
-                const SizedBox(height: 4),
-                Text('${formatDateShort(booking.bookingDate)} · ${booking.bookingTime}',
-                    style: const TextStyle(fontSize: 12, color: AppColors.inkSoft)),
-                const SizedBox(height: 4),
-                Row(children: [
-                  Text(formatRupiah(booking.totalPrice),
-                      style: const TextStyle(
-                          fontSize: 13.5, fontWeight: FontWeight.w800, color: AppColors.brandDeep)),
-                  const Spacer(),
-                  if (_cancellable)
-                    GestureDetector(
-                      onTap: onRelease,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: AppColors.coralTint,
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                          Icon(Icons.link_off_rounded, size: 12, color: AppColors.coral),
-                          SizedBox(width: 4),
-                          Text('Lepas',
-                              style: TextStyle(
-                                  fontSize: 10.5,
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 9, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: AppColors.paper,
+                              borderRadius: BorderRadius.circular(999)),
+                          child: Text('#${booking.code}',
+                              style: const TextStyle(
+                                  fontSize: 11,
                                   fontWeight: FontWeight.w800,
-                                  color: AppColors.coral)),
-                        ]),
+                                  color: AppColors.navy)),
+                        ),
+                        // Pesanan punya pin — tanda sebelum buka detail & rute.
+                        if (booking.hasPin) ...[
+                          const SizedBox(width: 6),
+                          const _PinBadge(),
+                        ],
+                        const Spacer(),
+                        StatusBadge(booking.status,
+                            hasTechnician: booking.technicianId != null),
+                      ]),
+                      const SizedBox(height: 7),
+                      Text(
+                        booking.labelKartu,
+                        style: const TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.navy),
                       ),
-                    ),
-                  if (_cancellable) const SizedBox(width: 8),
-                  const Icon(Icons.chevron_right_rounded, color: AppColors.inkSoft, size: 20),
-                ]),
-                // Pratinjau pin pelanggan (paritas dgn detail pesanan): ketuk
-                // peta atau tombol Rute → Google Maps. GestureDetector di dalam
-                // peta menang atas ketukan kartu, jadi ketukan di peta = rute.
-                if (hasPin) ...[
-                  const SizedBox(height: 10),
-                  MiniPinMap(
-                    lat: booking.lat!,
-                    lng: booking.lng!,
-                    height: 110,
-                    onTap: onRoute,
-                  ),
-                ],
-                // Tombol rute TIDAK bergantung pada pin: alamat lengkap sudah
-                // terbaca setelah tugas diambil, jadi teknisi selalu bisa
-                // membuka Google Maps (titik exact bila pelanggan memasang pin,
-                // jika tidak rute ke alamatnya).
-                if (onRoute != null) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      onPressed: onRoute,
-                      icon: const Icon(Icons.navigation_rounded, size: 16),
-                      label: const Text('Buka Rute'),
-                      // Konteks lebarnya bisa tak terbatas (Align/Row) — lihat
-                      // AppTheme.compactOutlinedButton.
-                      style: AppTheme.compactOutlinedButton,
-                    ),
-                  ),
-                ],
-              ]),
+                      const SizedBox(height: 4),
+                      Text(
+                          '${formatDateShort(booking.bookingDate)} · ${booking.bookingTime}',
+                          style: const TextStyle(
+                              fontSize: 12, color: AppColors.inkSoft)),
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        Text(formatRupiah(booking.totalPrice),
+                            style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.brandDeep)),
+                        const Spacer(),
+                        if (_cancellable)
+                          GestureDetector(
+                            onTap: onRelease,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 9, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: AppColors.coralTint,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.link_off_rounded,
+                                        size: 12, color: AppColors.coral),
+                                    SizedBox(width: 4),
+                                    Text('Lepas',
+                                        style: TextStyle(
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.w800,
+                                            color: AppColors.coral)),
+                                  ]),
+                            ),
+                          ),
+                        if (_cancellable) const SizedBox(width: 8),
+                        const Icon(Icons.chevron_right_rounded,
+                            color: AppColors.inkSoft, size: 20),
+                      ]),
+                      // Pratinjau pin pelanggan (paritas dgn detail pesanan): ketuk
+                      // peta atau tombol Rute → Google Maps. GestureDetector di dalam
+                      // peta menang atas ketukan kartu, jadi ketukan di peta = rute.
+                      if (hasPin) ...[
+                        const SizedBox(height: 10),
+                        MiniPinMap(
+                          lat: booking.lat!,
+                          lng: booking.lng!,
+                          height: 110,
+                          onTap: onRoute,
+                        ),
+                      ],
+                      // Tombol rute TIDAK bergantung pada pin: alamat lengkap sudah
+                      // terbaca setelah tugas diambil, jadi teknisi selalu bisa
+                      // membuka Google Maps (titik exact bila pelanggan memasang pin,
+                      // jika tidak rute ke alamatnya).
+                      if (onRoute != null) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            onPressed: onRoute,
+                            icon:
+                                const Icon(Icons.navigation_rounded, size: 16),
+                            label: const Text('Buka Rute'),
+                            // Konteks lebarnya bisa tak terbatas (Align/Row) — lihat
+                            // AppTheme.compactOutlinedButton.
+                            style: AppTheme.compactOutlinedButton,
+                          ),
+                        ),
+                      ],
+                    ]),
+              ),
             ),
-          ),
-        ]),
+          ]),
         ),
       ),
     );
@@ -998,11 +1256,23 @@ class AssignedJobCard extends StatelessWidget {
 /// Strip saldo yang tampil di bawah header tab Pekerjaan (teknisi):
 /// saldo aktif + statistik pendapatan/komisi — ketuk untuk buka layar
 /// Saldo lengkap dengan riwayat mutasi.
-class _BalanceStrip extends StatelessWidget {
+///
+/// Publik agar penanda "kabar saldo" (keputusan setor/tarik yang belum
+/// dibaca) bisa diuji langsung tanpa jaringan.
+class BalanceStrip extends StatelessWidget {
   final TechnicianBalanceSummary summary;
+
+  /// Jumlah keputusan admin yang belum dibuka teknisi; 0 = tanpa penanda.
+  final int unseenNotices;
+
   final VoidCallback onTap;
 
-  const _BalanceStrip({required this.summary, required this.onTap});
+  const BalanceStrip({
+    super.key,
+    required this.summary,
+    required this.onTap,
+    this.unseenNotices = 0,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1025,17 +1295,30 @@ class _BalanceStrip extends StatelessWidget {
           ],
         ),
         child: Row(children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: const BoxDecoration(color: AppColors.brandTint, shape: BoxShape.circle),
-            child: const Icon(Icons.account_balance_wallet_rounded, size: 20, color: AppColors.brandDeep),
-          ),
+          Stack(clipBehavior: Clip.none, children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: const BoxDecoration(
+                  color: AppColors.brandTint, shape: BoxShape.circle),
+              child: const Icon(Icons.account_balance_wallet_rounded,
+                  size: 20, color: AppColors.brandDeep),
+            ),
+            if (unseenNotices > 0)
+              Positioned(
+                  right: -4,
+                  top: -4,
+                  child: BalanceNoticeDot(count: unseenNotices)),
+          ]),
           const SizedBox(width: 11),
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Text('Saldo Aktif',
-                  style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: AppColors.inkSoft)),
+                  style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.inkSoft)),
               Text(
                 formatRupiah(saldo),
                 style: TextStyle(
@@ -1044,32 +1327,51 @@ class _BalanceStrip extends StatelessWidget {
                   color: negative ? AppColors.coral : AppColors.navy,
                 ),
               ),
+              // Notifikasi dalam aplikasi: setoran/penarikan sudah diputuskan
+              // admin tetapi belum dibuka di layar Saldo (mis. push tidak
+              // sampai karena izin HP mati).
+              if (unseenNotices > 0)
+                Text(
+                  unseenNotices == 1
+                      ? '1 kabar saldo baru'
+                      : '$unseenNotices kabar saldo baru',
+                  style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.amber),
+                ),
               // Saldo 0/minus = pekerjaan baru terkunci (aturan server). Ditulis
               // di strip juga, bukan hanya di kartu lowongan, supaya alasannya
               // terbaca sebelum teknisi membuka tab Tersedia.
               if (!summary.bolehAmbilPekerjaan)
                 const Text('Isi saldo dulu untuk bisa ambil pekerjaan',
                     style: TextStyle(
-                        fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.coral)),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.coral)),
             ]),
           ),
           // Komisi terpotong & pendapatan kotor — sembunyi saat masih nol
           // supaya teknisi baru tidak bingung dengan angka kosong.
           if (summary.commissionTotal > 0 || summary.earnedTotal > 0) ...[
-            _stat(AppColors.navy, formatRupiah(summary.earnedTotal), 'Pendapatan'),
+            _stat(AppColors.navy, formatRupiah(summary.earnedTotal),
+                'Pendapatan'),
             const SizedBox(width: 10),
             // Label sama dengan layar Saldo: potongan riil = komisi + biaya app.
-            _stat(AppColors.coral, formatRupiah(summary.platformCutTotal), 'Komisi + biaya app'),
+            _stat(AppColors.coral, formatRupiah(summary.platformCutTotal),
+                'Komisi + biaya app'),
           ],
           // Penanda halus: admin sudah meminta teknisi setor saldo (banner
           // lengkap ada di layar Saldo).
           if (summary.needsDepositReminder)
             const Padding(
               padding: EdgeInsets.only(right: 6),
-              child: Icon(Icons.notifications_active_rounded, size: 16, color: AppColors.amber),
+              child: Icon(Icons.notifications_active_rounded,
+                  size: 16, color: AppColors.amber),
             ),
           const SizedBox(width: 8),
-          const Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.inkSoft),
+          const Icon(Icons.chevron_right_rounded,
+              size: 18, color: AppColors.inkSoft),
         ]),
       ),
     );
@@ -1077,9 +1379,49 @@ class _BalanceStrip extends StatelessWidget {
 
   Widget _stat(Color color, String value, String label) {
     return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-      Text(value, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800, color: color)),
+      Text(value,
+          style: TextStyle(
+              fontSize: 11.5, fontWeight: FontWeight.w800, color: color)),
       const SizedBox(height: 1),
-      Text(label, style: const TextStyle(fontSize: 9.5, color: AppColors.inkSoft)),
+      Text(label,
+          style: const TextStyle(fontSize: 9.5, color: AppColors.inkSoft)),
     ]);
+  }
+}
+
+/// Lingkaran kecil berangka di pojok ikon saldo: "ada kabar saldo baru".
+///
+/// Angka dipotong `9+` seperti badge navigasi lain; pembaca layar tetap mendapat
+/// angka penuh lewat label semantik.
+class BalanceNoticeDot extends StatelessWidget {
+  final int count;
+
+  const BalanceNoticeDot({super.key, required this.count});
+
+  @override
+  Widget build(BuildContext context) {
+    if (count <= 0) return const SizedBox.shrink();
+    return Semantics(
+      label: count == 1 ? '1 kabar saldo baru' : '$count kabar saldo baru',
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          color: AppColors.amber,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: Colors.white, width: 1.5),
+        ),
+        child: Text(
+          count > 9 ? '9+' : '$count',
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w800,
+            color: Colors.white,
+            height: 1.2,
+          ),
+        ),
+      ),
+    );
   }
 }

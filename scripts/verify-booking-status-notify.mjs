@@ -216,8 +216,13 @@ async function main() {
 
     const created = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      // BESOK (WIB), bukan hari ini: slot hari ini sudah lewat bila probe
+      // dijalankan sore/malam, dan RPC menolak "jam kedatangan sudah lewat".
+      // Tanggal tetap dekat supaya aturan jadwal normal berlaku.
+      p_date: new Date(Date.now() + 24 * 60 * 60 * 1000 + 7 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10),
+      p_time: "08:00-10:00",
       p_address: "UJI NOTIF STATUS — aman dihapus",
       p_option_id: option?.id ?? null,
       p_notes: "probe scripts/verify-booking-status-notify.mjs",

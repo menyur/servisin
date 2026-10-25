@@ -39,3 +39,6 @@ emulator-preview.html
 # (tag apk-latest) — lihat src/lib/apk-release.js dan
 # .github/workflows/build-apk.yml. Yang di-commit hanya manifest.json.
 /public/apk/*.apk
+/freebuff-sites-build/
+/.open-next/
+/.wrangler/

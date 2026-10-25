@@ -1,19 +1,24 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'account_deletion.dart';
 import 'chat_moderation.dart';
 import 'config.dart';
+import 'format.dart';
 import 'models.dart';
 import 'register_http.dart';
 import 'report_seen.dart';
 import 'reset_http.dart';
+import 'scorecard.dart';
+import 'subscription.dart';
 
 /// Fungsi cleanup langganan realtime chat (dipanggil di dispose).
 typedef ChatUnsubscribe = Future<void> Function();
@@ -78,6 +83,32 @@ class Api {
       };
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Biaya aplikasi yang SEDANG berlaku, dibaca dari setelan admin
+  /// (`app_settings.app_fee`, satu baris id = 1).
+  ///
+  /// Server menagih lewat `public.app_fee_efektif()` yang membaca angka yang
+  /// sama; wizard WAJIB memakai angka ini agar rincian di layar tidak berbeda
+  /// dengan tagihan (dulu wizard memakai konstanta 5000 sehingga selisih
+  /// terlihat begitu admin mengubah tarif). Gagal membaca / kolom kosong →
+  /// [appFee] bawaan, bukan 0: pesanan tidak boleh tampak tanpa biaya
+  /// aplikasi hanya karena gangguan jaringan.
+  static Future<int> fetchAppFee() async {
+    try {
+      final row = await db
+          .from('app_settings')
+          .select('app_fee')
+          .eq('id', 1)
+          .maybeSingle();
+      final raw = row?['app_fee'];
+      if (raw == null) return appFee;
+      final n = raw is num ? raw.toInt() : int.tryParse('$raw');
+      if (n == null) return appFee;
+      return n.clamp(0, 1000000).toInt();
+    } catch (_) {
+      return appFee;
     }
   }
 
@@ -336,6 +367,36 @@ class Api {
     }
   }
 
+  /// Kartu skor MANDIRI teknisi — RPC `my_technician_scorecard`
+  /// (supabase/migrate-technician-my-scorecard.sql).
+  ///
+  /// Identitas TIDAK dikirim dari klien: server memakai `auth.uid()` di dalam
+  /// fungsi security definer, sehingga aplikasi tidak punya cara meminta skor
+  /// teknisi lain. Ini bukan sekadar kenyamanan — inilah jaminan "tanpa
+  /// membocorkan data teknisi lain" di sisi data.
+  ///
+  /// Hasil dibedakan:
+  ///   * `data != null`        → angka periode itu;
+  ///   * `gagal == false`      → server menjawab kosong (bukan teknisi / belum
+  ///                             ada baris) — bukan error;
+  ///   * `gagal == true`       → RPC/jaringan bermasalah (mis. migrasi belum
+  ///                             dijalankan), layar menampilkan tombol coba lagi.
+  static Future<({MyScorecard? data, bool gagal})> myTechnicianScorecard(
+      {int days = 90}) async {
+    try {
+      final res =
+          await db.rpc('my_technician_scorecard', params: {'p_days': days});
+      final rows = res is List ? res : const [];
+      if (rows.isEmpty) return (data: null, gagal: false);
+      return (
+        data: MyScorecard.fromMap((rows.first as Map).cast<String, dynamic>()),
+        gagal: false,
+      );
+    } catch (_) {
+      return (data: null, gagal: true);
+    }
+  }
+
   static Future<void> updateMyProfile(
       {String? name,
       String? phone,
@@ -350,6 +411,63 @@ class Api {
     if (avatarUrl != null) patch['avatar_url'] = avatarUrl;
     if (serviceArea != null) patch['service_area'] = serviceArea;
     await db.from('profiles').update(patch).eq('id', uid);
+  }
+
+  /// Simpan alamat berlabel ke buku alamat pelanggan
+  /// (RPC `save_my_address`, migrate-customer-address-book.sql).
+  ///
+  /// Alamat yang sama tidak diduplikasi; `makePrimary` memindahkan tanda
+  /// utama sekaligus menyamakan `profiles.address`. Mengembalikan seluruh isi
+  /// buku terbaru supaya layar tidak menebak hasilnya.
+  static Future<({bool ok, String? error, List<SavedAddress> alamat})>
+      saveMyAddress({
+    required String label,
+    required String address,
+    double? lat,
+    double? lng,
+    bool makePrimary = false,
+  }) async {
+    try {
+      final res = await db.rpc('save_my_address', params: {
+        'p_label': label,
+        'p_address': address,
+        'p_lat': lat,
+        'p_lng': lng,
+        'p_make_primary': makePrimary,
+      });
+      final m = res is Map ? res.cast<String, dynamic>() : <String, dynamic>{};
+      return (
+        ok: m['ok'] == true,
+        error: (m['error'] as String?)?.trim(),
+        alamat: parseSavedAddresses(m['saved_addresses']),
+      );
+    } catch (_) {
+      return (
+        ok: false,
+        error: 'Gagal menyimpan alamat. Periksa koneksi lalu coba lagi.',
+        alamat: const <SavedAddress>[],
+      );
+    }
+  }
+
+  /// Hapus satu alamat dari buku (RPC `delete_my_address`).
+  static Future<({bool ok, String? error, List<SavedAddress> alamat})>
+      deleteMyAddress(String id) async {
+    try {
+      final res = await db.rpc('delete_my_address', params: {'p_id': id});
+      final m = res is Map ? res.cast<String, dynamic>() : <String, dynamic>{};
+      return (
+        ok: m['ok'] == true,
+        error: (m['error'] as String?)?.trim(),
+        alamat: parseSavedAddresses(m['saved_addresses']),
+      );
+    } catch (_) {
+      return (
+        ok: false,
+        error: 'Gagal menghapus alamat. Periksa koneksi lalu coba lagi.',
+        alamat: const <SavedAddress>[],
+      );
+    }
   }
 
   /// Upload foto profil ke bucket `profile-media` (pola sama dengan web:
@@ -367,6 +485,347 @@ class Api {
     final url = db.storage.from('profile-media').getPublicUrl(path);
     await updateMyProfile(avatarUrl: url);
     return url;
+  }
+
+  // ============ bukti foto pekerjaan (sebelum/sesudah) ============
+
+  /// Ambil foto bukti pekerjaan (kamera/galeri), kompres, lalu SIMPAN ke
+  /// folder dokumen aplikasi.
+  ///
+  /// Disalin ke penyimpanan permanen — bukan cache — karena antrean luring
+  /// harus bisa mengunggahnya berjam-jam kemudian setelah sinyal kembali.
+  static Future<File?> pickJobPhoto({
+    required ImageSource source,
+    required String bookingId,
+    required String kind,
+  }) async {
+    final bytes = await pickAndCompressImage(
+      source: source,
+      maxSide: 1400,
+      quality: 70,
+      maxBytes: 350 * 1024,
+    );
+    if (bytes == null) return null;
+    final dir = await getApplicationDocumentsDirectory();
+    final folder = Directory('${dir.path}/job-proofs');
+    if (!await folder.exists()) await folder.create(recursive: true);
+    final aman = bookingId.replaceAll(RegExp(r'[^A-Za-z0-9-]'), '');
+    final file = File(
+        '${folder.path}/$aman-$kind-${DateTime.now().millisecondsSinceEpoch}.jpg');
+    await file.writeAsBytes(bytes, flush: true);
+    return file;
+  }
+
+  /// Unggah satu foto bukti ke bucket privat `booking-proofs` lalu lampirkan
+  /// path-nya ke pesanan lewat RPC `attach_job_photo` (server memverifikasi
+  /// bahwa path itu memang milik pesanan & teknisi yang memanggil).
+  ///
+  /// Best-effort TIDAK berlaku di sini: antrean butuh jawaban jelas, jadi
+  /// kegagalan dikembalikan sebagai nilai, bukan dilempar.
+  static Future<({bool ok, String? error})> uploadJobPhotoFile({
+    required String bookingId,
+    required String kind,
+    required String filePath,
+  }) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return (
+          ok: false,
+          error: 'Foto bukti sudah tidak ada di penyimpanan HP.',
+        );
+      }
+      final path =
+          '$bookingId/$kind-${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await db.storage.from('booking-proofs').upload(
+            path,
+            file,
+            fileOptions: const FileOptions(contentType: 'image/jpeg'),
+          );
+      final res = await db.rpc('attach_job_photo', params: {
+        'p_booking': bookingId,
+        'p_kind': kind,
+        'p_path': path,
+      });
+      final m = (res as Map?)?.cast<String, dynamic>() ?? const {};
+      if (m['ok'] == true) return (ok: true, error: null);
+      return (
+        ok: false,
+        error: m['error'] as String? ?? 'Foto tidak bisa dilampirkan.',
+      );
+    } catch (_) {
+      return (
+        ok: false,
+        error: 'Foto belum terunggah — periksa koneksi.',
+      );
+    }
+  }
+
+  /// Signed URL (1 jam) untuk path foto bukti. Bucket-nya privat; RLS storage
+  /// hanya mengizinkan teknisi yang ditugaskan, pelanggan pemilik, dan admin.
+  static Future<String?> jobPhotoUrl(String? path) async {
+    final p = (path ?? '').trim();
+    if (p.isEmpty) return null;
+    try {
+      return await db.storage.from('booking-proofs').createSignedUrl(p, 3600);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ============ no-show pelanggan ============
+
+  /// Laporkan pelanggan tidak ada di lokasi (RPC security definer).
+  /// Server memeriksa: pemanggil teknisi pesanan ini, status masih `paid`,
+  /// belum mulai, sudah lewat slot + 15 menit, dan (bila titik rumah + GPS
+  /// tersedia) jarak ≤ 500 m. Koordinat/foto boleh null — GPS lapangan sering
+  /// tidak akurat, dan bukti foto bersifat opsional.
+  static Future<({bool ok, String? error})> reportCustomerNoShow(
+    String bookingId, {
+    double? lat,
+    double? lng,
+    String? photoPath,
+    String? note,
+  }) async {
+    try {
+      final res = await db.rpc('report_customer_no_show', params: {
+        'p_booking': bookingId,
+        'p_lat': lat,
+        'p_lng': lng,
+        'p_photo_path': (photoPath ?? '').trim().isEmpty ? null : photoPath,
+        'p_note': (note ?? '').trim().isEmpty ? null : note!.trim(),
+      });
+      final m = _asMap(res);
+      if (m['ok'] == true) {
+        unawaited(notifyCustomerNoShow(bookingId));
+        return (ok: true, error: null);
+      }
+      return (
+        ok: false,
+        error: (m['error'] as String?) ?? 'Laporan gagal dikirim.',
+      );
+    } catch (e) {
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
+      return (ok: false, error: 'Laporan belum terkirim — periksa koneksi.');
+    }
+  }
+
+  /// Pelanggan menekan "Saya di sini" setelah laporan no-show.
+  static Future<({bool ok, String? error})> confirmCustomerPresent(
+      String bookingId) async {
+    try {
+      final res =
+          await db.rpc('confirm_customer_present', params: {'p_booking': bookingId});
+      final m = _asMap(res);
+      if (m['ok'] == true) {
+        unawaited(notifyCustomerPresent(bookingId));
+        return (ok: true, error: null);
+      }
+      return (
+        ok: false,
+        error: (m['error'] as String?) ?? 'Konfirmasi gagal dikirim.',
+      );
+    } catch (e) {
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
+      return (ok: false, error: 'Konfirmasi belum terkirim — periksa koneksi.');
+    }
+  }
+
+  /// Beri tahu server web (pemegang kunci push) tentang no-show supaya
+  /// pelanggan menerima "kami tunggu 10 menit". Best-effort.
+  static Future<void> notifyCustomerNoShow(String bookingId) async {
+    await _notifyWeb('/api/notify-booking-status',
+        {'bookingId': bookingId, 'event': 'customer_no_show'});
+  }
+
+  /// Beri tahu teknisi bahwa pelanggan sudah di lokasi. Best-effort.
+  static Future<void> notifyCustomerPresent(String bookingId) async {
+    await _notifyWeb('/api/notify-booking-change',
+        {'bookingId': bookingId, 'event': 'customer_present'});
+  }
+
+  // ============ biaya tambahan di lokasi ============
+
+  /// Semua usulan biaya tambahan satu pesanan, terbaru dulu.
+  static Future<List<BookingExtraCharge>> fetchExtraCharges(
+      String bookingId) async {
+    final rows = await db
+        .from('booking_extra_charges')
+        .select('*')
+        .eq('booking_id', bookingId)
+        .order('created_at', ascending: false);
+    return [
+      for (final r in rows)
+        BookingExtraCharge.fromMap((r as Map).cast<String, dynamic>()),
+    ];
+  }
+
+  /// Fail-soft: migrasi belum jalan / offline = tidak ada kartu biaya tambahan.
+  static Future<List<BookingExtraCharge>> fetchExtraChargesSafe(
+      String bookingId) async {
+    try {
+      return await fetchExtraCharges(bookingId);
+    } catch (_) {
+      return const <BookingExtraCharge>[];
+    }
+  }
+
+  /// Unggah foto temuan ke bucket privat `booking-proofs` dan kembalikan
+  /// PATH-nya (bukan URL). Path dipakai saat mengusulkan biaya tambahan; RPC
+  /// menolak path pesanan lain.
+  static Future<({String? path, String? error})> uploadExtraChargePhoto({
+    required String bookingId,
+    required String filePath,
+  }) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return (path: null, error: 'Foto sudah tidak ada di penyimpanan HP.');
+      }
+      final path =
+          '$bookingId/extra-${DateTime.now().millisecondsSinceEpoch}.jpg';
+      await db.storage.from('booking-proofs').upload(
+            path,
+            file,
+            fileOptions: const FileOptions(contentType: 'image/jpeg'),
+          );
+      return (path: path, error: null);
+    } catch (_) {
+      return (path: null, error: 'Foto gagal diunggah — periksa koneksi.');
+    }
+  }
+
+  /// Teknisi mengusulkan biaya tambahan. BELUM menagih apa pun — menunggu
+  /// persetujuan pelanggan lewat [decideExtraCharge].
+  static Future<({bool ok, String? error})> proposeExtraCharge(
+    String bookingId, {
+    required int amount,
+    required String reason,
+    String? photoPath,
+  }) async {
+    try {
+      final res = await db.rpc('propose_extra_charge', params: {
+        'p_booking': bookingId,
+        'p_amount': amount,
+        'p_reason': reason,
+        'p_photo_path':
+            (photoPath ?? '').trim().isEmpty ? null : photoPath,
+      });
+      final m = _asMap(res);
+      if (m['ok'] == true) {
+        unawaited(_notifyWeb('/api/notify-booking-status',
+            {'bookingId': bookingId, 'event': 'extra_charge'}));
+        return (ok: true, error: null);
+      }
+      return (
+        ok: false,
+        error: (m['error'] as String?) ?? 'Usulan gagal dikirim.',
+      );
+    } catch (e) {
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan);
+      }
+      return (ok: false, error: 'Usulan belum terkirim — periksa koneksi.');
+    }
+  }
+
+  /// Pelanggan memutuskan usulan biaya tambahan. Persetujuan menaikkan total
+  /// pesanan di server (atomik); penolakan tidak mengubah uang sama sekali.
+  static Future<({bool ok, String? error, int? total})> decideExtraCharge(
+      String chargeId, bool approve) async {
+    try {
+      final res = await db.rpc('decide_extra_charge', params: {
+        'p_charge': chargeId,
+        'p_approve': approve,
+      });
+      final m = _asMap(res);
+      if (m['ok'] == true) {
+        return (
+          ok: true,
+          error: null,
+          total: (m['total_price'] as num?)?.toInt(),
+        );
+      }
+      return (
+        ok: false,
+        error: (m['error'] as String?) ?? 'Keputusan gagal disimpan.',
+        total: null,
+      );
+    } catch (e) {
+      if (_fungsiBelumAda(e)) {
+        return (ok: false, error: _pesanMigrasiBelumJalan, total: null);
+      }
+      return (
+        ok: false,
+        error: 'Keputusan belum terkirim — periksa koneksi.',
+        total: null,
+      );
+    }
+  }
+
+  // ============ langganan servis berkala ============
+
+  /// Simpan pilihan "ulangi tiap N bulan" dari sebuah pesanan selesai.
+  ///
+  /// TIDAK membuat pesanan/tagihan apa pun — server hanya menyimpan jadwal
+  /// pengingat. Keputusan membeli tetap di tangan pelanggan.
+  static Future<({bool ok, String? error, DateTime? nextDate})>
+      subscribeFromBooking(String bookingId, int months) async {
+    try {
+      final res = await db.rpc('subscribe_from_booking',
+          params: {'p_booking': bookingId, 'p_months': months});
+      final m = (res as Map?)?.cast<String, dynamic>() ?? const {};
+      final raw = m['next_date'];
+      return (
+        ok: m['ok'] == true,
+        error: m['error'] as String?,
+        nextDate: raw is String ? DateTime.tryParse(raw) : null,
+      );
+    } catch (_) {
+      return (
+        ok: false,
+        error: 'Langganan belum tersimpan — periksa koneksi.',
+        nextDate: null,
+      );
+    }
+  }
+
+  /// Langganan aktif milik pengguna (kosong bila migrasi belum dijalankan).
+  static Future<List<ServiceSubscription>> mySubscriptions() async {
+    try {
+      final res = await db.rpc('my_subscriptions');
+      final rows = res is List ? res : const [];
+      return [
+        for (final r in rows)
+          ServiceSubscription.fromMap((r as Map).cast<String, dynamic>())
+      ];
+    } catch (_) {
+      return const <ServiceSubscription>[];
+    }
+  }
+
+  static Future<bool> cancelSubscription(String id) async {
+    try {
+      final res = await db.rpc('cancel_subscription', params: {'p_id': id});
+      return (res as Map?)?['ok'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Majukan jadwal pengingat (dipakai "Pesan sekarang" & "Tunda").
+  static Future<bool> advanceSubscription(String id, {int? months}) async {
+    try {
+      final res = await db
+          .rpc('advance_subscription', params: {'p_id': id, 'p_bulan': months});
+      return (res as Map?)?['ok'] == true;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ============ hapus akun (syarat Google Play) ============
@@ -685,6 +1144,47 @@ class Api {
     };
   }
 
+  /// Realtime KEPUTUSAN admin atas saldo teknisi [uid]: UPDATE pada
+  /// `balance_deposits` (setoran disetujui/ditolak) dan `balance_withdrawals`
+  /// (penarikan disetujui/ditolak).
+  ///
+  /// postgres_changes menghormati RLS, jadi yang diterima hanya baris milik
+  /// teknisi ini (`bd_select_own` / `bw_select_own`). Tabel WAJIB terdaftar di
+  /// publication `supabase_realtime` — jalankan
+  /// `supabase/migrate-realtime-balance.sql`; tanpa itu channel tetap
+  /// ter-subscribe tetapi tidak pernah menerima event, dan aplikasi masih
+  /// memperbarui angka lewat pemeriksaan berkala di layar Pekerjaan.
+  static ChatUnsubscribe subscribeBalanceUpdates(
+      String uid, void Function() onChange) {
+    final channel = db.channel('balance-$uid');
+    var active = true;
+
+    void handle(PostgresChangePayload payload) {
+      if (!active) return;
+      onChange();
+    }
+
+    for (final tabel in const ['balance_deposits', 'balance_withdrawals']) {
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: tabel,
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'technician_id',
+          value: uid,
+        ),
+        callback: handle,
+      );
+    }
+    channel.subscribe();
+    return () async {
+      if (!active) return;
+      active = false;
+      await db.removeChannel(channel);
+    };
+  }
+
   /// Realtime SEMUA pesan chat yang boleh dilihat pengguna ini (RLS yang
   /// menyaring: pelanggan hanya pesanan miliknya, teknisi hanya yang
   /// ditugaskan). Dipakai badge chat global — tanpa ini badge hanya bergantung
@@ -742,8 +1242,16 @@ class Api {
   /// Kondisi lama tersedia di payload karena bookings memakai replica
   /// identity full (jalankan migrate-realtime-bookings.sql). Mengembalikan
   /// fungsi cleanup untuk membatalkan channel (dipanggil logout/dispose).
+  /// [onRefundUpdate] dipanggil saat admin memutuskan pengembalian dana
+  /// pesanan milik [uid] (tabel `booking_refunds`) — kotak masuk pelanggan
+  /// menghitung ulang angka belum dibacanya tanpa menunggu aplikasi di-resume.
+  /// Butuh `supabase/migrate-realtime-refunds.sql`; tanpa itu channel tetap
+  /// berjalan dan angka diperbarui saat layar dimuat / app kembali ke depan.
   static ChatUnsubscribe subscribeBookingUpdates(
-      String uid, void Function(BookingUpdate) onUpdate) {
+    String uid,
+    void Function(BookingUpdate) onUpdate, {
+    void Function()? onRefundUpdate,
+  }) {
     final channel = db.channel('bookings-$uid');
     var active = true;
 
@@ -786,6 +1294,23 @@ class Api {
       ),
       callback: handle,
     );
+    // Keputusan refund (done/rejected) TIDAK mengubah baris bookings, jadi
+    // perubahan status pengembalian dana butuh pendengar sendiri.
+    if (onRefundUpdate != null) {
+      channel.onPostgresChanges(
+        event: PostgresChangeEvent.update,
+        schema: 'public',
+        table: 'booking_refunds',
+        filter: PostgresChangeFilter(
+          type: PostgresChangeFilterType.eq,
+          column: 'user_id',
+          value: uid,
+        ),
+        callback: (_) {
+          if (active) onRefundUpdate();
+        },
+      );
+    }
     channel.subscribe();
     return () async {
       if (!active) return;
@@ -829,6 +1354,24 @@ class Api {
         .toList();
   }
 
+  /// Sisa kuota tiap slot pada satu tanggal (jumlah saja, bukan data pesanan).
+  ///
+  /// Gagal / migrasi `migrate-slot-capacity.sql` belum jalan → peta kosong;
+  /// wizard lalu menampilkan semua slot (fail-open). Server tetap penentu
+  /// terakhir lewat trigger, jadi tulisan tetap aman walau pembacaan ini gagal.
+  static Future<Map<String, SlotUsage>> fetchSlotUsage(String date) async {
+    if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date.trim())) {
+      return const {};
+    }
+    try {
+      final res =
+          await db.rpc('booking_slot_usage', params: {'p_date': date.trim()});
+      return slotUsageFrom(res);
+    } catch (_) {
+      return const {};
+    }
+  }
+
   /// GPS on-duty: simpan posisi terakhir teknisi (dipakai jarak ke job
   /// terbuka & pencarian teknisi terdekat oleh admin). Aman dipanggil
   /// berulang — upsert satu baris milik sendiri.
@@ -850,6 +1393,8 @@ class Api {
   /// mencocokkan teks pesan (yang bisa berubah kapan saja). Yang sudah dipakai:
   ///   * `saldo_habis` — saldo 0/minus, pekerjaan baru ditolak sampai diisi
   ///     (supabase/migrate-claim-min-balance.sql); layar menawarkan isi saldo;
+  ///   * `masih_bekerja` — masih memegang tugas `paid`/`in_progress`; selesaikan
+  ///     dulu (atau lepas) sebelum mengambil yang baru;
   ///   * `tidak_tersedia` — sudah diambil teknisi lain / di luar keahlian;
   ///   * `bukan_teknisi_aktif` — belum disetujui admin.
   static Future<({bool ok, String? error, String? kode})> claimJob(
@@ -867,7 +1412,11 @@ class Api {
     final rows = await db
         .from('bookings')
         .select(
-            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
+            // booking_items ikut dibaca: pesanan multi-varian / per m² butuh
+            // rincian baris di kartu & detail (rincian hanya hidup di tabel
+            // itu, bukan kolom bookings).
+            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url), '
+            'booking_items(*)')
         .eq('technician_id', uid)
         .order('booking_date', ascending: true);
     return rows.map<Booking>((m) => Booking.fromMap(m)).toList();
@@ -880,8 +1429,8 @@ class Api {
   /// dijalankan / sudah pernah dipotong sebelumnya).
   /// Bila sukses, server web diberi tahu (fire-and-forget) agar pelanggan
   /// menerima push "pengerjaan dimulai" / "pesanan selesai".
-  static Future<({bool ok, String? error, num? commission, num? balance})> setJobStatus(
-      String bookingId, String status) async {
+  static Future<({bool ok, String? error, num? commission, num? balance})>
+      setJobStatus(String bookingId, String status) async {
     final res = await db.rpc('set_job_status',
         params: {'p_booking': bookingId, 'p_status': status});
     final m = (res as Map).cast<String, dynamic>();
@@ -945,7 +1494,7 @@ class Api {
 
   /// Beri tahu server web (pemegang kunci email) bahwa satu peristiwa perlu
   /// dinotifikasikan ke semua ADMIN: [event] salah satu 'new_booking',
-  /// 'new_report', 'new_deposit' dengan [refId] = id barisnya.
+  /// 'new_report', 'new_deposit', 'new_withdrawal' dengan [refId] = id barisnya.
   ///
   /// Server MEMVERIFIKASI bahwa baris itu memang milik pemanggil (RLS lewat
   /// JWT-nya) sebelum mengirim — aplikasi tidak bisa memicu email tentang
@@ -1040,6 +1589,14 @@ class Api {
   /// kode, user, harga (dari katalog), diskon voucher, dan status.
   /// Client hanya mengirim id & teks; tidak bisa menembak harga
   /// (paritas dengan alur web yang dihitung di server action).
+  ///
+  /// [quantity] dan [items] mendukung pesanan multi-varian
+  /// (migrate-booking-items.sql); harga tiap baris tetap ditentukan server.
+  /// [area] khusus layanan per meter persegi
+  /// (migrate-service-area-pricing.sql) — di sana jumlah unit diabaikan dan
+  /// luas yang menentukan nominal. [serviceName]/[serviceCategory] hanya
+  /// melengkapi hasil RPC, yang tidak membawa join `services` (struk langsung
+  /// menampilkan nama & satuan yang benar).
   static Future<Booking> createBooking({
     required String serviceId,
     String? optionId,
@@ -1052,6 +1609,11 @@ class Api {
     String? voucherId,
     double? lat,
     double? lng,
+    int quantity = 1,
+    List<({String optionId, int quantity})>? items,
+    double? area,
+    String? serviceName,
+    String? serviceCategory,
   }) async {
     final res = await db.rpc('create_booking_security_definer', params: {
       'p_service_id': serviceId,
@@ -1071,6 +1633,17 @@ class Api {
       // memvalidasi: lat tanpa lng ditolak).
       if (lat != null && lng != null) 'p_lat': lat,
       if (lat != null && lng != null) 'p_lng': lng,
+      'p_quantity': quantity,
+      // Multi-varian: daftar baris pilihan pelanggan. Server memvalidasi
+      // setiap option_id milik layanan ini dan memakai harga katalog.
+      if (items != null && items.isNotEmpty)
+        'p_items': [
+          for (final i in items)
+            {'option_id': i.optionId, 'quantity': i.quantity},
+        ],
+      // Luas (m²) hanya untuk layanan per m²; server MENOLAK p_area pada
+      // layanan per unit, jadi null jangan pernah dikirim sebagai 0.
+      if (area != null) 'p_area': area,
     });
     final map = res is List
         ? (res.first as Map<String, dynamic>)
@@ -1078,8 +1651,14 @@ class Api {
     if (map['error'] != null) {
       throw Exception(map['error']);
     }
-    final booking =
-        Booking.fromMap((map['booking'] as Map).cast<String, dynamic>());
+    final booking = Booking.fromMap(
+      (map['booking'] as Map).cast<String, dynamic>(),
+      // RPC mengembalikan baris rincian terpisah (`items`): label & harga
+      // sudah dibekukan server saat pesanan dibuat.
+      items: bookingItemsFrom(map['items']),
+      fallbackServiceName: serviceName,
+      fallbackServiceCategory: serviceCategory,
+    );
     // Email ke semua admin: "ada pesanan baru masuk".
     unawaited(notifyAdminEvent('new_booking', booking.id));
     return booking;
@@ -1092,7 +1671,11 @@ class Api {
     final rows = await db
         .from('bookings')
         .select(
-            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
+            // booking_items ikut dibaca: pesanan multi-varian / per m² butuh
+            // rincian baris di kartu & detail (rincian hanya hidup di tabel
+            // itu, bukan kolom bookings).
+            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url), '
+            'booking_items(*)')
         .order('created_at', ascending: false);
     final reviewRows = await _myReviewedBookingIds();
     final reviewed = reviewRows.toSet();
@@ -1105,6 +1688,17 @@ class Api {
         .toList();
   }
 
+  /// Seperti [fetchMyBookings], tetapi TANPA melempar — sumber kotak masuk
+  /// notifikasi pelanggan (kabar pesanan miliknya) yang tidak boleh kosong
+  /// hanya karena satu sumber gagal.
+  static Future<List<Booking>> fetchMyBookingsSafe() async {
+    try {
+      return await fetchMyBookings();
+    } catch (_) {
+      return const <Booking>[];
+    }
+  }
+
   /// Satu pesanan berdasarkan id — dipakai notifikasi chat agar bisa langsung
   /// membuka detail tanpa memuat seluruh daftar pesanan. RLS tetap menentukan
   /// boleh-tidaknya baris ini dibaca (pemilik atau teknisi yang ditugaskan).
@@ -1114,7 +1708,11 @@ class Api {
     final row = await db
         .from('bookings')
         .select(
-            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url)')
+            // booking_items ikut dibaca: pesanan multi-varian / per m² butuh
+            // rincian baris di kartu & detail (rincian hanya hidup di tabel
+            // itu, bukan kolom bookings).
+            '*, services(name), technician:profiles!bookings_technician_id_fkey(name, avatar_url), '
+            'booking_items(*)')
         .eq('id', id)
         .maybeSingle();
     if (row == null) return null;
@@ -1202,8 +1800,11 @@ class Api {
   /// Pelanggan membatalkan pesanannya sendiri (RPC security definer).
   ///
   /// Aturan ditegakkan SERVER, bukan di sini: hanya pemiliknya, hanya status
-  /// pending/paid, hanya sebelum jadwalnya mulai, dan hanya bila belum ada
-  /// bukti bayar yang menunggu konfirmasi admin (belum ada alur refund).
+  /// pending/paid, dan hanya sebelum jadwalnya mulai.
+  ///
+  /// Pembatalan SETELAH transfer kini diizinkan: RPC membuat baris
+  /// `booking_refunds` 'pending' otomatis (supabase/migrate-booking-refunds.sql),
+  /// sehingga uang pelanggan masuk antrean pengembalian yang terlihat admin.
   static Future<({bool ok, String? error})> cancelBooking(
       String bookingId, String reason) async {
     try {
@@ -1433,6 +2034,89 @@ class Api {
     }
   }
 
+  /// Status pengembalian dana pesanan ini (RPC booking_refund_info).
+  ///
+  /// Fail-soft: migrasi yang belum dijalankan / pesanan tanpa refund sama-sama
+  /// menghasilkan [BookingRefund.kosong] — kartunya hanya tidak tampil, bukan
+  /// membuat layar detail pesanan error.
+  static Future<BookingRefund> bookingRefundInfo(String bookingId) async {
+    try {
+      final res = await db
+          .rpc('booking_refund_info', params: {'p_booking': bookingId});
+      final m = _asMap(res);
+      if (m['ok'] != true) return BookingRefund.kosong;
+      return BookingRefund.fromRpc(m, bookingId: bookingId);
+    } catch (_) {
+      return BookingRefund.kosong;
+    }
+  }
+
+  /// Semua pengembalian dana milik pelanggan ini, terbaru dulu — sumber kabar
+  /// di kotak masuk.
+  ///
+  /// Dibaca langsung dari `booking_refunds` (policy "user can view own booking
+  /// refunds" membatasinya ke pesanan milik sendiri). Join `bookings` hanya
+  /// untuk kode & nama layanan; bila PostgREST menolak bentuk join-nya, seluruh
+  /// pembacaan TIDAK digagalkan — kotak masuk memakai data pesanan yang sudah
+  /// dimuat sebagai cadangan.
+  static Future<List<BookingRefund>> fetchMyRefunds() async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) return const <BookingRefund>[];
+    const kolomDasar =
+        'id, booking_id, amount, status, reason, note, rejection_reason, '
+        'proof_url, payment_confirmed, created_at, decided_at';
+
+    List<BookingRefund> baca(Iterable<dynamic> rows) => [
+          for (final r in rows)
+            BookingRefund.fromRow((r as Map).cast<String, dynamic>()),
+        ];
+
+    try {
+      final rows = await db
+          .from('booking_refunds')
+          .select('$kolomDasar, booking:bookings(code, services(name))')
+          .eq('user_id', uid)
+          .order('created_at', ascending: false)
+          .limit(100);
+      return baca(rows);
+    } catch (_) {
+      // Bentuk join di atas bisa DITOLAK PostgREST (mis. relasi belum dikenal
+      // skema cache). Kode & nama layanan hanya pemanis — kabar refund tidak
+      // boleh hilang total karena itu, jadi baca ulang tanpa join dan biarkan
+      // kotak masuk memakai data pesanan yang sudah dimuat.
+      final rows = await db
+          .from('booking_refunds')
+          .select(kolomDasar)
+          .eq('user_id', uid)
+          .order('created_at', ascending: false)
+          .limit(100);
+      return baca(rows);
+    }
+  }
+
+  /// [fetchMyRefunds] yang tidak pernah melempar: tabel belum dimigrasikan,
+  /// offline, atau join gagal = tidak ada kabar refund, bukan layar error.
+  static Future<List<BookingRefund>> fetchMyRefundsSafe() async {
+    try {
+      return await fetchMyRefunds();
+    } catch (_) {
+      return const <BookingRefund>[];
+    }
+  }
+
+  /// Signed URL bukti transfer balik (bucket privat `refund-proofs`).
+  /// Hanya admin dan pemilik pesanan yang diizinkan RLS Storage; pihak lain
+  /// mendapat null alih-alih tautan yang tidak bisa dibuka.
+  static Future<String?> refundProofUrl(String path) async {
+    final p = path.trim();
+    if (p.isEmpty) return null;
+    try {
+      return await db.storage.from('refund-proofs').createSignedUrl(p, 3600);
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Ajukan klaim garansi untuk pesanan yang sudah selesai dan masih bergaransi.
   static Future<({bool ok, String? error})> createWarrantyClaim(
       String bookingId, String reason) async {
@@ -1607,6 +2291,15 @@ class Api {
     return rows.map<Report>((m) => Report.fromMap(m)).toList();
   }
 
+  /// Seperti [fetchMyReports], tetapi TANPA melempar — sumber kotak masuk.
+  static Future<List<Report>> fetchMyReportsSafe() async {
+    try {
+      return await fetchMyReports();
+    } catch (_) {
+      return const <Report>[];
+    }
+  }
+
   /// Laporan. Untuk teknisi: [bookingId] wajib dan harus pekerjaan yang
   /// ditugaskan ke dia (paritas server-action web yang memvalidasi teknisi),
   /// author_role otomatis 'technician'; selain itu 'customer'.
@@ -1689,10 +2382,14 @@ class Api {
   /// * Biaya app = Σ (|amount| − commission_amount) tiap earning ber-amount
   ///   negatif — diturunkan dari POTONGAN RIIL, bukan fee booking penuh,
   ///   agar tetap cocok saat potongan dibatasi saldo (kebijakan saldo ≥ 0).
-  /// * expectedBalance = setoran − komisi − biaya app − penarikan + refund;
-  ///   kalau ≠ profiles.balance ada anomali — termasuk state SEBELUM
-  ///   migrate-earning-fee.sql dijalankan (fee belum dipotong DB →
+  /// * expectedBalance = setoran − komisi − biaya app − penarikan + refund
+  ///   + penyesuaian; kalau ≠ profiles.balance ada anomali — termasuk state
+  ///   SEBELUM migrate-earning-fee.sql dijalankan (fee belum dipotong DB →
   ///   selisih = total biaya app).
+  ///
+  /// `adjustment` WAJIB ikut: koreksi saldo admin dan penghapusan piutang
+  /// menulis baris itu, dan mengabaikannya membuat koreksi yang benar terbaca
+  /// sebagai selisih palsu di layar teknisi.
   static TechnicianBalanceSummary summarizeBalance(
       Profile? p, List<BalanceTransaction> tx) {
     var earned = 0;
@@ -1701,6 +2398,12 @@ class Api {
     var topup = 0;
     var withdrawal = 0;
     var refund = 0;
+    // Baris `adjustment` = perubahan saldo TANPA uang masuk/keluar: koreksi
+    // admin (bisa negatif, migrate-admin-balance-adjustment.sql) dan
+    // penghapusan piutang (positif, migrate-piutang-writeoff.sql). Sebelumnya
+    // baris ini DIABAIKAN, sehingga setiap koreksi yang sah membuat layar Saldo
+    // menampilkan "Ada selisih …" padahal saldo dan buku besar sudah sama.
+    var adjustment = 0;
     for (final t in tx) {
       switch (t.type) {
         case 'earning':
@@ -1732,9 +2435,13 @@ class Api {
           withdrawal += (-t.amount).round();
         case 'refund':
           refund += t.amount.round();
+        case 'adjustment':
+          // Bertanda seperti di DB: koreksi turun mengurangi saldo, penghapusan
+          // piutang menambah. Dijumlahkan apa adanya agar expectedBalance = Σ mutasi.
+          adjustment += t.amount.round();
       }
     }
-    final expected = topup - commission - appFee - withdrawal + refund;
+    final expected = topup - commission - appFee - withdrawal + refund + adjustment;
     return TechnicianBalanceSummary(
       balance: p?.balance ?? 0,
       earnedTotal: earned,
@@ -1798,6 +2505,176 @@ class Api {
     return path;
   }
 
+  /// Teknisi mengajukan TARIK saldo ke rekening pribadi — paritas alur web
+  /// (`requestWithdrawal` di src/app/actions/technician.js):
+  ///
+  ///   1. Saldo DITAHAN saat pengajuan: mutasi `withdrawal` (amount negatif)
+  ///      dicatat dan `profiles.balance` langsung dikurangi supaya dana yang
+  ///      sama tidak bisa dipakai dua kali (mis. untuk mengambil pekerjaan).
+  ///   2. Baris `balance_withdrawals` 'pending' menunggu keputusan admin.
+  ///      Ditolak → saldo kembali penuh (mutasi `refund`); disetujui → admin
+  ///      mentransfer manual, saldo tidak berubah lagi.
+  ///
+  /// Aturan yang sama dengan server web: hanya teknisi/admin, jumlah ≤ saldo
+  /// aktif, dan hanya SATU pengajuan pending dalam satu waktu. Galat dilempar
+  /// dengan pesan siap tampil ke pengguna.
+  static Future<void> requestWithdrawal({
+    required int amount,
+    required String bankName,
+    required String accountNumber,
+    required String accountHolder,
+  }) async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) throw Exception('Belum login.');
+    if (amount <= 0) throw Exception('Isi jumlah penarikan yang valid.');
+
+    final bank = bankName.trim();
+    final accNo = accountNumber.trim();
+    final holder = accountHolder.trim();
+    if (bank.isEmpty) throw Exception('Isi nama bank / e-wallet tujuan.');
+    if (accNo.length < 6) {
+      throw Exception('Isi nomor rekening yang valid (min. 6 karakter).');
+    }
+    if (holder.isEmpty) throw Exception('Isi nama pemilik rekening.');
+
+    final profile = await db
+        .from('profiles')
+        .select('role, balance')
+        .eq('id', uid)
+        .maybeSingle();
+    final role = profile?['role'] as String?;
+    if (role != 'technician' && role != 'admin') {
+      throw Exception('Hanya teknisi yang bisa menarik saldo.');
+    }
+    final saldo = (profile?['balance'] as num?)?.toDouble() ?? 0;
+    if (saldo < amount) {
+      throw Exception(
+          'Saldo tidak cukup. Saldo aktifmu ${formatRupiah(saldo.round())}.');
+    }
+
+    // Satu kanal penarikan: pengajuan pending lain harus diputuskan admin dulu.
+    final pending = await db
+        .from('balance_withdrawals')
+        .select('id')
+        .eq('technician_id', uid)
+        .eq('status', 'pending')
+        .maybeSingle();
+    if (pending != null) {
+      throw Exception(
+          'Kamu masih punya pengajuan penarikan yang menunggu verifikasi admin.');
+    }
+
+    // 1. Tahan saldo lewat mutasi (RLS `bt_insert_own_withdrawal` hanya
+    //    mengizinkan type 'withdrawal' milik sendiri).
+    final String txId;
+    try {
+      final tx = await db
+          .from('balance_transactions')
+          .insert({
+            'technician_id': uid,
+            'type': 'withdrawal',
+            'amount': -amount,
+            'note': 'Pengajuan tarik ke $bank ${accNo.substring(0, 4)}••••',
+          })
+          .select('id')
+          .single();
+      txId = tx['id'] as String;
+    } catch (e) {
+      final msg = e.toString();
+      if (msg.contains('42501') || msg.contains('row-level security')) {
+        throw Exception(
+            'Izin mencatat penarikan ditolak database — minta admin menjalankan '
+            'supabase/fix-balance-admin-policies.sql.');
+      }
+      if (msg.contains('relation') || msg.contains('does not exist')) {
+        throw Exception(
+            'Fitur penarikan belum aktif di database — minta admin menjalankan '
+            'supabase/migrate-technician-withdrawals.sql.');
+      }
+      rethrow;
+    }
+
+    // 2. Catat pengajuan yang harus diproses admin.
+    final String wdId;
+    try {
+      final wd = await db
+          .from('balance_withdrawals')
+          .insert({
+            'technician_id': uid,
+            'amount': amount,
+            'bank_name': bank,
+            'account_number': accNo,
+            'account_holder': holder,
+            'status': 'pending',
+            'transaction_id': txId,
+          })
+          .select('id')
+          .single();
+      wdId = wd['id'] as String;
+    } catch (e) {
+      // Saldo sudah tertahan oleh mutasi di atas sedangkan pengajuannya gagal
+      // tercatat. Teknisi tidak boleh dibiarkan mengira dananya hilang, jadi
+      // pesannya menyebut penanda transaksi untuk dicek admin.
+      throw Exception(
+          'Pengajuan gagal dicatat, tetapi saldo ${formatRupiah(amount)} sudah '
+          'tertahan (transaksi ${txId.substring(0, 8)}). Hubungi admin untuk '
+          'mengembalikannya. ${e.toString().replaceFirst('Exception: ', '')}');
+    }
+
+    // 3. Kurangi saldo profil — langkah terakhir, sama seperti alur web.
+    await db.from('profiles').update({'balance': saldo - amount}).eq('id', uid);
+
+    // Email ke admin (server memverifikasi baris ini milik pemanggil).
+    unawaited(notifyAdminEvent('new_withdrawal', wdId));
+  }
+
+  /// Seperti [fetchAssignedJobs], tetapi TANPA melempar — dipakai kotak masuk
+  /// notifikasi yang tidak boleh kosong hanya karena satu sumber gagal.
+  static Future<List<Booking>> fetchAssignedJobsSafe() async {
+    try {
+      return await fetchAssignedJobs();
+    } catch (_) {
+      return const <Booking>[];
+    }
+  }
+
+  /// ID pesanan yang komisinya SUDAH dipotong dari saldo teknisi ini.
+  ///
+  /// Dipakai kotak masuk teknisi: saat pesanan yang sudah ditugaskan
+  /// dibatalkan, teknisi perlu tahu apakah pembatalan itu menyentuh saldonya
+  /// (komisi sudah terpotong dan TIDAK dikembalikan otomatis) atau belum
+  /// (komisi baru dipotong setelah pekerjaan selesai).
+  ///
+  /// Policy `bt_select_own` membatasi baris ke milik teknisi ini; admin yang
+  /// memakai aplikasi pelanggan hanya melihat barisnya sendiri (tidak ada).
+  static Future<Set<String>> fetchMyCommissionedBookingIds() async {
+    final uid = db.auth.currentUser?.id;
+    if (uid == null) return const <String>{};
+    final rows = await db
+        .from('balance_transactions')
+        .select('booking_id')
+        .eq('technician_id', uid)
+        .eq('type', 'earning')
+        .order('created_at', ascending: false)
+        .limit(1000);
+    return {
+      for (final r in rows)
+        if (r['booking_id'] is String) r['booking_id'] as String,
+    };
+  }
+
+  /// [fetchMyCommissionedBookingIds] yang tidak pernah melempar — mengembalikan
+  /// `null` bila datanya TIDAK diketahui (tabel saldo belum dimigrasikan /
+  /// offline). Bedanya penting: himpunan kosong berarti "komisi belum pernah
+  /// dipotong", sedangkan null tidak boleh diklaim begitu.
+  static Future<Set<String>?> fetchMyCommissionedBookingIdsSafe() async {
+    try {
+      return await fetchMyCommissionedBookingIds();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Riwayat mutasi saldo (100 terbaru, terbaru dulu).
   /// join bookings supaya transaksi komisi menampilkan kode pesanan,
   /// nilai pekerjaan, dan biaya aplikasi yang ikut dipotong dari saldo.
@@ -1812,6 +2689,86 @@ class Api {
     return rows
         .map<BalanceTransaction>((m) => BalanceTransaction.fromMap(m))
         .toList();
+  }
+
+  /// Riwayat pengajuan SETOR + TARIK milik teknisi yang login, terbaru dulu.
+  ///
+  /// Ini satu-satunya cara teknisi tahu nasib uangnya: aplikasi hanya bisa
+  /// MENGIRIM pengajuan, jadi tanpa daftar ini status "pending/disetujui/ditolak"
+  /// (dan alasan penolakan) hanya hidup di teks push yang mudah hilang.
+  ///
+  /// Kedua tabel dibaca terpisah supaya migrasi yang baru separuh jalan (mis.
+  /// `migrate-technician-withdrawals.sql` belum dijalankan) tidak
+  /// menyembunyikan riwayat setor yang sudah ada. Keduanya tidak ada → galat
+  /// asli dilempar agar layar menampilkan ajakan migrasi, bukan "belum ada
+  /// pengajuan" yang menyesatkan.
+  static Future<List<BalanceRequest>> fetchMyBalanceRequests(
+      {int limit = 30}) async {
+    final SupabaseClient client;
+    try {
+      client = db;
+    } catch (_) {
+      // Supabase belum diinisialisasi (mis. widget test tanpa backend).
+      return const <BalanceRequest>[];
+    }
+    final uid = client.auth.currentUser?.id;
+    if (uid == null) return const <BalanceRequest>[];
+
+    final gagal = <Object>[];
+
+    Future<List<Map<String, dynamic>>> ambil(String tabel, String kolom) async {
+      try {
+        return await client
+            .from(tabel)
+            .select(kolom)
+            .eq('technician_id', uid)
+            .order('created_at', ascending: false)
+            .limit(limit);
+      } catch (e) {
+        if (!_tabelBelumAda(e)) rethrow;
+        gagal.add(e);
+        return const <Map<String, dynamic>>[];
+      }
+    }
+
+    final hasil = await Future.wait([
+      ambil(
+          'balance_withdrawals',
+          'id, amount, status, rejection_reason, bank_name, account_number, '
+              'account_holder, reviewed_at, created_at'),
+      ambil('balance_deposits',
+          'id, amount, status, rejection_reason, reviewed_at, created_at'),
+    ]);
+
+    if (gagal.length == 2) throw gagal.first;
+
+    return <BalanceRequest>[
+      ...hasil[0].map(BalanceRequest.withdrawal),
+      ...hasil[1].map(BalanceRequest.deposit),
+    ]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+  }
+
+  /// Seperti [fetchMyBalanceRequests], tetapi TANPA melempar: migrasi belum
+  /// jalan / jaringan bermasalah / sesi belum pulih → daftar kosong. Dipakai
+  /// penanda kabar saldo di tab Pekerjaan yang tidak boleh mengganggu daftar
+  /// pekerjaan.
+  static Future<List<BalanceRequest>> fetchMyBalanceRequestsSafe() async {
+    try {
+      return await fetchMyBalanceRequests();
+    } catch (_) {
+      return const <BalanceRequest>[];
+    }
+  }
+
+  /// Tabel belum ada di database (migrasi belum dijalankan). Dibedakan dari
+  /// galat izin/jaringan supaya UI bisa memilih pesan yang tepat.
+  static bool _tabelBelumAda(Object e) {
+    final s = e.toString();
+    return s.contains('Could not find the table') ||
+        s.contains('PGRST205') ||
+        s.contains('relation') ||
+        s.contains('does not exist') ||
+        s.contains('schema cache');
   }
 
   // ============ voucher ============

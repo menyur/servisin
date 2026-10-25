@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
+import '../balance_notice.dart';
 import '../format.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'balance_notice_banner.dart';
 import 'common.dart';
 import 'deposit_screen.dart';
+import 'withdraw_screen.dart';
 
 /// Layar Saldo Teknisi (dibuka dari strip saldo di tab Pekerjaan):
 /// kartu saldo aktif + statistik pendapatan/komisi/setor, lalu riwayat
@@ -16,11 +19,33 @@ import 'deposit_screen.dart';
 /// profiles.balance. Kolom belum dijalankan migrasinya → tampil papan
 /// ajakan menjalankan migrate-technician-balance.sql.
 class BalanceScreen extends StatefulWidget {
-  const BalanceScreen({super.key, this.loadPage});
+  const BalanceScreen({
+    super.key,
+    this.loadPage,
+    this.loadRequests,
+    this.loadNotices,
+    this.markNoticesSeen,
+  });
 
   /// Seam uji: sumber data saldo. Default `Api.fetchMyBalancePage`.
-  final Future<({TechnicianBalanceSummary summary, List<BalanceTransaction> transactions})>
+  final Future<
+          ({
+            TechnicianBalanceSummary summary,
+            List<BalanceTransaction> transactions
+          })>
       Function()? loadPage;
+
+  /// Seam uji: riwayat pengajuan setor/tarik. Default
+  /// `Api.fetchMyBalanceRequests`.
+  final Future<List<BalanceRequest>> Function()? loadRequests;
+
+  /// Seam uji: keputusan admin yang belum dilihat (banner "Kabar saldo").
+  /// Default menurunkannya dari [loadRequests] + snapshot lokal.
+  final Future<List<BalanceRequest>> Function()? loadNotices;
+
+  /// Seam uji: tandai kabar sudah dibaca. Default menyimpan snapshot lokal.
+  final Future<void> Function(Iterable<BalanceRequest> requests)?
+      markNoticesSeen;
 
   @override
   State<BalanceScreen> createState() => _BalanceScreenState();
@@ -29,6 +54,10 @@ class BalanceScreen extends StatefulWidget {
 class _BalanceScreenState extends State<BalanceScreen> {
   TechnicianBalanceSummary? _summary;
   List<BalanceTransaction>? _tx;
+  List<BalanceRequest>? _requests;
+
+  /// Keputusan admin yang belum dilihat → banner di atas kartu saldo.
+  List<BalanceRequest> _notices = const [];
   String? _error;
   bool _migrated = true;
   bool _loading = true;
@@ -38,7 +67,8 @@ class _BalanceScreenState extends State<BalanceScreen> {
 
   /// Kunci penyimpanan tutup-banner per akun (pindah akun di perangkat sama
   /// tidak saling menutupi).
-  String get _dismissKey => 'balance_reminder_dismissed_at_${Api.currentUserId ?? 'anon'}';
+  String get _dismissKey =>
+      'balance_reminder_dismissed_at_${Api.currentUserId ?? 'anon'}';
 
   @override
   void initState() {
@@ -92,18 +122,101 @@ class _BalanceScreenState extends State<BalanceScreen> {
     if (sent == true && mounted) _load();
   }
 
+  /// Pengajuan penarikan terakhir yang menyebut rekening — sumber isian
+  /// otomatis "rekening terakhir" di layar Tarik Saldo.
+  BalanceRequest? get _lastWithdrawalAccount {
+    for (final r in _requests ?? const <BalanceRequest>[]) {
+      if (r.isWithdrawal && (r.accountNumber ?? '').trim().isNotEmpty) return r;
+    }
+    return null;
+  }
+
+  /// Buka layar Tarik Saldo NATIVE; setelah pengajuan terkirim muat ulang
+  /// saldo/riwayat supaya dana yang ditahan langsung terlihat. Rekening yang
+  /// terakhir dipakai ikut terisi agar tidak mengetik ulang nomornya.
+  Future<void> _openWithdrawFlow() async {
+    final last = _lastWithdrawalAccount;
+    final sent = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => WithdrawScreen(
+          initialBank: last?.bankName,
+          initialNumber: last?.accountNumber,
+          initialHolder: last?.accountHolder,
+        ),
+      ),
+    );
+    if (sent == true && mounted) _load();
+  }
+
+  /// Riwayat pengajuan setor/tarik; galat apa pun → daftar kosong supaya
+  /// kartu saldo tetap bisa dipakai.
+  Future<List<BalanceRequest>> _loadRequestsSafe() async {
+    try {
+      return await (widget.loadRequests ?? Api.fetchMyBalanceRequests)();
+    } catch (_) {
+      return const <BalanceRequest>[];
+    }
+  }
+
+  /// UID pengguna; '' bila Supabase belum siap (mis. widget test).
+  String _uid() {
+    try {
+      return Api.currentUserId ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// Keputusan admin yang belum diakui teknisi (banner "Kabar saldo").
+  Future<List<BalanceRequest>> _loadNoticesSafe(
+      List<BalanceRequest> requests) async {
+    try {
+      final load = widget.loadNotices;
+      return load != null
+          ? await load()
+          : await loadUnseenBalanceDecisions(requests: requests);
+    } catch (_) {
+      return const <BalanceRequest>[];
+    }
+  }
+
+  /// "Mengerti": simpan snapshot status sekarang supaya kabar yang sama tidak
+  /// muncul lagi di banner maupun penanda strip saldo.
+  Future<void> _acknowledgeNotices() async {
+    final requests = _requests ?? const <BalanceRequest>[];
+    setState(() => _notices = const []);
+    try {
+      final save = widget.markNoticesSeen;
+      if (save != null) {
+        await save(requests);
+      } else {
+        await BalanceNoticeStore.markSeen(_uid(), requests);
+      }
+    } catch (_) {
+      // Kabar bisa muncul lagi lain kali — lebih baik daripada layar rusak.
+    }
+  }
+
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
       _migrated = true;
     });
+    // Riwayat pengajuan dimuat bersamaan; kegagalannya TIDAK boleh
+    // menenggelamkan saldo & mutasi (bagian itu yang paling penting).
+    final requests = _loadRequestsSafe();
     try {
       final page = await (widget.loadPage ?? Api.fetchMyBalancePage)();
+      final req = await requests;
+      final notices = await _loadNoticesSafe(req);
       if (!mounted) return;
       setState(() {
         _summary = page.summary;
         _tx = page.transactions;
+        _requests = req;
+        _notices = notices;
         _loading = false;
       });
     } catch (e) {
@@ -123,7 +236,8 @@ class _BalanceScreenState extends State<BalanceScreen> {
         });
       } else {
         setState(() {
-          _error = friendlyNetworkError(e) ?? 'Gagal memuat saldo. Tarik ke bawah untuk mencoba lagi.';
+          _error = friendlyNetworkError(e) ??
+              'Gagal memuat saldo. Tarik ke bawah untuk mencoba lagi.';
           _loading = false;
         });
       }
@@ -143,13 +257,21 @@ class _BalanceScreenState extends State<BalanceScreen> {
                   ? ListView(children: const [ScreenStateView(loading: true)])
                   : _error != null
                       ? ListView(children: [
-                          ScreenStateView(loading: false, error: _error, onRetry: _load),
+                          ScreenStateView(
+                              loading: false, error: _error, onRetry: _load),
                         ])
                       : RefreshIndicator(
                           onRefresh: _load,
                           child: ListView(
                             padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
                             children: [
+                              if (_notices.isNotEmpty) ...[
+                                BalanceNoticeBanner(
+                                  notices: _notices,
+                                  onAcknowledge: _acknowledgeNotices,
+                                ),
+                                const SizedBox(height: 14),
+                              ],
                               if (_reminderVisible) ...[
                                 DepositReminderBanner(
                                   reminderAt: _summary!.balanceReminderAt!,
@@ -159,8 +281,20 @@ class _BalanceScreenState extends State<BalanceScreen> {
                                 const SizedBox(height: 14),
                               ],
                               _SummaryCard(summary: _summary),
+                              const SizedBox(height: 12),
+                              // Tarik saldo ke rekening pribadi — pasangan tombol
+                              // "Setor" di AppBar, supaya teknisi tidak perlu
+                              // keluar ke halaman web untuk mencairkan saldo.
+                              OutlinedButton.icon(
+                                onPressed: _openWithdrawFlow,
+                                icon: const Icon(Icons.south_west_rounded,
+                                    size: 18),
+                                label: const Text('Tarik saldo ke rekening'),
+                              ),
                               const SizedBox(height: 14),
                               const _MoneyFlowCard(),
+                              const SizedBox(height: 20),
+                              _RequestsSection(requests: _requests),
                               const SizedBox(height: 20),
                               const Text('Riwayat Mutasi',
                                   style: TextStyle(
@@ -197,7 +331,10 @@ class _BalanceScreenState extends State<BalanceScreen> {
           onPressed: _openDepositFlow,
           icon: const Icon(Icons.add_rounded, size: 16, color: Colors.white),
           label: const Text('Setor',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13)),
         ),
       ],
       shape: const RoundedRectangleBorder(
@@ -251,7 +388,8 @@ class _SummaryCard extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          const Icon(Icons.account_balance_wallet_rounded, size: 18, color: Colors.white),
+          const Icon(Icons.account_balance_wallet_rounded,
+              size: 18, color: Colors.white),
           const SizedBox(width: 7),
           Text('Saldo Aktif',
               style: TextStyle(
@@ -271,7 +409,9 @@ class _SummaryCard extends StatelessWidget {
             padding: const EdgeInsets.only(top: 4),
             child: Text(
                 'Saldo terpakai habis — komisi melebihi setoran ${formatRupiah(s.shortfall)}. Ajukan setor untuk menutup.',
-                style: TextStyle(fontSize: 11.5, color: Colors.white.withValues(alpha: 0.85))),
+                style: TextStyle(
+                    fontSize: 11.5,
+                    color: Colors.white.withValues(alpha: 0.85))),
           ),
         const SizedBox(height: 15),
         // Statistik 2×2 — semua selalu tampil (redup saat 0), termasuk
@@ -284,20 +424,24 @@ class _SummaryCard extends StatelessWidget {
                 Expanded(
                   child: Opacity(
                     opacity: st.$2 == 0 ? 0.62 : 1,
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(formatRupiah(st.$2),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                          style: TextStyle(
-                              fontSize: 13, fontWeight: FontWeight.w800, color: st.$3)),
-                      const SizedBox(height: 2),
-                      Text(st.$1,
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                          style: TextStyle(
-                              fontSize: 10.5,
-                              color: Colors.white.withValues(alpha: 0.85))),
-                    ]),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(formatRupiah(st.$2),
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: st.$3)),
+                          const SizedBox(height: 2),
+                          Text(st.$1,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                              style: TextStyle(
+                                  fontSize: 10.5,
+                                  color: Colors.white.withValues(alpha: 0.85))),
+                        ]),
                   ),
                 ),
             ]),
@@ -306,7 +450,8 @@ class _SummaryCard extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: s.mismatch == 0 ? 0.14 : 0.22),
+            color:
+                Colors.white.withValues(alpha: s.mismatch == 0 ? 0.14 : 0.22),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Row(children: [
@@ -324,7 +469,8 @@ class _SummaryCard extends StatelessWidget {
                       style: TextStyle(fontSize: 10.5, color: Colors.white))
                   : Text(
                       'Ada selisih ${formatRupiah(s.mismatch.abs())} antara saldo dan riwayat mutasi — minta admin koreksi lewat penyesuaian saldo.',
-                      style: const TextStyle(fontSize: 10.5, color: Colors.white)),
+                      style:
+                          const TextStyle(fontSize: 10.5, color: Colors.white)),
             ),
           ]),
         ),
@@ -361,20 +507,27 @@ class DepositReminderBanner extends StatelessWidget {
         border: Border.all(color: AppColors.amber),
       ),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.notifications_active_rounded, size: 18, color: AppColors.amber),
+        const Icon(Icons.notifications_active_rounded,
+            size: 18, color: AppColors.amber),
         const SizedBox(width: 9),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             const Text('Admin mengingatkan setor saldo',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.navy)),
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.navy)),
             const SizedBox(height: 2),
             const Text(
               'Saldo aktifmu belum cukup. Ketuk "Saya sudah setor" untuk mengunggah bukti transfer — saldo bertambah setelah admin verifikasi.',
-              style: TextStyle(fontSize: 11.5, color: AppColors.inkSoft, height: 1.35),
+              style: TextStyle(
+                  fontSize: 11.5, color: AppColors.inkSoft, height: 1.35),
             ),
             const SizedBox(height: 3),
             Text('Diingatkan ${formatDateTimeId(reminderAt)}',
-                style: const TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
+                style:
+                    const TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
             const SizedBox(height: 9),
             Wrap(spacing: 8, runSpacing: 4, children: [
               FilledButton.icon(
@@ -384,8 +537,10 @@ class DepositReminderBanner extends StatelessWidget {
                 style: FilledButton.styleFrom(
                   backgroundColor: AppColors.amber,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  textStyle: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w700),
                   // WAJIB minimumSize berlebar TERBATAS: tema global memakai
                   // Size.fromHeight (lebar tak hingga) demi tombol selebar
                   // wadah. Di dalam `Wrap` lebar tak hingga itu tidak meledak,
@@ -399,8 +554,10 @@ class DepositReminderBanner extends StatelessWidget {
                 onPressed: onDismiss,
                 style: TextButton.styleFrom(
                   foregroundColor: AppColors.inkSoft,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  textStyle: const TextStyle(
+                      fontSize: 12, fontWeight: FontWeight.w600),
                 ),
                 child: const Text('Tutup'),
               ),
@@ -452,7 +609,9 @@ class _MoneyFlowCard extends StatelessWidget {
           SizedBox(width: 7),
           Text('Cara kerja saldo',
               style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w800, color: AppColors.navy)),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.navy)),
         ]),
         const SizedBox(height: 9),
         for (final r in rows) ...[
@@ -467,6 +626,217 @@ class _MoneyFlowCard extends StatelessWidget {
           ]),
           const SizedBox(height: 7),
         ],
+      ]),
+    );
+  }
+}
+
+/// Bagian "Permintaan Saldo": riwayat SETOR dan TARIK yang dikirim dari
+/// aplikasi maupun web, lengkap dengan keputusan admin.
+///
+/// Selama ini aplikasi hanya bisa MENGIRIM pengajuan: teknisi tidak punya
+/// tempat untuk membaca statusnya, sehingga alasan penolakan (yang hanya
+/// disebut di teks push) hilang begitu notifikasi dibersihkan.
+class _RequestsSection extends StatelessWidget {
+  final List<BalanceRequest>? requests;
+
+  const _RequestsSection({required this.requests});
+
+  @override
+  Widget build(BuildContext context) {
+    final list = requests ?? const <BalanceRequest>[];
+    final pending = list.where((r) => r.isPending).length;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Expanded(
+          child: Text('Permintaan Saldo',
+              style: TextStyle(
+                  fontSize: 15.5,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.navy)),
+        ),
+        if (pending > 0)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: AppColors.amberTint,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: AppColors.amber),
+            ),
+            child: Text('$pending menunggu',
+                style: const TextStyle(
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.amber)),
+          ),
+      ]),
+      const SizedBox(height: 4),
+      const Text(
+        'Status pengajuan setor dan tarik yang kamu kirim — termasuk alasan bila '
+        'admin menolak.',
+        style:
+            TextStyle(fontSize: 11.5, color: AppColors.inkSoft, height: 1.35),
+      ),
+      const SizedBox(height: 10),
+      if (requests == null)
+        const Text('Memuat pengajuan…',
+            style: TextStyle(fontSize: 11.5, color: AppColors.inkSoft))
+      else if (list.isEmpty)
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 14),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.line),
+          ),
+          child: const Text(
+            'Belum ada pengajuan setor atau tarik. Pengajuan yang kamu kirim akan '
+            'muncul di sini beserta statusnya.',
+            style: TextStyle(
+                fontSize: 11.5, color: AppColors.inkSoft, height: 1.4),
+          ),
+        )
+      else
+        ...list.map((r) => _RequestTile(r)),
+    ]);
+  }
+}
+
+/// Satu pengajuan uang: jenis, nominal, rekening (tarik), status, dan alasan
+/// penolakan bila ada.
+class _RequestTile extends StatelessWidget {
+  final BalanceRequest req;
+
+  const _RequestTile(this.req);
+
+  /// Warna status: kuning = menunggu, hijau = disetujui, merah = ditolak.
+  (Color, Color) get _statusColors => switch (req.status) {
+        'approved' => (AppColors.mint, AppColors.mintTint),
+        'rejected' => (AppColors.coral, AppColors.coralTint),
+        _ => (AppColors.amber, AppColors.amberTint),
+      };
+
+  /// Kalimat yang menjawab "uang saya sekarang bagaimana?".
+  String get _note {
+    if (req.isPending) {
+      return req.isWithdrawal
+          ? 'Saldo ditahan sampai admin memproses.'
+          : 'Saldo masuk setelah bukti diverifikasi.';
+    }
+    if (req.isRejected) {
+      return req.isWithdrawal
+          ? 'Saldo sudah dikembalikan penuh.'
+          : 'Tidak ada saldo yang ditambahkan.';
+    }
+    return req.reviewedAt != null
+        ? 'Diproses ${formatDateTimeId(req.reviewedAt!)}'
+        : 'Sudah diproses admin.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final (fg, bg) = _statusColors;
+    final reason = (req.rejectionReason ?? '').trim();
+    final subtitle = [
+      if (req.isWithdrawal && req.accountLabel.isNotEmpty) req.accountLabel,
+      if (req.isDeposit) 'Bukti transfer terlampir',
+      formatDateTimeId(req.createdAt),
+    ].join(' · ');
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
+            child: Icon(
+              req.isWithdrawal
+                  ? Icons.south_west_rounded
+                  : Icons.north_east_rounded,
+              size: 16,
+              color: fg,
+            ),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(
+                  child: Text(req.kindLabel,
+                      style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.navy)),
+                ),
+                Text(formatRupiah(req.amount),
+                    style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.navy)),
+              ]),
+              const SizedBox(height: 2),
+              Text(subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 11.5, color: AppColors.inkSoft)),
+              const SizedBox(height: 7),
+              Row(children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: bg,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(req.statusLabel,
+                      style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w800,
+                          color: fg)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(_note,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 10.5, color: AppColors.inkSoft)),
+                ),
+              ]),
+            ]),
+          ),
+        ]),
+        if (reason.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 9),
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: AppColors.coralTint,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Icon(Icons.info_outline_rounded,
+                  size: 14, color: AppColors.coral),
+              const SizedBox(width: 7),
+              Expanded(
+                child: Text('Alasan penolakan: $reason',
+                    style: const TextStyle(
+                        fontSize: 11.5, color: AppColors.navy, height: 1.35)),
+              ),
+            ]),
+          ),
       ]),
     );
   }
@@ -525,10 +895,13 @@ class _TxTile extends StatelessWidget {
         ),
         const SizedBox(width: 11),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(tx.typeLabel,
                 style: const TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700, color: AppColors.navy)),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.navy)),
             const SizedBox(height: 1),
             Text(
               [
@@ -538,7 +911,8 @@ class _TxTile extends StatelessWidget {
                   'komisi ${formatRupiah(tx.commissionAmount!)}',
                 if (tx.type == 'earning' && _appFeeCut > 0)
                   'biaya app ${formatRupiah(_appFeeCut)}',
-                if (tx.note?.isNotEmpty == true && tx.bookingCode?.isNotEmpty != true)
+                if (tx.note?.isNotEmpty == true &&
+                    tx.bookingCode?.isNotEmpty != true)
                   tx.note!,
               ].whereType<String>().join(' · '),
               maxLines: 1,
@@ -549,7 +923,8 @@ class _TxTile extends StatelessWidget {
         ),
         Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
           Text('${tx.income ? '+' : '−'} $_amountText',
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, color: _color)),
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w800, color: _color)),
           const SizedBox(height: 3),
           Text(formatDateTx(tx.createdAt),
               style: const TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
@@ -561,8 +936,18 @@ class _TxTile extends StatelessWidget {
   /// Tanggal pendek dari DateTime langsung (tanpa ISO-String).
   String formatDateTx(DateTime d) {
     final bulan = <String>[
-      'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
-      'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'Mei',
+      'Jun',
+      'Jul',
+      'Agu',
+      'Sep',
+      'Okt',
+      'Nov',
+      'Des',
     ];
     return '${d.day} ${bulan[d.month - 1]} ${d.year}';
   }
@@ -579,7 +964,10 @@ class _MigrationPrompt extends StatelessWidget {
         SizedBox(height: 14),
         Text('Fitur saldo belum aktif di database',
             textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: AppColors.navy)),
+            style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                color: AppColors.navy)),
         SizedBox(height: 8),
         Text(
           'Jalankan supabase/migrate-technician-balance.sql di SQL Editor '

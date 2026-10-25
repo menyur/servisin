@@ -45,6 +45,11 @@ const config = [
   // setiap PR sampai refactor-nya dikerjakan sebagai perubahan tersendiri.
   {
     name: "fixify/aturan-react-compiler-tingkat-warning",
+    // Dibatasi ke berkas JS/TS: tanpa ini blok berlaku untuk SEMUA berkas
+    // (docs/*.md, .github/*.yml) yang tidak didaftari plugin react-hooks oleh
+    // preset Next, sehingga `eslint .` berhenti dengan "could not find
+    // plugin react-hooks" alih-alih memeriksa kode.
+    files: ["**/*.{js,jsx,mjs,ts,tsx,mts,cts}"],
     rules: {
       "react-hooks/purity": "warn",
       "react-hooks/set-state-in-effect": "warn",
@@ -61,6 +66,10 @@ const config = [
       "public/apk/**",
       "supabase/**",
       ".next/**",
+      // Artefak build OpenNext (dibuat sites_prepare_next) — bukan kode sumber;
+      // isinya berkas bundel yang memakai pola Node (`module`) dan komentar
+      // eslint-disable untuk aturan TypeScript.
+      ".open-next/**",
       "out/**",
       "build/**",
     ],

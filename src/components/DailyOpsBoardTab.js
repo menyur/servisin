@@ -1,9 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { getDailyOpsBoardAdmin, remindTechnicianBalanceAdmin } from "@/app/actions/admin";
+import {
+  getDailyOpsBoardAdmin,
+  notifyLateStartCustomerAdmin,
+  releaseLateTechnicianAdmin,
+  remindTechnicianBalanceAdmin,
+} from "@/app/actions/admin";
+import { formatTerlambat } from "@/lib/late-start";
 import { StatusPill } from "@/components/StatusPipeline";
 import { formatRupiah } from "@/lib/pricing";
+import { serviceLabel } from "@/lib/booking-quantity";
 import {
   AlertTriangle,
   Bell,
@@ -18,6 +25,9 @@ import {
   UserX,
   Wallet,
   Wrench,
+  TimerOff,
+  Send,
+  UserMinus,
 } from "lucide-react";
 
 /** "2026-10-14" → "Rabu, 14 Okt 2026" (tanpa zona waktu: tanggalnya sudah WIB). */
@@ -77,7 +87,7 @@ function BarisPesanan({ b, aksi }) {
       <div className="min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="pill bg-brand-tint text-brand-deep font-bold text-xs">#{b.code}</span>
-          <span className="text-sm font-semibold text-navy truncate">{b.services?.name || "Layanan"}</span>
+          <span className="text-sm font-semibold text-navy truncate">{serviceLabel(b)}</span>
           <StatusPill status={b.status} />
         </div>
         <p className="text-xs text-ink-soft mt-0.5 truncate">
@@ -87,6 +97,11 @@ function BarisPesanan({ b, aksi }) {
           Pelanggan: {b.customer?.name || "-"}
           {b.technician?.name ? ` · Teknisi: ${b.technician.name}` : ""}
         </p>
+        {b.status === "cancelled" && (
+          <p className="text-[11px] text-coral mt-1">
+            Alasan batal: {b.cancelled_reason || "tidak dicatat"}
+          </p>
+        )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {b.total_price != null && (
@@ -124,6 +139,7 @@ export default function DailyOpsBoardTab({
   const [error, setError] = useState(errorAwal);
   const [loading, setLoading] = useState(false);
   const [remindingId, setRemindingId] = useState(null);
+  const [busyLate, setBusyLate] = useState(null); // `${aksi}:${bookingId}`
   const [toast, setToast] = useState("");
 
   /** Kirim pengingat setor ke satu teknisi — tanpa pindah tab. */
@@ -145,6 +161,46 @@ export default function DailyOpsBoardTab({
     setLoading(false);
     if (res.error) setError(res.error);
     else setBoard(res.board);
+  }
+
+  /** Kabari pelanggan bahwa admin sedang menangani teknisi yang terlambat. */
+  async function beriTahuPelanggan(b) {
+    setBusyLate(`notify:${b.id}`);
+    setToast("");
+    try {
+      const res = await notifyLateStartCustomerAdmin(b.id);
+      if (res?.error) {
+        setToast(`Gagal mengirim kabar: ${res.error}`);
+      } else {
+        setToast(`Pelanggan pesanan ${b.code} sudah dikabari — push berisi status penanganan dikirim.`);
+      }
+    } finally {
+      setBusyLate(null);
+    }
+  }
+
+  /** Lepas teknisi yang belum mulai agar pesanan bisa ditugaskan ulang. */
+  async function lepasTeknisi(b) {
+    const yakin = window.confirm(
+      `Lepas ${b.technician?.name || "teknisi"} dari pesanan ${b.code}?\n\nPesanan kembali ke daftar Tersedia, teknisi dan pelanggan menerima pemberitahuan. Gunakan ini hanya bila teknisi benar-benar tidak bisa datang.`
+    );
+    if (!yakin) return;
+    setBusyLate(`release:${b.id}`);
+    setToast("");
+    try {
+      const res = await releaseLateTechnicianAdmin(
+        b.id,
+        `Terlambat mulai ${formatTerlambat(b.menit_terlambat)} — dilepas admin`
+      );
+      if (res?.error) {
+        setToast(`Gagal melepas tugas: ${res.error}`);
+      } else {
+        setToast(`Tugas ${b.code} dilepas. Pelanggan sudah diberi tahu bahwa teknisi pengganti sedang dicarikan.`);
+        await muatUlang();
+      }
+    } finally {
+      setBusyLate(null);
+    }
   }
 
   if (error) {
@@ -171,11 +227,18 @@ export default function DailyOpsBoardTab({
   const piutangJatuhTempo = board.piutang?.jatuhTempo || [];
   const piutangAmbang = board.piutang?.ambangHari ?? 30;
   const piutangNominal = piutangJatuhTempo.reduce((s, r) => s + Number(r.total || 0), 0);
+  const terlambat = board.terlambat || [];
+  // Hanya yang BELUM dijawab pelanggan yang dihitung sebagai tugas; riwayat
+  // "sudah dijawab" tetap ditampilkan sebagai konteks di bagiannya.
+  const tidakAda = board.tidakAda || [];
+  const tidakAdaMenunggu = tidakAda.filter((b) => !b.customer_present_at);
   const tidakAdaYangPerluTindak =
     (board.perluTeknisi || []).length === 0 &&
     (board.menungguBayar || []).length === 0 &&
     rilisPerluTindak.length === 0 &&
-    piutangJatuhTempo.length === 0;
+    piutangJatuhTempo.length === 0 &&
+    terlambat.length === 0 &&
+    tidakAdaMenunggu.length === 0;
 
   return (
     <div className="space-y-6">
@@ -194,7 +257,14 @@ export default function DailyOpsBoardTab({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <Kartu
+          label="Terlambat mulai"
+          nilai={c.terlambat ?? terlambat.length}
+          icon={TimerOff}
+          tone={terlambat.length ? "coral" : "navy"}
+          catatan={terlambat.length ? "sudah lewat 15 menit dari awal slot" : "semua teknisi mulai tepat waktu"}
+        />
         <Kartu label="Perlu teknisi" nilai={c.perluTeknisi ?? 0} icon={UserX} tone={c.perluTeknisi ? "coral" : "navy"} />
         <Kartu label="Menunggu konfirmasi bayar" nilai={c.menungguBayar ?? 0} icon={Wallet} tone={c.menungguBayar ? "amber" : "navy"} />
         <Kartu
@@ -210,6 +280,13 @@ export default function DailyOpsBoardTab({
           icon={AlertTriangle}
           tone={c.rilisPerluTindak ? "coral" : "navy"}
           catatan={`dari ${(board.rilis || []).length} catatan terakhir`}
+        />
+        <Kartu
+          label="Pelanggan tidak ada"
+          nilai={c.tidakAda ?? tidakAdaMenunggu.length}
+          icon={UserX}
+          tone={tidakAdaMenunggu.length ? "coral" : "navy"}
+          catatan={tidakAdaMenunggu.length ? "menunggu jawaban pelanggan" : "tidak ada laporan menunggu"}
         />
         <Kartu
           label="Piutang jatuh tempo"
@@ -289,6 +366,179 @@ export default function DailyOpsBoardTab({
           </div>
         </div>
       )}
+
+      {/* ===== Pelanggan tidak ada di lokasi ===== */}
+      <div className={`card ${tidakAdaMenunggu.length ? "border-coral/50" : ""}`}>
+        <p className="text-sm font-semibold text-navy flex items-center gap-2 mb-2">
+          <UserX size={15} className={tidakAdaMenunggu.length ? "text-coral" : "text-ink-soft"} /> Pelanggan tidak ada di lokasi
+          {tidakAda.length > 0 && (
+            <span className="pill bg-coral-tint text-coral text-xs font-bold">{tidakAda.length}</span>
+          )}
+        </p>
+        {tidakAda.length === 0 ? (
+          <p className="text-xs text-ink-soft py-2">
+            Tidak ada laporan. Teknisi hanya bisa melapor setelah slot mulai + 15 menit, dan laporannya membawa waktu,
+            koordinat, serta foto lokasi bila dilampirkan.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-ink-soft">
+              Pelanggan menerima push untuk menekan &quot;Saya di sini&quot;. Bila tetap tidak ada, hubungi pelanggan
+              lalu putuskan penugasan lewat tab Pesanan.
+            </p>
+            {tidakAda.map((b) => (
+              <div key={b.id} className="rounded-xl border border-line bg-paper p-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="pill bg-brand-tint text-brand-deep font-bold text-xs">#{b.code}</span>
+                  <span className="text-sm font-semibold text-navy">{serviceLabel(b)}</span>
+                  {b.customer_present_at ? (
+                    <span className="pill bg-mint-tint text-mint text-xs font-bold">Pelanggan sudah hadir</span>
+                  ) : (
+                    <span className="pill bg-amber-tint text-amber text-xs font-bold">Menunggu pelanggan</span>
+                  )}
+                </div>
+                <p className="text-xs text-ink-soft mt-1 flex items-center gap-1.5 flex-wrap">
+                  <UserRound size={12} /> {b.customer?.name || "Pelanggan"}
+                  {b.technician?.name ? ` · Teknisi: ${b.technician.name}` : ""}
+                </p>
+                <p className="text-xs text-ink-soft">
+                  Dilaporkan {waktuSingkat(b.no_show_at)} · Slot {b.booking_time} · {b.address || "alamat belum diisi"}
+                </p>
+                {b.no_show_note && (
+                  <p className="text-[11px] italic text-ink-soft mt-1">&ldquo;{b.no_show_note}&rdquo;</p>
+                )}
+                {b.customer_present_at && (
+                  <p className="text-[11px] text-mint mt-1">
+                    Pelanggan menandai hadir {waktuSingkat(b.customer_present_at)}.
+                  </p>
+                )}
+                <div className="flex items-center gap-3 mt-2 flex-wrap text-[11px]">
+                  {b.customer?.phone && (
+                    <a href={`tel:${b.customer.phone}`} className="text-brand-deep font-semibold">
+                      Telepon pelanggan
+                    </a>
+                  )}
+                  {b.foto_url && (
+                    <a href={b.foto_url} target="_blank" rel="noopener noreferrer" className="text-brand-deep font-semibold">
+                      Lihat foto lokasi
+                    </a>
+                  )}
+                  {b.no_show_lat != null && b.no_show_lng != null && (
+                    <a
+                      href={`https://www.google.com/maps?q=${b.no_show_lat},${b.no_show_lng}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-brand-deep font-semibold"
+                    >
+                      Titik laporan
+                    </a>
+                  )}
+                  {onOpenBookings && (
+                    <button onClick={() => onOpenBookings(b.id)} className="btn-outline !py-1 !px-2 text-[11px]">
+                      Buka pesanan
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ===== Terlambat mulai ===== */}
+      <div className={`card ${terlambat.length ? "border-coral/50" : ""}`}>
+        <p className="text-sm font-semibold text-navy flex items-center gap-2 mb-2">
+          <TimerOff size={15} className={terlambat.length ? "text-coral" : "text-ink-soft"} /> Terlambat mulai
+          {terlambat.length > 0 && (
+            <span className="pill bg-coral-tint text-coral text-xs font-bold">{terlambat.length}</span>
+          )}
+        </p>
+        {terlambat.length === 0 ? (
+          <p className="text-xs text-ink-soft py-2">
+            Tidak ada. Pesanan dianggap terlambat bila slot sudah berjalan lebih dari 15 menit dan teknisi belum
+            menekan &quot;Mulai&quot; — sinyal yang juga dipakai kartu skor.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-ink-soft">
+              Pelanggan sedang menunggu. Hubungi teknisi lebih dulu; bila tidak bisa datang, lepas tugasnya supaya bisa
+              ditugaskan ke pengganti.
+            </p>
+            {terlambat.map((b) => (
+              <div key={b.id} className="rounded-xl border border-coral/40 bg-coral-tint/30 p-3">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="pill bg-brand-tint text-brand-deep font-bold text-xs">#{b.code}</span>
+                  <span className="text-sm font-semibold text-navy">{serviceLabel(b)}</span>
+                  <span className="pill bg-coral-tint text-coral text-xs font-bold">
+                    {formatTerlambat(b.menit_terlambat)} terlambat
+                  </span>
+                </div>
+                <p className="text-xs text-ink-soft mt-1 flex items-center gap-1.5 flex-wrap">
+                  <UserRound size={12} /> {b.customer?.name || "Pelanggan"}
+                  {b.customer?.phone && <span>· {b.customer.phone}</span>}
+                  {b.technician?.name ? ` · Teknisi: ${b.technician.name}` : " · Teknisi belum ada"}
+                </p>
+                <p className="text-xs text-ink-soft">
+                  Slot {b.booking_time} · {b.address || "alamat belum diisi"}
+                </p>
+                {(b.customer?.phone || b.technician?.phone) && (
+                  <p className="text-[11px] mt-1 flex items-center gap-3 flex-wrap">
+                    {b.customer?.phone && (
+                      <a href={`tel:${b.customer.phone}`} className="text-brand-deep font-semibold">
+                        Telepon pelanggan
+                      </a>
+                    )}
+                    {b.technician?.phone && (
+                      <a href={`tel:${b.technician.phone}`} className="text-brand-deep font-semibold">
+                        Hubungi teknisi
+                      </a>
+                    )}
+                  </p>
+                )}
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => beriTahuPelanggan(b)}
+                    disabled={busyLate === `notify:${b.id}`}
+                    className="btn-outline !py-1.5 !px-2.5 text-xs flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    {busyLate === `notify:${b.id}` ? (
+                      <Loader2 size={12} className="animate-spin" />
+                    ) : (
+                      <Send size={12} />
+                    )}
+                    Beri tahu pelanggan
+                  </button>
+                  {b.technician_id && (
+                    <button
+                      type="button"
+                      onClick={() => lepasTeknisi(b)}
+                      disabled={busyLate === `release:${b.id}`}
+                      className="btn-outline !py-1.5 !px-2.5 text-xs flex items-center gap-1.5 text-coral border-coral/40 disabled:opacity-50"
+                    >
+                      {busyLate === `release:${b.id}` ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <UserMinus size={12} />
+                      )}
+                      Lepas & cari pengganti
+                    </button>
+                  )}
+                  {onOpenBookings && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenBookings(b.id)}
+                      className="btn-outline !py-1.5 !px-2.5 text-xs"
+                    >
+                      Tugaskan pengganti
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* ===== Piutang teknisi yang menua ===== */}
       <div className={`card ${piutangJatuhTempo.length ? "border-coral/50" : ""}`}>
@@ -370,7 +620,7 @@ export default function DailyOpsBoardTab({
               >
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="pill bg-brand-tint text-brand-deep font-bold text-xs">#{r.booking?.code || "?"}</span>
-                  <span className="text-sm font-semibold text-navy">{r.booking?.services?.name || "Layanan"}</span>
+                  <span className="text-sm font-semibold text-navy">{serviceLabel(r.booking)}</span>
                   {r.perluTeknisiBaru ? (
                     <span className="pill bg-coral-tint text-coral text-xs font-bold">Perlu teknisi baru</span>
                   ) : (

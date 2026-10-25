@@ -16,7 +16,8 @@ import 'package:fixify_app/ui/jobs_screen.dart';
 ///
 /// Tes ini memakai TEMA ASLI (AppTheme.light) — dengan tema bawaan Material
 /// bug-nya tidak muncul, jadi temanya bagian dari kasus uji.
-AvailableJob _job({String? optionLabel, double? distanceM, bool? hasPin}) => AvailableJob(
+AvailableJob _job({String? optionLabel, double? distanceM, bool? hasPin}) =>
+    AvailableJob(
       id: 'j1',
       code: 'SV-5045',
       serviceName: 'Service AC',
@@ -72,7 +73,8 @@ void main() {
     await tester.tap(find.text('Rute'));
     await tester.pump();
     expect(routed, isTrue);
-    expect(claimed, isFalse, reason: 'tombol rute bukan tombol ambil pekerjaan');
+    expect(claimed, isFalse,
+        reason: 'tombol rute bukan tombol ambil pekerjaan');
   });
 
   testWidgets('tanpa tujuan (onRoute null): tombol rute disembunyikan',
@@ -89,7 +91,8 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('sedang mengambil pekerjaan: tombol Rute nonaktif', (tester) async {
+  testWidgets('sedang mengambil pekerjaan: tombol Rute nonaktif',
+      (tester) async {
     var routed = false;
     await tester.pumpWidget(_host(AvailableCard(
       job: _job(),
@@ -108,7 +111,8 @@ void main() {
   // Aturan saldo (supabase/migrate-claim-min-balance.sql): saldo 0/minus =
   // pekerjaan baru terkunci. Tombolnya dimatikan DI SINI juga, supaya teknisi
   // tidak menekan tombol yang pasti ditolak server tanpa penjelasan.
-  testWidgets('saldo 0/minus: tombol Ambil mati, alasan tampil, "Isi Saldo" bisa ditekan',
+  testWidgets(
+      'saldo 0/minus: tombol Ambil mati, alasan tampil, "Isi Saldo" bisa ditekan',
       (tester) async {
     var claimed = false;
     var topUp = false;
@@ -117,7 +121,8 @@ void main() {
       claiming: false,
       onClaim: () => claimed = true,
       onRoute: () {},
-      blockedReason: 'Saldo kamu belum terisi — isi saldo dulu untuk bisa ambil pekerjaan baru.',
+      blockedReason:
+          'Saldo kamu belum terisi — isi saldo dulu untuk bisa ambil pekerjaan baru.',
       onTopUp: () => topUp = true,
     )));
     await tester.pump();
@@ -140,7 +145,8 @@ void main() {
       claiming: false,
       onClaim: () {},
       onRoute: () => routed = true,
-      blockedReason: 'Saldo kamu belum terisi — isi saldo dulu untuk bisa ambil pekerjaan baru.',
+      blockedReason:
+          'Saldo kamu belum terisi — isi saldo dulu untuk bisa ambil pekerjaan baru.',
       onTopUp: () {},
     )));
     await tester.pump();
@@ -149,7 +155,41 @@ void main() {
     expect(routed, isTrue);
   });
 
-  testWidgets('saldo terisi: tombol Ambil hidup & tanpa baris alasan', (tester) async {
+  // Aturan satu pekerjaan aktif (supabase/migrate-slot-capacity.sql): selama
+  // teknisi masih memegang tugas yang belum selesai, tombol Ambil mati dan
+  // kartu mengarahkan ke daftar tugasnya — bukan menawarkan "Isi Saldo".
+  testWidgets('masih ada tugas aktif: Ambil mati, aksi "Lihat Tugas" tersedia',
+      (tester) async {
+    var claimed = false;
+    var lihat = false;
+    await tester.pumpWidget(_host(AvailableCard(
+      job: _job(),
+      claiming: false,
+      onClaim: () => claimed = true,
+      onRoute: () {},
+      blockedReason:
+          'Selesaikan #SV-5000 dulu — setelah pekerjaan itu selesai, kamu bisa mengambil pekerjaan baru.',
+      blockedIcon: Icons.assignment_turned_in_rounded,
+      blockedActionLabel: 'Lihat Tugas',
+      onBlockedAction: () => lihat = true,
+    )));
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+    expect(find.textContaining('Selesaikan #SV-5000'), findsOneWidget);
+    expect(find.byIcon(Icons.account_balance_wallet_rounded), findsNothing);
+
+    await tester.tap(find.text('Ambil Pekerjaan'), warnIfMissed: false);
+    await tester.pump();
+    expect(claimed, isFalse);
+
+    await tester.tap(find.text('Lihat Tugas'));
+    await tester.pump();
+    expect(lihat, isTrue);
+  });
+
+  testWidgets('saldo terisi: tombol Ambil hidup & tanpa baris alasan',
+      (tester) async {
     var claimed = false;
     await tester.pumpWidget(_host(AvailableCard(
       job: _job(),

@@ -3,9 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, ChevronLeft, Paperclip, Landmark, Banknote, Ticket } from "lucide-react";
 import { CategoryIcon, ServiceIcon } from "@/lib/icons";
-import { APP_FEE, calculateTotal, formatRupiah } from "@/lib/pricing";
+import { APP_FEE, HARGA_JASA_NOTE, calculateTotal, formatRupiah } from "@/lib/pricing";
+import {
+  areaFromDimensions,
+  areaNote,
+  areaSubtotal,
+  formatArea,
+  isAreaService,
+  totalArea,
+} from "@/lib/area-pricing";
 import { TIME_SLOTS } from "@/lib/booking-slots";
-import { createBooking, getTransferAccount, getAppFee } from "@/app/actions/bookings";
+import { createBooking, getTransferAccount, getAppFee, getSlotAvailability } from "@/app/actions/bookings";
 import { getMyVouchers } from "@/app/actions/reviews";
 import { createClient } from "@/lib/supabase/client";
 import { optimizeImage } from "@/components/ServiceImageUpload";
@@ -28,6 +36,9 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   const [optionId, setOptionId] = useState("");
   const [form, setForm] = useState({ notes: "", address: "", date: "", time: "", attachment: null });
   const [paymentMethod, setPaymentMethod] = useState("");
+  // Pemakaian slot tanggal terpilih: { slot, capacity, booked, remaining, full }.
+  // Kosong = belum dibaca / RPC belum ada → semua slot tampil (fail-open).
+  const [slotInfo, setSlotInfo] = useState([]);
   const [transferAccount, setTransferAccount] = useState(null); // { bank, number, name } dari app_settings
   // Biaya aplikasi yang SEDANG berlaku (diatur admin di panel). Mulai dari
   // bawaan APP_FEE supaya rincian biaya tidak pernah tampil 0 sebelum setelan
@@ -41,8 +52,15 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   const [voucherId, setVoucherId] = useState("");
   const [showPin, setShowPin] = useState(false);
   const [pin, setPin] = useState(null); // { lat, lng } titik lokasi rumah (opsional)
+  // Bidang yang diukur untuk layanan per meter persegi (cat dinding). Satu
+  // baris = satu bidang dinding: panjang × lebar. Luasnya DIJUMLAHKAN.
+  const [bidang, setBidang] = useState([{ panjang: "", lebar: "" }]);
 
   const selectedService = useMemo(() => services.find((s) => s.id === serviceId), [services, serviceId]);
+  const areaMode = isAreaService(selectedService);
+  // Total m² (null bila belum ada bidang yang lengkap) — satu sumber untuk
+  // validasi langkah 1, subtotal, dan payload ke server.
+  const areaTotal = useMemo(() => totalArea(bidang), [bidang]);
   // Varian milik layanan terpilih (mis. ukuran PK); kosong = layanan tanpa varian.
   const options = useMemo(
     () => serviceOptions.filter((o) => o.service_id === serviceId),
@@ -55,15 +73,19 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   );
   // Harga per unit: ikut varian bila ada, kalau tidak pakai base_price layanan.
   const unitPrice = selectedOption ? selectedOption.price : selectedService?.base_price || 0;
+  // Subtotal: harga per m² × luas total untuk layanan area, selain itu harga
+  // satuan satu unit (perilaku lama). Server menghitung ulang angka yang sama.
+  const subtotal = areaMode ? areaSubtotal(unitPrice, areaTotal) : unitPrice;
   const totals = useMemo(
-    () => calculateTotal(unitPrice, appliedVoucher?.amount || 0, appFee),
-    [unitPrice, appliedVoucher, appFee]
+    () => calculateTotal(subtotal, appliedVoucher?.amount || 0, appFee),
+    [subtotal, appliedVoucher, appFee]
   );
 
-  // ganti layanan → reset pilihan varian agar tidak nyasar
+  // ganti layanan → reset pilihan varian & ukuran bidang agar tidak nyasar
   function chooseService(id) {
     setServiceId(id);
     setOptionId("");
+    setBidang([{ panjang: "", lebar: "" }]);
   }
 
   // muat voucher aktif saat alur booking dibuka (gagal diam — tabel mungkin belum ada)
@@ -92,6 +114,33 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
   function update(key, val) {
     setForm((f) => ({ ...f, [key]: val }));
   }
+
+  // Muat sisa kuota setiap tanggal berubah. Server action ini hanya membaca
+  // jumlah; keputusan akhir tetap trigger database saat pesanan disimpan.
+  useEffect(() => {
+    let alive = true;
+    if (!form.date) {
+      setSlotInfo([]);
+      return () => {
+        alive = false;
+      };
+    }
+    setSlotInfo([]);
+    getSlotAvailability(form.date).then((r) => {
+      if (!alive) return;
+      const slots = r?.slots || [];
+      setSlotInfo(slots);
+      // Slot yang tadinya dipilih bisa sudah penuh (orang lain memesan lebih
+      // dulu) — kosongkan agar pelanggan tidak menekan Pesan dengan slot penuh.
+      setForm((f) => {
+        const info = slots.find((s) => s.slot === f.time);
+        return info?.full ? { ...f, time: "" } : f;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+  }, [form.date]);
 
   function goStep(n) {
     setErrors({});
@@ -147,6 +196,9 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
       attachmentUrl,
       paymentMethod,
       voucherId: voucherId || null,
+      // Luas total (m²) untuk layanan per meter persegi. Server memvalidasi
+      // batas 0,5–2000 m² dan menghitung ulang nominalnya dari katalog.
+      ...(areaMode && areaTotal ? { area: areaTotal } : {}),
       ...(pin ? { lat: pin.lat, lng: pin.lng } : {}),
     });
 
@@ -196,7 +248,18 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
           options={options}
           optionId={optionId}
           setOptionId={setOptionId}
-          onNext={() => serviceId && (options.length === 0 || optionId) && goStep(2)}
+          areaMode={areaMode}
+          areaTotal={areaTotal}
+          areaNoteText={areaNote(selectedService)}
+          bidang={bidang}
+          setBidang={setBidang}
+          unitPrice={unitPrice}
+          onNext={() =>
+            serviceId &&
+            (options.length === 0 || optionId) &&
+            (!areaMode || areaTotal) &&
+            goStep(2)
+          }
         />
       )}
 
@@ -205,6 +268,10 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
           form={form}
           update={update}
           errors={errors}
+          slotInfo={slotInfo}
+          pin={pin}
+          showPin={showPin}
+          setShowPin={setShowPin}
           onBack={() => goStep(1)}
           onNext={() => validateStep2() && goStep(3)}
         />
@@ -214,6 +281,9 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
         <StepCost
           service={selectedService}
           option={selectedOption}
+          areaMode={areaMode}
+          areaTotal={areaTotal}
+          unitPrice={unitPrice}
           totals={totals}
           vouchers={vouchers}
           voucherId={voucherId}
@@ -241,12 +311,27 @@ export default function BookingFlow({ categories, services, serviceOptions = [],
 }
 
 /* ---------- STEP 1 ---------- */
-function StepService({ categories, services, serviceId, setServiceId, options, optionId, setOptionId, onNext }) {
+function StepService({ categories, services, serviceId, setServiceId, options, optionId, setOptionId, areaMode, areaTotal, areaNoteText, bidang, setBidang, unitPrice, onNext }) {
   const [activeCat, setActiveCat] = useState(
     () => services.find((s) => s.id === serviceId)?.category_id || categories[0]?.id || ""
   );
   const filtered = services.filter((s) => s.category_id === activeCat);
   const selected = services.find((s) => s.id === serviceId);
+  // Harga per m² baru pasti setelah varian dipilih — base_price layanan yang
+  // punya varian bukan tarif per m², jangan ditampilkan sebagai nominal.
+  const hargaM2 = options.length > 0 && !optionId ? null : unitPrice;
+
+  function ubahBidang(index, key, val) {
+    setBidang((rows) => rows.map((r, i) => (i === index ? { ...r, [key]: val } : r)));
+  }
+
+  function tambahBidang() {
+    setBidang((rows) => [...rows, { panjang: "", lebar: "" }]);
+  }
+
+  function hapusBidang(index) {
+    setBidang((rows) => (rows.length === 1 ? [{ panjang: "", lebar: "" }] : rows.filter((_, i) => i !== index)));
+  }
 
   return (
     <div>
@@ -281,6 +366,7 @@ function StepService({ categories, services, serviceId, setServiceId, options, o
                 {options.some((o) => o.service_id === s.id)
                   ? `mulai ${formatRupiah(Math.min(...options.filter((o) => o.service_id === s.id).map((o) => o.price)))}`
                   : formatRupiah(s.base_price)}
+                {isAreaService(s) && <span className="text-ink-soft font-semibold text-xs"> / m²</span>}
               </p>
             </span>
           </button>
@@ -291,10 +377,12 @@ function StepService({ categories, services, serviceId, setServiceId, options, o
       {selected && options.length > 0 && (
         <div className="card !p-4 mb-6 border-brand/40 bg-brand-tint/40">
           <p className="font-display font-semibold text-navy text-sm mb-1">
-            Pilih ukuran/kapasitas — {selected.name}
+            {areaMode ? "Pilih jenis pekerjaan" : "Pilih ukuran/kapasitas"} — {selected.name}
           </p>
           <p className="text-xs text-ink-soft mb-3">
-            Harga menyesuaikan kapasitas unit yang kamu punya.
+            {areaMode
+              ? "Harga di bawah adalah tarif per meter persegi; totalnya dihitung dari luas area."
+              : "Harga menyesuaikan kapasitas unit yang kamu punya."}
           </p>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {options.map((o) => (
@@ -313,7 +401,102 @@ function StepService({ categories, services, serviceId, setServiceId, options, o
         </div>
       )}
 
-      <button className="btn-primary w-full" disabled={!serviceId || (options.length > 0 && !optionId)} onClick={onNext}>
+      {/* Panel luas untuk layanan per meter persegi (mis. cat dinding). */}
+      {selected && areaMode && (
+        <div className="card !p-4 mb-6 border-brand/40 bg-brand-tint/30">
+          <p className="font-display font-semibold text-navy text-sm mb-1">
+            Luas yang akan dikerjakan — {selected.name}
+          </p>
+          <p className="text-xs text-ink-soft mb-3">{areaNoteText}</p>
+
+          <div className="space-y-2">
+            {bidang.map((row, i) => {
+              const luas = areaFromDimensions(row.panjang, row.lebar);
+              return (
+                <div key={i} className="rounded-xl border border-line bg-white p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-semibold text-navy">Bidang {i + 1}</span>
+                    {bidang.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => hapusBidang(i)}
+                        className="text-[11px] text-coral font-semibold hover:underline"
+                      >
+                        ✕ Hapus
+                      </button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 items-end">
+                    <label className="block">
+                      <span className="text-[10px] font-semibold text-ink-soft">Panjang (m)</span>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.01"
+                        className="input mt-0.5 !py-2 text-sm"
+                        value={row.panjang}
+                        onChange={(e) => ubahBidang(i, "panjang", e.target.value)}
+                        placeholder="4"
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-[10px] font-semibold text-ink-soft">Lebar (m)</span>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="0.01"
+                        className="input mt-0.5 !py-2 text-sm"
+                        value={row.lebar}
+                        onChange={(e) => ubahBidang(i, "lebar", e.target.value)}
+                        placeholder="3"
+                      />
+                    </label>
+                    <div className="text-right">
+                      <span className="block text-[10px] font-semibold text-ink-soft">Luas</span>
+                      <span className="text-sm font-bold text-navy">{luas === null ? "–" : formatArea(luas)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <button type="button" onClick={tambahBidang} className="text-xs font-semibold text-brand hover:text-brand-deep mt-2">
+            ＋ Tambah bidang
+          </button>
+
+          <div className="border-t border-line mt-3 pt-3">
+            <div className="flex justify-between items-center">
+              <span className="text-sm font-semibold text-navy">Total luas</span>
+              <span className="font-display font-bold text-navy text-lg">{areaTotal ? formatArea(areaTotal) : "–"}</span>
+            </div>
+            <div className="flex justify-between items-center mt-1">
+              <span className="text-xs text-ink-soft">
+                {hargaM2 === null
+                  ? "Pilih jenis pekerjaan untuk melihat tarif per m²"
+                  : `${formatRupiah(hargaM2)} / m² × ${areaTotal ? formatArea(areaTotal) : "0 m²"}`}
+              </span>
+              <span className="text-brand font-bold text-sm">
+                {formatRupiah(hargaM2 === null ? 0 : areaSubtotal(unitPrice, areaTotal))}
+              </span>
+            </div>
+            {!areaTotal && (
+              <p className="text-coral text-xs mt-2">Isi panjang dan lebar minimal satu bidang (minimal 0,5 m²) untuk melanjutkan.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Berlaku untuk semua layanan: harga katalog = jasa saja. */}
+      <p className="text-[11px] text-ink-soft mb-2 text-center">{HARGA_JASA_NOTE}</p>
+
+      <button
+        className="btn-primary w-full"
+        disabled={!serviceId || (options.length > 0 && !optionId) || (areaMode && !areaTotal)}
+        onClick={onNext}
+      >
         Lanjut
       </button>
     </div>
@@ -321,7 +504,12 @@ function StepService({ categories, services, serviceId, setServiceId, options, o
 }
 
 /* ---------- STEP 2 ---------- */
-function StepDetails({ form, update, errors, onBack, onNext }) {
+function StepDetails({ form, update, errors, slotInfo = [], pin, showPin, setShowPin, onBack, onNext }) {
+  const infoSlot = (t) => slotInfo.find((s) => s.slot === t) || null;
+  const semuaPenuh =
+    Boolean(form.date) &&
+    slotInfo.length > 0 &&
+    TIME_SLOTS.every((t) => infoSlot(t)?.full === true);
   return (
     <div className="space-y-4">
       <div>
@@ -393,11 +581,24 @@ function StepDetails({ form, update, errors, onBack, onNext }) {
           <label className="label">Jam kedatangan</label>
           <select className="input" value={form.time} onChange={(e) => update("time", e.target.value)}>
             <option value="">Pilih jam</option>
-            {TIME_SLOTS.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
+            {TIME_SLOTS.map((t) => {
+              const info = infoSlot(t);
+              const penuh = info?.full === true;
+              return (
+                <option key={t} value={t} disabled={penuh}>
+                  {t}
+                  {info?.remaining != null ? ` · sisa ${info.remaining}` : ""}
+                  {penuh ? " (penuh)" : ""}
+                </option>
+              );
+            })}
           </select>
           {errors.time && <p className="text-coral text-xs mt-1">{errors.time}</p>}
+          {semuaPenuh && (
+            <p className="text-coral text-xs mt-1">
+              Semua slot pada tanggal ini penuh. Pilih tanggal lain.
+            </p>
+          )}
         </div>
       </div>
 
@@ -410,15 +611,23 @@ function StepDetails({ form, update, errors, onBack, onNext }) {
 }
 
 /* ---------- STEP 3 ---------- */
-function StepCost({ service, option, totals, vouchers, voucherId, setVoucherId, onBack, onNext }) {
+function StepCost({ service, option, areaMode, areaTotal, unitPrice, totals, vouchers, voucherId, setVoucherId, onBack, onNext }) {
   return (
     <div>
       <div className="card mb-6">
         <h3 className="font-display font-semibold text-navy mb-4">Rincian biaya</h3>
-        <Row
-          label={`Biaya jasa — ${service?.name || "-"}${option ? ` (${option.label})` : ""}`}
-          value={formatRupiah(totals.subtotal)}
-        />
+        {areaMode ? (
+          <>
+            <Row label={`Jasa — ${service?.name || "-"}${option ? ` (${option.label})` : ""}`} value={`${formatRupiah(unitPrice)} / m²`} />
+            <Row label="Total luas" value={areaTotal ? formatArea(areaTotal) : "-"} />
+            <Row label="Subtotal layanan" value={formatRupiah(totals.subtotal)} />
+          </>
+        ) : (
+          <Row
+            label={`Biaya jasa — ${service?.name || "-"}${option ? ` (${option.label})` : ""}`}
+            value={formatRupiah(totals.subtotal)}
+          />
+        )}
         <Row label="Biaya layanan aplikasi" value={formatRupiah(totals.appFee)} />
 
         {vouchers.length > 0 && (

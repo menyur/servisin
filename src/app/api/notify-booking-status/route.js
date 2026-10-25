@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendPushToUser } from "@/lib/notify";
+import { formatRupiah } from "@/lib/pricing";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,12 @@ const EVENTS = {
   work_started: (b) => b.status === "in_progress",
   // Pesanan selesai dikerjakan.
   order_completed: (b) => b.status === "completed",
+  // Teknisi sudah tiba tetapi pelanggan tidak ada di lokasi. Hanya sah bila
+  // laporannya memang tersimpan di pesanan (bukan sekadar diklaim klien).
+  customer_no_show: (b) => b.status === "paid" && b.no_show_at != null,
+  // Usulan biaya tambahan dari teknisi; keberadaan baris `pending` diperiksa
+  // setelah ini (lihat branch payload) karena bukan kolom bookings.
+  extra_charge: (b) => b.status === "paid" || b.status === "in_progress",
 };
 
 export async function POST(request) {
@@ -76,7 +83,7 @@ export async function POST(request) {
     try {
       const { data } = await createAdminClient()
         .from("bookings")
-        .select("id, code, user_id, technician_id, status, services(name)")
+        .select("id, code, user_id, technician_id, status, no_show_at, services(name)")
         .eq("id", bookingId)
         .maybeSingle();
       booking = data;
@@ -132,6 +139,44 @@ export async function POST(request) {
         body: `Pesanan ${booking.code} ditandai selesai. Terima kasih — pendapatan bersih masuk saldo kamu.`,
         url: "/jobs",
         tag,
+      });
+    } else if (event === "customer_no_show") {
+      sent += await push(booking.user_id, {
+        title: "Kami tunggu 10 menit ⏳",
+        event,
+        body:
+          `Teknisi sudah tiba untuk pesanan ${booking.code} (${serviceName}) tetapi belum menemukanmu. ` +
+          "Buka pesanan dan tekan \"Saya di sini\" agar teknisi diberi tahu.",
+        url: "/orders",
+        tag,
+        // Aplikasi membuka DETAIL pesanan ini, bukan daftar Pesanan: tombol
+        // "Saya di sini" harus langsung terlihat saat notifikasi diketuk.
+        data: { bookingId: booking.id },
+      });
+    } else if (event === "extra_charge") {
+      // Hanya kirim bila memang ada usulan yang MENUNGGU jawaban pelanggan.
+      let charge = null;
+      try {
+        const { data } = await createAdminClient()
+          .from("booking_extra_charges")
+          .select("id, amount, reason")
+          .eq("booking_id", booking.id)
+          .eq("status", "pending")
+          .maybeSingle();
+        charge = data;
+      } catch (e) {
+        console.warn("[notify-booking-status] baca biaya tambahan gagal:", e?.message);
+      }
+      if (!charge) return NextResponse.json({ ok: true, event, sent: 0, skipped: "tidak-ada-usulan" });
+      sent += await push(booking.user_id, {
+        title: "Biaya tambahan perlu persetujuan",
+        event,
+        body:
+          `${booking.code} (${serviceName}): ${formatRupiah(charge.amount)} — ${charge.reason}. ` +
+          "Buka pesanan untuk menyetujui atau menolak.",
+        url: "/orders",
+        tag,
+        data: { bookingId: booking.id },
       });
     }
 

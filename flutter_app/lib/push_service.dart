@@ -98,6 +98,7 @@ class PushService {
           n.body ?? '',
           notificationTabTarget(msg.data),
           bookingId: notificationBookingId(msg.data),
+          openChat: notificationOpensChat(msg.data),
         );
       });
 
@@ -186,11 +187,16 @@ class PushService {
   static void _openRouteFrom(RemoteMessage msg) {
     final target = notificationTabTarget(msg.data);
     final bookingId = notificationBookingId(msg.data);
+    final openChat = notificationOpensChat(msg.data);
     if (kDebugMode) {
-      debugPrint('[push] tujuan notifikasi: $target · pesanan: ${bookingId ?? "-"}');
+      debugPrint(
+          '[push] tujuan notifikasi: $target · pesanan: ${bookingId ?? "-"} · chat: $openChat');
     }
-    pendingNotificationTap.value =
-        NotificationTap(target, bookingId: bookingId);
+    pendingNotificationTap.value = NotificationTap(
+      target,
+      bookingId: bookingId,
+      openChat: openChat,
+    );
   }
 
   /// Status izin notifikasi OS (Android 13+). False juga berarti pengguna
@@ -235,6 +241,7 @@ class PushService {
     String body,
     String target, {
     String? bookingId,
+    bool openChat = false,
   }) {
     final context = navigatorKey.currentContext;
     if (context == null) return;
@@ -248,11 +255,36 @@ class PushService {
           onPressed: () => pendingNotificationTap.value = NotificationTap(
             target,
             bookingId: bookingId,
+            openChat: openChat,
           ),
         ),
       ));
   }
 }
+
+/// Event yang membawa `bookingId` dan harus membuka DETAIL pesanan.
+///
+/// Chat, no-show, dan biaya tambahan sama-sama menuntut tindakan pada satu
+/// pesanan; mendarat di daftar Pesanan membuat pengguna harus mencari lagi.
+/// Event lain tetap mendarat di tabnya masing-masing.
+const _eventBukaPesanan = {
+  'chat_message',
+  'customer_no_show',
+  'extra_charge',
+};
+
+/// ID pesanan yang harus dibuka langsung saat notifikasi diketuk.
+String? notificationBookingId(Map<String, dynamic> data) {
+  final event = (data['event'] ?? '').toString();
+  if (!_eventBukaPesanan.contains(event)) return null;
+  final id = (data['bookingId'] ?? '').toString().trim();
+  return id.isEmpty ? null : id;
+}
+
+/// Apakah detail yang dibuka harus langsung menampilkan percakapan?
+/// Hanya chat — no-show & biaya tambahan justru butuh tombol tindakannya.
+bool notificationOpensChat(Map<String, dynamic> data) =>
+    (data['event'] ?? '').toString() == 'chat_message';
 
 /// Tab yang perlu dibuka untuk sebuah notifikasi, dibaca dari `data.event`
 /// (diprioritaskan) lalu `data.route`. Dipisah dari `_openRouteFrom` agar bisa
@@ -264,16 +296,6 @@ class PushService {
 ///   'profile' — buka tab Profil (pendaftaran teknisi ditolak)
 ///   'vouchers'— buka tab Voucher (pelanggan yang menerima voucher)
 ///   'orders'  — buka tab Pesanan (default)
-/// ID pesanan yang harus dibuka langsung saat notifikasi diketuk.
-///
-/// Hanya notifikasi chat yang membawa `bookingId`; event lain tetap mendarat
-/// di tabnya masing-masing. Dipisah agar aturan ini bisa diuji tanpa Firebase.
-String? notificationBookingId(Map<String, dynamic> data) {
-  if ((data['event'] ?? '').toString() != 'chat_message') return null;
-  final id = (data['bookingId'] ?? '').toString().trim();
-  return id.isEmpty ? null : id;
-}
-
 String notificationTabTarget(Map<String, dynamic> data) {
   final event = (data['event'] ?? '').toString();
   if (event == 'report_status' || event == 'report_replied') return 'reports';

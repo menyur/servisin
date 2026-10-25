@@ -54,6 +54,11 @@ export const ADMIN_NOTIFY_EVENTS = [
     hint: "Teknisi melepas pekerjaan beserta alasannya.",
   },
   {
+    key: "balance_mismatch",
+    label: "Selisih saldo teknisi",
+    hint: "Pemeriksaan harian menemukan saldo teknisi yang tidak sama dengan jumlah mutasinya, atau pesanan selesai yang belum punya baris potongan.",
+  },
+  {
     key: "account_deletion",
     label: "Permintaan hapus akun",
     hint: "Pengguna meminta akunnya dihapus (aplikasi atau halaman web) — harus dijalankan agar syarat Google Play dan janji 7 hari terpenuhi.",

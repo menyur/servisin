@@ -11,6 +11,7 @@ import '../theme.dart';
 import 'common.dart';
 import 'auth_widgets.dart';
 import 'notification_settings_screen.dart';
+import 'scorecard_card.dart';
 
 class ProfileScreen extends StatefulWidget {
   /// Seam uji: sumber profil (default `Api.myProfile`).
@@ -24,11 +25,17 @@ class ProfileScreen extends StatefulWidget {
   /// "Buka halaman bantuan" pada kartu status persetujuan.
   final Future<bool> Function(Uri)? openLink;
 
+  /// Seam uji: sumber kartu "Kinerja Saya" teknisi (default
+  /// `Api.myTechnicianScorecard`). Hanya dipanggil untuk peran teknisi —
+  /// pelanggan tidak punya skor dan tidak perlu satu query tambahan.
+  final ScorecardLoader? loadScorecard;
+
   const ProfileScreen({
     super.key,
     this.loadProfile,
     this.loadRating,
     this.openLink,
+    this.loadScorecard,
   });
 
   @override
@@ -41,6 +48,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   /// Ringkasan penilaian teknisi. Null = belum dibaca / gagal dibaca / bukan
   /// teknisi — dalam semua kasus itu lencananya tidak ditampilkan.
   RatingSummary? _rating;
+
   /// Status permintaan hapus akun (jalur dalam aplikasi, syarat Google Play).
   AccountDeletionState _hapus = AccountDeletionState.kosong;
   bool _loading = true;
@@ -140,9 +148,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               address: _address.text.trim(),
               avatarUrl: lama.avatarUrl,
               role: lama.role,
-              serviceArea: lama.role == 'technician'
-                  ? _serviceArea.text.trim()
-                  : lama.serviceArea,
+              serviceArea: lama.role == 'technician' ? _serviceArea.text.trim() : lama.serviceArea,
               skill: lama.skill,
               balance: lama.balance,
               balanceReminderAt: lama.balanceReminderAt,
@@ -216,7 +222,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
       setState(() => _hapus = hasil.state);
       showSnack(context, 'Permintaan hapus akun terkirim. Kami proses paling lambat 7 hari.');
     } catch (e) {
-      if (mounted) showSnackError(context, e, 'Gagal mengajukan penghapusan akun.');
+      if (mounted) {
+        showSnackError(context, e, 'Gagal mengajukan penghapusan akun.');
+      }
     }
   }
 
@@ -281,8 +289,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _bukaBantuan() async {
     final uri = Uri.parse(AppConfig.tentangUrl);
     try {
-      final dibuka = await (widget.openLink?.call(uri) ??
-          launchUrl(uri, mode: LaunchMode.externalApplication));
+      final dibuka = await (widget.openLink?.call(uri) ?? launchUrl(uri, mode: LaunchMode.externalApplication));
       if (!dibuka && mounted) {
         showSnack(context, 'Halaman bantuan tidak bisa dibuka.', error: true);
       }
@@ -312,11 +319,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final kurangProfil = dataProfilKurang(_profile);
     // Status kurasi hanya untuk teknisi. 'approved' tidak perlu kartu — yang
     // perlu tindakan adalah akun yang masih menunggu atau sudah ditolak.
-    final statusKurasi = _profile?.role == 'technician'
-        ? _profile!.approvalStatus
-        : 'approved';
-    final tampilStatusKurasi =
-        statusKurasi == 'pending' || statusKurasi == 'rejected';
+    final statusKurasi = _profile?.role == 'technician' ? _profile!.approvalStatus : 'approved';
+    final tampilStatusKurasi = statusKurasi == 'pending' || statusKurasi == 'rejected';
 
     return Scaffold(
       backgroundColor: AppColors.paper,
@@ -333,8 +337,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   // memaksa edge-to-edge, inset atas > 0 dan tanpa tambahan ini
                   // avatar/tombol header tertimpa jam & baterai. Di perangkat
                   // non-edge-to-edge inset = 0 → tampilan tak berubah.
-                  padding: EdgeInsets.fromLTRB(
-                      20, 20 + MediaQuery.paddingOf(context).top, 20, 0),
+                  padding: EdgeInsets.fromLTRB(20, 20 + MediaQuery.paddingOf(context).top, 20, 0),
                   child: Column(children: [
                     // Avatar: bisa diketuk untuk ganti foto (galeri/kamera).
                     GestureDetector(
@@ -346,8 +349,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             shape: BoxShape.circle,
-                            border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.7), width: 3),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.7), width: 3),
                             boxShadow: [
                               BoxShadow(
                                   color: AppColors.navy.withValues(alpha: 0.2),
@@ -367,17 +369,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     errorBuilder: (_, __, ___) => Center(
                                       child: Text(initial,
                                           style: const TextStyle(
-                                              fontSize: 36,
-                                              fontWeight: FontWeight.w900,
-                                              color: AppColors.brand)),
+                                              fontSize: 36, fontWeight: FontWeight.w900, color: AppColors.brand)),
                                     ),
                                   )
                                 : Center(
                                     child: Text(initial,
                                         style: const TextStyle(
-                                            fontSize: 36,
-                                            fontWeight: FontWeight.w900,
-                                            color: AppColors.brand)),
+                                            fontSize: 36, fontWeight: FontWeight.w900, color: AppColors.brand)),
                                   ),
                           ),
                         ),
@@ -388,15 +386,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           child: Container(
                             width: 28,
                             height: 28,
-                            decoration: const BoxDecoration(
-                                color: AppColors.brand, shape: BoxShape.circle),
+                            decoration: const BoxDecoration(color: AppColors.brand, shape: BoxShape.circle),
                             child: _uploadingAvatar
                                 ? const Padding(
                                     padding: EdgeInsets.all(7),
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2, color: Colors.white))
-                                : const Icon(Icons.photo_camera_rounded,
-                                    color: Colors.white, size: 15),
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                                : const Icon(Icons.photo_camera_rounded, color: Colors.white, size: 15),
                           ),
                         ),
                         // Badge terverifikasi pindah ke kiri-atas.
@@ -406,10 +401,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           child: Container(
                             width: 28,
                             height: 28,
-                            decoration: const BoxDecoration(
-                                color: AppColors.mint, shape: BoxShape.circle),
-                            child: const Icon(Icons.verified_rounded,
-                                color: Colors.white, size: 17),
+                            decoration: const BoxDecoration(color: AppColors.mint, shape: BoxShape.circle),
+                            child: const Icon(Icons.verified_rounded, color: Colors.white, size: 17),
                           ),
                         ),
                       ]),
@@ -417,15 +410,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 12),
                     Text(
                       _profile?.name.isNotEmpty ?? false ? _profile!.name : 'Pengguna Fixify',
-                      style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white),
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
                     ),
-                    const SizedBox(height: 3),
-                    Text(_profile?.email ?? '',
-                        style: TextStyle(
-                            fontSize: 12.5, color: Colors.white.withValues(alpha: 0.85))),
+                    // Email TIDAK lagi ditulis di header (di bawah foto): ia
+                    // sekarang satu tempat dengan nama & nomor HP di formulir —
+                    // lihat kolom "Email" di kartu Ubah Data Diri.
                     // Reputasi teknisi tepat di bawah identitasnya: jumlah ulasan
                     // + rata-rata rating. Hanya untuk teknisi, dan hanya bila
                     // datanya benar-benar terbaca (gagal baca → tidak ditampilkan,
@@ -447,139 +436,142 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // menggeser dirinya -24 px. Dua geseran bertumpuk (-46) membuat
                 // kartu menutupi lencana rating di header.
                 FloatingCard(
-                    padding: const EdgeInsets.all(18),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Status kurasi akun teknisi: alasan kenapa belum bisa
-                          // mengambil pekerjaan + langkah yang bisa dilakukan
-                          // sekarang. Diletakkan paling atas agar terbaca sebelum
-                          // formulir data diri.
-                          if (tampilStatusKurasi) ...[
-                            _StatusPersetujuanTeknisi(
-                              ditolak: statusKurasi == 'rejected',
-                              kurang: kurangProfil,
-                              onBukaBantuan: _bukaBantuan,
+                  padding: const EdgeInsets.all(18),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+                    // Status kurasi akun teknisi: alasan kenapa belum bisa
+                    // mengambil pekerjaan + langkah yang bisa dilakukan
+                    // sekarang. Diletakkan paling atas agar terbaca sebelum
+                    // formulir data diri.
+                    if (tampilStatusKurasi) ...[
+                      _StatusPersetujuanTeknisi(
+                        ditolak: statusKurasi == 'rejected',
+                        kurang: kurangProfil,
+                        onBukaBantuan: _bukaBantuan,
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                    // Pengingat tetap (bukan SnackBar sekali lewat) untuk
+                    // teknisi yang datanya belum lengkap — teknisi baru
+                    // mendarat di sini dan langsung tahu apa yang kurang.
+                    // Saat status kurasi tampil, daftar yang kurang sudah
+                    // menjadi langkah pertama di kartu status; jangan
+                    // mengulanginya dalam dua kartu.
+                    if (kurangProfil.isNotEmpty && !tampilStatusKurasi) ...[
+                      _PeringatanLengkapiProfil(kurang: kurangProfil),
+                      const SizedBox(height: 16),
+                    ],
+                    Row(children: [
+                      const Icon(Icons.edit_rounded, size: 18, color: AppColors.brand),
+                      const SizedBox(width: 8),
+                      const Text('Ubah Data Diri',
+                          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppColors.navy)),
+                      const Spacer(),
+                      if (_saving)
+                        const SizedBox(height: 16, width: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                    ]),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: _name,
+                      decoration:
+                          const InputDecoration(labelText: 'Nama lengkap', prefixIcon: Icon(Icons.badge_outlined)),
+                    ),
+                    const SizedBox(height: 12),
+                    // Email tepat di bawah nama lengkap. READ-ONLY: email
+                    // adalah identitas masuk (Supabase Auth) dan mengubahnya
+                    // butuh verifikasi — bukan lewat formulir ini. `key`
+                    // mengikuti nilainya supaya initialValue ikut berubah
+                    // setelah profil selesai dimuat, tanpa controller.
+                    TextFormField(
+                      key: ValueKey('email-${_profile?.email ?? ''}'),
+                      initialValue: _profile?.email ?? '',
+                      readOnly: true,
+                      decoration: const InputDecoration(
+                          labelText: 'Email',
+                          prefixIcon: Icon(Icons.mail_outline_rounded),
+                          suffixIcon: Icon(Icons.lock_rounded, size: 17)),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _phone,
+                      keyboardType: TextInputType.phone,
+                      decoration:
+                          const InputDecoration(labelText: 'Nomor HP', prefixIcon: Icon(Icons.phone_iphone_rounded)),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _address,
+                      minLines: 2,
+                      maxLines: 3,
+                      decoration: const InputDecoration(
+                          labelText: 'Alamat (dipakai untuk booking)', prefixIcon: Icon(Icons.location_on_outlined)),
+                    ),
+                    // Teknisi: area kerja — dipakai memfilter notifikasi
+                    // "Pekerjaan baru tersedia" sesuai alamat pesanan.
+                    if (_profile?.role == 'technician') ...[
+                      // Keahlian utama — READ-ONLY: ditetapkan admin saat
+                      // kurasi pendaftaran; tidak ada kontrol ubah di sini
+                      // (updateMyProfile juga tidak pernah menulis skill).
+                      if (_profile?.skill?.isNotEmpty ?? false) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.brandTint,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.brand.withValues(alpha: 0.25)),
+                          ),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            const Icon(Icons.handyman_rounded, size: 20, color: AppColors.brand),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Text('Keahlian',
+                                        style: TextStyle(
+                                            fontSize: 11, fontWeight: FontWeight.w800, color: AppColors.brandDeep)),
+                                    const SizedBox(height: 2),
+                                    Text(skillLabel(_profile!.skill),
+                                        style: const TextStyle(
+                                            fontSize: 14.5, fontWeight: FontWeight.w700, color: AppColors.navy)),
+                                    const SizedBox(height: 2),
+                                    const Text('Ditetapkan admin — tidak dapat diubah',
+                                        style: TextStyle(fontSize: 11, color: AppColors.inkSoft)),
+                                  ]),
                             ),
-                            const SizedBox(height: 16),
-                          ],
-                          // Pengingat tetap (bukan SnackBar sekali lewat) untuk
-                          // teknisi yang datanya belum lengkap — teknisi baru
-                          // mendarat di sini dan langsung tahu apa yang kurang.
-                          // Saat status kurasi tampil, daftar yang kurang sudah
-                          // menjadi langkah pertama di kartu status; jangan
-                          // mengulanginya dalam dua kartu.
-                          if (kurangProfil.isNotEmpty && !tampilStatusKurasi) ...[
-                            _PeringatanLengkapiProfil(kurang: kurangProfil),
-                            const SizedBox(height: 16),
-                          ],
-                          Row(children: [
-                            const Icon(Icons.edit_rounded, size: 18, color: AppColors.brand),
-                            const SizedBox(width: 8),
-                            const Text('Ubah Data Diri',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 15,
-                                    color: AppColors.navy)),
-                            const Spacer(),
-                            if (_saving)
-                              const SizedBox(
-                                  height: 16,
-                                  width: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2)),
+                            const Padding(
+                              padding: EdgeInsets.only(top: 2),
+                              child: Icon(Icons.lock_rounded, size: 16, color: AppColors.inkSoft),
+                            ),
                           ]),
-                          const SizedBox(height: 14),
-                          TextField(
-                            controller: _name,
-                            decoration: const InputDecoration(
-                                labelText: 'Nama lengkap',
-                                prefixIcon: Icon(Icons.badge_outlined)),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _phone,
-                            keyboardType: TextInputType.phone,
-                            decoration: const InputDecoration(
-                                labelText: 'Nomor HP',
-                                prefixIcon: Icon(Icons.phone_iphone_rounded)),
-                          ),
-                          const SizedBox(height: 12),
-                          TextField(
-                            controller: _address,
-                            minLines: 2,
-                            maxLines: 3,
-                            decoration: const InputDecoration(
-                                labelText: 'Alamat (dipakai untuk booking)',
-                                prefixIcon: Icon(Icons.location_on_outlined)),
-                          ),
-                          // Teknisi: area kerja — dipakai memfilter notifikasi
-                          // "Pekerjaan baru tersedia" sesuai alamat pesanan.
-                          if (_profile?.role == 'technician') ...[
-                            // Keahlian utama — READ-ONLY: ditetapkan admin saat
-                            // kurasi pendaftaran; tidak ada kontrol ubah di sini
-                            // (updateMyProfile juga tidak pernah menulis skill).
-                            if (_profile?.skill?.isNotEmpty ?? false) ...[
-                              const SizedBox(height: 12),
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: AppColors.brandTint,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                      color: AppColors.brand.withValues(alpha: 0.25)),
-                                ),
-                                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                  const Icon(Icons.handyman_rounded,
-                                      size: 20, color: AppColors.brand),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Text('Keahlian',
-                                              style: TextStyle(
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w800,
-                                                  color: AppColors.brandDeep)),
-                                          const SizedBox(height: 2),
-                                          Text(skillLabel(_profile!.skill),
-                                              style: const TextStyle(
-                                                  fontSize: 14.5,
-                                                  fontWeight: FontWeight.w700,
-                                                  color: AppColors.navy)),
-                                          const SizedBox(height: 2),
-                                          const Text('Ditetapkan admin — tidak dapat diubah',
-                                              style: TextStyle(
-                                                  fontSize: 11, color: AppColors.inkSoft)),
-                                        ]),
-                                  ),
-                                  const Padding(
-                                    padding: EdgeInsets.only(top: 2),
-                                    child: Icon(Icons.lock_rounded,
-                                        size: 16, color: AppColors.inkSoft),
-                                  ),
-                                ]),
-                              ),
-                            ],
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: _serviceArea,
-                              decoration: const InputDecoration(
-                                  labelText: 'Area layanan (mis. Bandung)',
-                                  helperText: 'Notifikasi pekerjaan baru hanya untuk area ini. Kosongkan untuk semua area.',
-                                  prefixIcon: Icon(Icons.map_outlined)),
-                            ),
-                          ],
-                          const SizedBox(height: 18),
-                          GradientButton(
-                            label: 'Simpan Perubahan',
-                            icon: Icons.save_rounded,
-                            loading: _saving,
-                            onPressed: _save,
-                          ),
-                        ]),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _serviceArea,
+                        decoration: const InputDecoration(
+                            labelText: 'Area layanan (mis. Bandung)',
+                            helperText: 'Notifikasi pekerjaan baru hanya untuk area ini. Kosongkan untuk semua area.',
+                            prefixIcon: Icon(Icons.map_outlined)),
+                      ),
+                    ],
+                    const SizedBox(height: 18),
+                    GradientButton(
+                      label: 'Simpan Perubahan',
+                      icon: Icons.save_rounded,
+                      loading: _saving,
+                      onPressed: _save,
+                    ),
+                  ]),
                 ),
+
+                // ===== Kinerja (khusus teknisi) =====
+                // Ukuran yang sama dengan yang dipakai admin: waktu tanggap,
+                // ketepatan jadwal, dan garansi berulang + alasannya. Tanpa
+                // ini teknisi hanya melihat bintang dan tidak tahu apa yang
+                // menentukan perluasan area/keahliannya.
+                if (_profile?.role == 'technician') TechnicianScorecardCard(load: widget.loadScorecard),
 
                 // ===== Info akun + keluar =====
                 Padding(
@@ -604,9 +596,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     // hanya tindakannya yang menyesuaikan keadaan: ajukan,
                     // batalkan, atau jelaskan apa yang masih menahan.
                     _MenuTile(
-                      icon: _hapus.menungguOperator
-                          ? Icons.undo_rounded
-                          : Icons.delete_forever_outlined,
+                      icon: _hapus.menungguOperator ? Icons.undo_rounded : Icons.delete_forever_outlined,
                       color: AppColors.coral,
                       title: _hapus.menungguOperator ? 'Batalkan hapus akun' : 'Hapus akun',
                       subtitle: _hapus.menungguOperator
@@ -702,9 +692,7 @@ class _StatusPersetujuanTeknisi extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  ditolak
-                      ? 'Pendaftaran teknisi ditolak'
-                      : 'Menunggu persetujuan admin',
+                  ditolak ? 'Pendaftaran teknisi ditolak' : 'Menunggu persetujuan admin',
                   style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w800,
@@ -842,16 +830,12 @@ class _PeringatanLengkapiProfil extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text('Lengkapi data profil',
-                  style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.amber)),
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w800, color: AppColors.amber)),
               const SizedBox(height: 3),
               Text(
                 'Masih kosong: ${kurang.join(', ')}. Profil lengkap membantumu '
                 'menerima pekerjaan yang sesuai.',
-                style: const TextStyle(
-                    fontSize: 12, height: 1.45, color: AppColors.ink),
+                style: const TextStyle(fontSize: 12, height: 1.45, color: AppColors.ink),
               ),
             ],
           ),
@@ -887,8 +871,7 @@ class TechRatingPill extends StatelessWidget {
           border: Border.all(color: Colors.white.withValues(alpha: 0.45)),
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.star_rounded,
-              size: 17, color: ada ? AppColors.amber : Colors.white.withValues(alpha: 0.6)),
+          Icon(Icons.star_rounded, size: 17, color: ada ? AppColors.amber : Colors.white.withValues(alpha: 0.6)),
           const SizedBox(width: 6),
           Text(
             ratingSummaryLabel(ringkasan),
@@ -1022,13 +1005,9 @@ class _MenuTile extends StatelessWidget {
             ),
             child: Icon(icon, color: color, size: 21),
           ),
-          title: Text(title,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.navy)),
-          subtitle: Text(subtitle,
-              style: const TextStyle(fontSize: 11.5, color: AppColors.inkSoft)),
-          trailing: onTap != null
-              ? const Icon(Icons.chevron_right_rounded, color: AppColors.inkSoft)
-              : null,
+          title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: AppColors.navy)),
+          subtitle: Text(subtitle, style: const TextStyle(fontSize: 11.5, color: AppColors.inkSoft)),
+          trailing: onTap != null ? const Icon(Icons.chevron_right_rounded, color: AppColors.inkSoft) : null,
         ),
       );
 }

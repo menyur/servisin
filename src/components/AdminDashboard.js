@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import {
   getBookingDistancesAdmin,
+  getSlotPressureAdmin,
   assignNearestTechnicianAdmin,
   updateBookingStatusAdmin,
   updateServicePriceAdmin,
@@ -24,24 +25,39 @@ import {
   getMonthlyReportArchivesAdmin,
   getMonthlyReportDownloadUrlAdmin,
   getKtpSignedUrlAdmin,
+  createCategoryAdmin,
+  updateCategoryAdmin,
+  toggleCategoryActiveAdmin,
+  getBookingRefundsAdmin,
+  searchAdminGlobal,
 } from "@/app/actions/admin";
 import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
+import { bookingArea, bookingItems, bookingQuantity, serviceLabel } from "@/lib/booking-quantity";
+import { formatArea } from "@/lib/area-pricing";
+import { ringkasPutusan } from "@/lib/technician-scorecard";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, ShieldCheck, Coins } from "lucide-react";
+import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, Clock, ShieldCheck, Coins, LayoutGrid, Gauge, HandCoins, ScrollText, Search, X } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import LocationPickerMap from "@/components/LocationPickerMap";
 import BalanceAdminTab from "@/components/BalanceAdminTab";
 import TechnicianBalancesTab from "@/components/TechnicianBalancesTab";
 import TechnicianReviewsTab from "@/components/TechnicianReviewsTab";
+import TechnicianScorecardTab from "@/components/TechnicianScorecardTab";
 import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import PaymentSettingsTab from "@/components/PaymentSettingsTab";
 import AppFeeSettingsTab from "@/components/AppFeeSettingsTab";
+import SlotCapacitySettingsTab from "@/components/SlotCapacitySettingsTab";
+import SlotPressureBanner from "@/components/SlotPressureBanner";
+import SlotTechnicianAssignModal from "@/components/SlotTechnicianAssignModal";
 import AdminNotifyRecipientsTab from "@/components/AdminNotifyRecipientsTab";
+import AdminAnalyticsTab from "@/components/AdminAnalyticsTab";
 import DailyOpsBoardTab from "@/components/DailyOpsBoardTab";
+import RefundAdminTab from "@/components/RefundAdminTab";
 import WarrantyClaimsAdminTab from "@/components/WarrantyClaimsAdminTab";
 import AccountDeletionAdminTab from "@/components/AccountDeletionAdminTab";
+import AdminAuditLogTab from "@/components/AdminAuditLogTab";
 import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
@@ -55,12 +71,39 @@ const ICON_CHOICES = [
 ];
 const ALL_ROLES = ["customer", "technician", "admin"];
 
-export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialPiutangUmur = null, piutangAmbangHari = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null, accountDeletionSummary = null, appFeeBerlaku = null }) {
+export default function AdminDashboard({ initialBookings, initialServices, initialUsers, initialReports = [], initialVouchers = [], vouchersError = null, categories = [], balanceDeposits = [], balanceDepositsError = null, withdrawals = [], withdrawalsError = null, financeSummary = null, initialBanners = [], bannersError = null, initialTechnicianBalances = [], technicianBalancesError = null, initialTechnicianAppFee = [], technicianAppFeeTotal = null, initialPiutangUmur = null, piutangAmbangHari = null, initialReviews = [], reviewsSummary = null, reviewsByTechnician = [], reviewsError = null, board = null, boardError = null, accountDeletionSummary = null, appFeeBerlaku = null, initialScorecard = [], scorecardDays = 90, scorecardError = null, initialAdjustments = [], initialAdjustmentTotal = null, initialRefunds = [], initialRefundsSummary = null, initialReadiness = null }) {
   // Tab pembuka = papan harian: pertanyaan pertama admin adalah "hari ini apa
   // yang perlu saya kerjakan?", bukan "lihat semua pesanan".
   const [tab, setTab] = useState("today");
+  // Pengembalian dana pelanggan: dimuat di server (page.js) supaya lencana tab
+  // dan status di kartu pesanan sudah benar sejak render pertama.
+  const [refunds, setRefunds] = useState(initialRefunds || []);
+  const [refundsSummary, setRefundsSummary] = useState(initialRefundsSummary || null);
+  // Pantauan kuota 7 hari: dimuat dari server action setelah panel tampil.
+  // Banner hanya muncul bila ada slot penuh/hampir penuh, jadi admin yang
+  // membuka panel untuk hal lain tidak terganggu saat semua slot longgar.
+  const [slotPressure, setSlotPressure] = useState(null);
+  const [slotPressureError, setSlotPressureError] = useState(null);
+  const [slotPressureLoading, setSlotPressureLoading] = useState(true);
+  const [slotPressureTick, setSlotPressureTick] = useState(0);
+  // Slot yang sedang diatur teknisinya (aksi cepat dari banner/tab Kuota Slot).
+  const [slotAssign, setSlotAssign] = useState(null);
   const [bookings, setBookings] = useState(initialBookings);
+
+  // ---- Pencarian global (kode pesanan / nama / email / telepon) ----
+  const [cari, setCari] = useState("");
+  const [hasilCari, setHasilCari] = useState(null);
+  const [cariSibuk, setCariSibuk] = useState(false);
+  const [cariError, setCariError] = useState("");
+  // Hasil pencarian bisa menunjuk pesanan/pengguna yang tidak ada di daftar
+  // yang sudah dimuat. Yang dipilih "disematkan" di atas tab tujuannya supaya
+  // benar-benar terlihat, bukan hilang di urutan ribuan baris.
+  const [pinnedBookingId, setPinnedBookingId] = useState(null);
+  const [fokusUserId, setFokusUserId] = useState(null);
   const [services, setServices] = useState(initialServices);
+  // Kategori layanan: admin bisa menambah & menonaktifkan lewat tab Kategori.
+  // Salinan lokal supaya perubahan langsung tampil tanpa muat ulang halaman.
+  const [categoryList, setCategoryList] = useState(categories);
   const [users, setUsers] = useState(initialUsers || []);
   const [reports, setReports] = useState(initialReports);
   const [vouchers, setVouchers] = useState(initialVouchers);
@@ -159,6 +202,117 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
     if (tab === "reports") setArrivals((list) => list.filter((a) => a.jenis !== "laporan"));
   }, [tab]);
 
+  // Pantauan kuota: dipisah dari data server halaman supaya panel tetap cepat
+  // tampil, dan bisa disegarkan setelah admin menyimpan kuota baru.
+  useEffect(() => {
+    let alive = true;
+    getSlotPressureAdmin({ days: 7 })
+      .then((r) => {
+        if (!alive) return;
+        if (r?.error) {
+          setSlotPressureError(r.error);
+          setSlotPressure(null);
+        } else {
+          setSlotPressure(r);
+          setSlotPressureError(null);
+        }
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setSlotPressureError(e.message || "Gagal memuat pantauan kuota.");
+      })
+      .finally(() => {
+        if (alive) setSlotPressureLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+    // `lastLiveAt` berubah saat pesanan/laporan baru masuk lewat realtime:
+    // pesanan baru bisa langsung memenuhi slot, jadi peringatan ikut disegarkan
+    // tanpa admin membuka tab Kuota Slot.
+  }, [slotPressureTick, lastLiveAt]);
+
+  // Pencarian global: jeda 350 ms setelah mengetik agar satu kata tidak
+  // menghasilkan lima permintaan. Minimal 2 karakter.
+  useEffect(() => {
+    const q = cari.trim();
+    if (q.length < 2) {
+      setHasilCari(null);
+      setCariError("");
+      setCariSibuk(false);
+      return;
+    }
+    let aktif = true;
+    setCariSibuk(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await searchAdminGlobal(q);
+        if (!aktif) return;
+        if (r?.error) {
+          setCariError(r.error);
+          setHasilCari(null);
+        } else {
+          setHasilCari(r);
+          setCariError("");
+        }
+      } catch (e) {
+        if (aktif) setCariError(e.message || "Pencarian gagal.");
+      } finally {
+        if (aktif) setCariSibuk(false);
+      }
+    }, 350);
+    return () => {
+      aktif = false;
+      clearTimeout(t);
+    };
+  }, [cari]);
+
+  /** Pilih hasil pesanan: sematkan + buka tab Pesanan yang sudah ada. */
+  function bukaPesananHasilCari(b) {
+    // Jangan ganti baris yang SUDAH dimuat server dengan hasil pencarian yang
+    // lebih tipis: hasil `searchAdminGlobal` tidak membawa `extra_charges` dan
+    // signed URL foto no-show, sehingga menggantinya membuat kartu kehilangan
+    // bagian biaya tambahan/bukti. Cukup sematkan baris yang ada; hanya
+    // pesanan yang belum termuat yang ditambahkan.
+    setBookings((bs) =>
+      bs.some((x) => x.id === b.id) ? bs : [b, ...bs]
+    );
+    setPinnedBookingId(b.id);
+    setTab("bookings");
+    setBookingFilter("all");
+    setExpandedId(b.id);
+    setCari("");
+    setHasilCari(null);
+  }
+
+  /** Pilih hasil pengguna: buka tab Pengguna dengan kartu orang itu saja. */
+  function bukaPenggunaHasilCari(u) {
+    setFokusUserId(u.id);
+    setTab("users");
+    setCari("");
+    setHasilCari(null);
+  }
+
+  function refreshSlotPressure() {
+    setSlotPressureLoading(true);
+    setSlotPressureTick((n) => n + 1);
+  }
+
+  /** Penugasan dari modal kuota: perbarui daftar pesanan + pantauan slot. */
+  function handleSlotAssigned({ bookingId, technicianId, assignments = null }) {
+    const peta = new Map(
+      Array.isArray(assignments)
+        ? assignments.map((a) => [a.bookingId, a.technicianId])
+        : [[bookingId, technicianId]]
+    );
+    setBookings((bs) =>
+      bs.map((b) =>
+        peta.has(b.id) ? { ...b, technician_id: peta.get(b.id) || null } : b
+      )
+    );
+    refreshSlotPressure();
+  }
+
   // Data SERVER (papan harian, lencana, antrean setor/penarikan, dst.) hanya
   // berubah lewat router.refresh() di useAdminRealtime — yang memicu prop baru.
   // Tanpa baris di bawah, state klien tetap memakai daftar dari render pertama,
@@ -176,6 +330,10 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
 
   const technicians = users.filter((u) => u.role === "technician" && u.approval_status === "approved");
   const pendingTechs = users.filter((u) => u.role === "technician" && u.approval_status === "pending");
+  // Lencana tab Kartu Skor: berapa teknisi yang angkanya sudah cukup untuk
+  // dinilai dan perlu dibicarakan. Angka ini sengaja dihitung dari data awal
+  // yang dimuat server supaya admin langsung tahu ada yang perlu dilihat.
+  const scorecardPerluDitinjau = ringkasPutusan(initialScorecard || []).perluDitinjau;
   const openReportsCount = reports.filter((r) => r.status === "open").length;
   // pesanan non-COD yang masih menunggu pembayaran — perlu dicek/dikonfirmasi admin
   const unpaidCount = bookings.filter((b) => b.status === "pending" && b.payment_method !== "cod").length;
@@ -220,11 +378,44 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
     return new Date(b.created_at) - new Date(a.created_at); // newest (default)
   });
 
+  // Pesanan yang dibuka dari pencarian selalu tampil paling atas — termasuk
+  // bila umurnya sudah lama dan tidak ada di halaman daftar saat ini.
+  const daftarBookingTampil = pinnedBookingId
+    ? [
+        bookings.find((b) => b.id === pinnedBookingId),
+        ...sortedBookings.filter((b) => b.id !== pinnedBookingId),
+      ].filter(Boolean)
+    : sortedBookings;
+
+  // Tab Pengguna: hasil pencarian difokuskan ke satu orang, dengan banner
+  // untuk kembali ke daftar lengkap.
+  const daftarUserTampil = fokusUserId
+    ? users.filter((u) => u.id === fokusUserId)
+    : users;
+
   async function changeStatus(id, status) {
     setBusyId(id);
     const res = await updateBookingStatusAdmin(id, status);
     setBusyId(null);
-    if (!res.error) setBookings((bs) => bs.map((b) => (b.id === id ? { ...b, status } : b)));
+    if (!res.error) {
+      setBookings((bs) => bs.map((b) => (b.id === id ? { ...b, status } : b)));
+      // Membatalkan/menyelesaikan pesanan melepas slot; peringatan harus ikut
+      // turun agar admin tidak melihat slot penuh yang sudah longgar.
+      refreshSlotPressure();
+      // Pembatalan pesanan yang sudah dibayar membuat kewajiban refund di
+      // server — tarik ulang supaya lencana tab & kartu pesanan tidak
+      // ketinggalan sampai halaman dimuat ulang.
+      if (status === "cancelled") refreshRefunds();
+    }
+  }
+
+  /** Segarkan antrean refund setelah admin memutuskan/mencatat satu baris. */
+  async function refreshRefunds() {
+    const res = await getBookingRefundsAdmin();
+    if (!res.error) {
+      setRefunds(res.refunds || []);
+      setRefundsSummary(res.ringkasan || null);
+    }
   }
 
   async function changePrice(id, price) {
@@ -440,6 +631,98 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         </div>
       </div>
 
+      {/* ===== Pencarian global ===== */}
+      <div className="relative mb-5">
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-soft" />
+          <input
+            type="search"
+            value={cari}
+            onChange={(e) => setCari(e.target.value)}
+            className="input !pl-9 !pr-9"
+            placeholder="Cari kode pesanan, nama, email, atau nomor HP…"
+            aria-label="Pencarian global admin"
+          />
+          {cariSibuk && (
+            <Loader2 size={15} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-ink-soft" />
+          )}
+          {!cariSibuk && cari && (
+            <button
+              type="button"
+              onClick={() => { setCari(""); setHasilCari(null); }}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-soft hover:text-navy"
+              aria-label="Hapus pencarian"
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+        {cariError && <p className="text-xs text-coral mt-1.5">{cariError}</p>}
+        {hasilCari && (
+          (hasilCari.bookings?.length || 0) + (hasilCari.customers?.length || 0) + (hasilCari.technicians?.length || 0) === 0 ? (
+            <p className="text-xs text-ink-soft mt-1.5">Tidak ada yang cocok dengan &ldquo;{hasilCari.query}&rdquo;.</p>
+          ) : (
+            <div className="absolute z-30 left-0 right-0 mt-2 rounded-2xl border border-line bg-white shadow-xl max-h-[70vh] overflow-y-auto">
+              {(hasilCari.bookings?.length || 0) > 0 && (
+                <div className="p-3 border-b border-line">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-ink-soft mb-1.5">Pesanan</p>
+                  {hasilCari.bookings.map((b) => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => bukaPesananHasilCari(b)}
+                      className="w-full text-left rounded-lg px-2 py-1.5 hover:bg-brand-tint/60"
+                    >
+                      <span className="text-xs font-bold text-navy">{b.code}</span>{" "}
+                      <span className="text-xs text-ink-soft">{serviceLabel(b)} · {b.booking_date} {b.booking_time}</span>
+                      <span className="block text-[11px] text-ink-soft">
+                        {b.profiles?.name || "Pelanggan"}
+                        {b.technician?.name ? ` · Teknisi: ${b.technician.name}` : " · belum ada teknisi"}
+                        {` · ${b.status}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(hasilCari.customers?.length || 0) > 0 && (
+                <div className="p-3 border-b border-line">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-ink-soft mb-1.5">Pelanggan</p>
+                  {hasilCari.customers.map((u) => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => bukaPenggunaHasilCari(u)}
+                      className="w-full text-left rounded-lg px-2 py-1.5 hover:bg-brand-tint/60"
+                    >
+                      <span className="text-xs font-semibold text-navy">{u.name}</span>
+                      <span className="block text-[11px] text-ink-soft">{u.email}{u.phone ? ` · ${u.phone}` : ""}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(hasilCari.technicians?.length || 0) > 0 && (
+                <div className="p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-ink-soft mb-1.5">Teknisi</p>
+                  {hasilCari.technicians.map((u) => (
+                    <button
+                      key={u.id}
+                      type="button"
+                      onClick={() => bukaPenggunaHasilCari(u)}
+                      className="w-full text-left rounded-lg px-2 py-1.5 hover:bg-brand-tint/60"
+                    >
+                      <span className="text-xs font-semibold text-navy">{u.name}</span>
+                      <span className="block text-[11px] text-ink-soft">
+                        {u.email}{u.phone ? ` · ${u.phone}` : ""}{` · ${u.approval_status || "-"}`}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        )}
+      </div>
+
       {arrivals.length > 0 && (
         <div className="mb-5 rounded-xl border border-amber/40 bg-amber-tint px-4 py-3 flex items-start gap-3">
           <AlertTriangle size={16} className="text-amber mt-0.5 shrink-0" />
@@ -472,6 +755,14 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         </div>
       )}
 
+      <SlotPressureBanner
+        data={slotPressure}
+        loading={slotPressureLoading}
+        onOpen={() => setTab("slot")}
+        onRefresh={refreshSlotPressure}
+        onAssign={setSlotAssign}
+      />
+
       <div className="flex gap-2 mb-8 flex-wrap">
         <TabButton
           active={tab === "today"}
@@ -482,10 +773,29 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "bookings"} onClick={() => setTab("bookings")} icon={ClipboardList} label={`Pesanan Masuk${unpaidCount ? ` (${unpaidCount} bayar)` : ""}`} />
         <TabButton active={tab === "vouchers"} onClick={() => setTab("vouchers")} icon={Ticket} label="Voucher" />
         <TabButton active={tab === "prices"} onClick={() => setTab("prices")} icon={Tags} label="Harga Layanan" />
+        <TabButton
+          active={tab === "categories"}
+          onClick={() => setTab("categories")}
+          icon={LayoutGrid}
+          label={`Kategori${categoryList.some((c) => c.is_active === false) ? ` (${categoryList.filter((c) => c.is_active !== false).length}/${categoryList.length})` : ""}`}
+        />
         <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={Users} label="Pengguna & Teknisi" />
         <TabButton active={tab === "balance"} onClick={() => setTab("balance")} icon={Wallet} label={`Saldo Teknisi${(() => { const n = balanceDeposits.filter((d) => d.status === "pending").length + withdrawals.filter((w) => w.status === "pending").length; return n ? ` (${n})` : ""; })()}`} />
         <TabButton active={tab === "tech-balances"} onClick={() => setTab("tech-balances")} icon={PieChart} label="Saldo Aktif" />
+        <TabButton
+          active={tab === "refunds"}
+          onClick={() => setTab("refunds")}
+          icon={HandCoins}
+          label={`Refund${refundsSummary?.pendingCount ? ` (${refundsSummary.pendingCount})` : ""}`}
+        />
         <TabButton active={tab === "ratings"} onClick={() => setTab("ratings")} icon={Star} label="Penilaian Teknisi" />
+        <TabButton
+          active={tab === "scorecard"}
+          onClick={() => setTab("scorecard")}
+          icon={Gauge}
+          label={`Kartu Skor Teknisi${scorecardPerluDitinjau ? ` (${scorecardPerluDitinjau})` : ""}`}
+        />
+        <TabButton active={tab === "audit"} onClick={() => setTab("audit")} icon={ScrollText} label="Jejak Audit" />
         <TabButton active={tab === "applicants"} onClick={() => setTab("applicants")} icon={UserCheck} label={`Pendaftar Teknisi${pendingTechs.length ? ` (${pendingTechs.length})` : ""}`} />
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
         <TabButton
@@ -500,10 +810,12 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           icon={Trash2}
           label={`Hapus Akun${accountDeletionSummary?.diminta ? ` (${accountDeletionSummary.diminta})` : ""}`}
         />
+        <TabButton active={tab === "analytics"} onClick={() => setTab("analytics")} icon={PieChart} label="Analitik" />
         <TabButton active={tab === "history"} onClick={() => setTab("history")} icon={History} label="Histori" />
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
         <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
         <TabButton active={tab === "app-fee"} onClick={() => setTab("app-fee")} icon={Coins} label="Biaya Aplikasi" />
+        <TabButton active={tab === "slot"} onClick={() => setTab("slot")} icon={Clock} label="Kuota Slot" />
         <TabButton active={tab === "notify-recipients"} onClick={() => setTab("notify-recipients")} icon={Mail} label="Notif Email Admin" />
       </div>
 
@@ -522,6 +834,10 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           // pengingat & pengajuan penghapusan berada.
           onOpenBalances={() => setTab("tech-balances")}
         />
+      )}
+
+      {tab === "refunds" && (
+        <RefundAdminTab bookings={bookings} onChanged={refreshRefunds} />
       )}
 
       {tab === "warranty" && <WarrantyClaimsAdminTab />}
@@ -610,12 +926,24 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           </div>
 
           <div className="space-y-4">
-          {sortedBookings.length === 0 && (
+          {daftarBookingTampil.length === 0 && (
             <p className="text-ink-soft">{bookings.length === 0 ? "Belum ada pesanan masuk." : "Tidak ada pesanan yang cocok dengan filter ini."}</p>
           )}
-          {sortedBookings.map((b) => {
+          {daftarBookingTampil.map((b) => {
             const unassigned = !b.technician_id && b.status !== "cancelled";
             const needsPayConfirm = b.status === "pending" && b.payment_method !== "cod";
+            // Jumlah unit (bookings.quantity, migrasi booking-quantity). Pesanan
+            // lama / web yang belum memakai pemilih jumlah = 1 → tidak ditulis.
+            const qty = bookingQuantity(b);
+            const items = bookingItems(b);
+            const multi = items.length > 1;
+            // Pesanan per m²: harga satuan = rupiah per m² (jangan dibagi qty).
+            const area = bookingArea(b);
+            const hargaSatuan =
+              area === null && !multi && qty > 1
+                ? Math.round(Number(b.subtotal_price || 0) / qty)
+                : null;
+            const hargaPerM2 = area ? Math.round(Number(b.subtotal_price || 0) / area) : null;
             // Tarif yang dibekukan di pesanan ini (bookings.app_fee) berbeda dari
             // tarif yang berlaku sekarang → sebutkan apa adanya. Pesanan lama TIDAK
             // ditagih ulang, jadi selisihnya bukan kesalahan, melainkan riwayat.
@@ -639,7 +967,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                     )}
                   </p>
                   <p className="text-sm text-ink-soft">
-                    {b.services?.name}{b.option_label ? ` — ${b.option_label}` : ""} · {b.booking_date} {b.booking_time}
+                    {serviceLabel(b)} · {b.booking_date} {b.booking_time}
                   </p>
                 </div>
                 <select
@@ -686,8 +1014,29 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                     yang DITAGIHKAN pada pesanan ini (bookings.app_fee, dibekukan
                     saat pesanan dibuat), bukan tarif yang berlaku sekarang —
                     itulah dasar komisi teknisi untuk pekerjaan ini. */}
+                {multi && (
+                  <span className="sm:col-span-2">
+                    Varian:{" "}
+                    {items.map((it, i) => (
+                      <span key={`${it.label}-${i}`}>
+                        {i > 0 ? " + " : ""}
+                        {it.label} ×{it.quantity} ({formatRupiah(it.lineTotal)})
+                      </span>
+                    ))}
+                  </span>
+                )}
                 <span className="sm:col-span-2">
                   Layanan {formatRupiah(b.subtotal_price)}
+                  {hargaSatuan != null && (
+                    <span className="text-ink-soft">
+                      {" "}({qty} unit × {formatRupiah(hargaSatuan)})
+                    </span>
+                  )}
+                  {area !== null && (
+                    <span className="text-ink-soft">
+                      {" "}({formatArea(area)} × {formatRupiah(hargaPerM2)}/m²)
+                    </span>
+                  )}
                   {" + "}biaya aplikasi{" "}
                   <strong
                     className="text-navy"
@@ -721,7 +1070,131 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   )}
                 </span>
                 {b.notes && <span className="sm:col-span-2">Catatan: {b.notes}</span>}
+                {b.no_show_at && (
+                  <span className="sm:col-span-2 rounded-xl bg-amber-tint/50 border border-amber/30 px-3 py-2 text-amber">
+                    <strong className="font-semibold">Teknisi melaporkan pelanggan tidak ada</strong>
+                    {` · ${new Date(b.no_show_at).toLocaleString("id-ID", {
+                      day: "2-digit",
+                      month: "short",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}`}
+                    {b.customer_present_at
+                      ? ` · pelanggan menandai hadir ${new Date(b.customer_present_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}`
+                      : " · belum dijawab pelanggan"}
+                    {b.no_show_note && <span className="italic"> — &ldquo;{b.no_show_note}&rdquo;</span>}
+                    {b.no_show_photo_url && (
+                      <a
+                        href={b.no_show_photo_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="ml-2 underline decoration-dotted"
+                      >
+                        Foto lokasi
+                      </a>
+                    )}
+                  </span>
+                )}
+                {Array.isArray(b.extra_charges) && b.extra_charges.length > 0 && (
+                  <span className="sm:col-span-2 rounded-xl bg-brand-tint/40 border border-brand/20 px-3 py-2 text-navy">
+                    <strong className="font-semibold">Biaya tambahan</strong>
+                    <span className="block text-[11px] text-ink-soft mt-0.5">
+                      Hanya yang disetujui pelanggan yang masuk ke total pesanan.
+                    </span>
+                    {b.extra_charges.map((c) => (
+                      <span key={c.id} className="block text-xs mt-1">
+                        {formatRupiah(c.amount)} — {c.reason}{" "}
+                        <span
+                          className={
+                            c.status === "approved"
+                              ? "text-mint font-semibold"
+                              : c.status === "rejected"
+                                ? "text-coral font-semibold"
+                                : "text-amber font-semibold"
+                          }
+                        >
+                          {c.status === "approved" ? "disetujui" : c.status === "rejected" ? "ditolak" : "menunggu persetujuan"}
+                        </span>
+                      </span>
+                    ))}
+                  </span>
+                )}
+                {b.status === "cancelled" && (
+                  <span className="sm:col-span-2 rounded-xl bg-coral-tint/50 border border-coral/30 px-3 py-2 text-coral">
+                    <strong className="font-semibold">Dibatalkan pelanggan/admin</strong>
+                    {b.cancelled_at
+                      ? ` · ${new Date(b.cancelled_at).toLocaleString("id-ID", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}`
+                      : ""}
+                    {" — "}
+                    {b.cancelled_reason ? (
+                      <span className="italic">&ldquo;{b.cancelled_reason}&rdquo;</span>
+                    ) : (
+                      <span>Tidak ada alasan tercatat.</span>
+                    )}
+                  </span>
+                )}
+                {b.status === "cancelled" && (() => {
+                  // Status pengembalian dana menempel di kartu pesanan supaya
+                  // admin tidak perlu membuka tab Refund untuk tahu apakah
+                  // uang pelanggan sudah kembali.
+                  const rf = refunds.find((x) => x.booking_id === b.id);
+                  if (!rf) return null;
+                  const nada =
+                    rf.status === "done"
+                      ? "bg-mint-tint/60 border-mint/40 text-mint"
+                      : rf.status === "rejected"
+                        ? "bg-coral-tint/50 border-coral/30 text-coral"
+                        : "bg-amber-tint/60 border-amber/40 text-amber";
+                  const label =
+                    rf.status === "done"
+                      ? "sudah dikembalikan"
+                      : rf.status === "rejected"
+                        ? "pengembalian ditolak"
+                        : "menunggu transfer balik";
+                  return (
+                    <span className={`sm:col-span-2 rounded-xl border px-3 py-2 text-xs ${nada}`}>
+                      <strong className="font-semibold">Pengembalian dana {formatRupiah(rf.amount)}</strong>{" "}
+                      {label}
+                      {rf.rejection_reason ? ` — ${rf.rejection_reason}` : ""}
+                      {rf.status === "pending" && rf.payment_confirmed === false
+                        ? " · bukti bayar pelanggan belum dikonfirmasi, periksa dulu sebelum transfer"
+                        : ""}
+                    </span>
+                  );
+                })()}
               </div>
+              {(b.before_photo_url || b.after_photo_url) && (
+                <div className="mb-3 rounded-xl border border-line bg-brand-tint/30 px-3 py-2">
+                  <p className="text-xs font-semibold text-navy mb-2">Bukti pekerjaan dari teknisi</p>
+                  <div className="flex gap-3 flex-wrap">
+                    {[
+                      ["Sebelum", b.before_photo_url],
+                      ["Sesudah", b.after_photo_url],
+                    ]
+                      .filter(([, url]) => url)
+                      .map(([label, url]) => (
+                        <a key={label} href={url} target="_blank" rel="noreferrer" className="shrink-0" title="Klik untuk perbesar">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt={`Foto ${label} ${b.code}`}
+                            className="w-24 h-24 object-cover rounded-lg border-2 border-white shadow"
+                          />
+                          <span className="block text-[10px] text-ink-soft text-center mt-1">{label}</span>
+                        </a>
+                      ))}
+                  </div>
+                  <p className="text-[10px] text-ink-soft mt-1">
+                    Dasar penyelesaian sengketa “belum selesai”. Hanya admin, teknisi, dan pelanggan pemilik yang dapat membuka.
+                  </p>
+                </div>
+              )}
               {needsPayConfirm && (
                 <div className={`mb-3 rounded-xl px-4 py-3 space-y-3 ${b.payment_rejected ? "bg-amber-tint/60 border border-amber/40" : "bg-coral-tint/50 border border-coral/30"}`}>
                   {b.payment_rejected && (
@@ -798,6 +1271,15 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   className="input !w-auto !py-1.5 text-sm"
                 >
                   <option value="">Belum ditugaskan</option>
+                  {/* Teknisi yang SUDAH ditugaskan tetapi tidak ada di daftar
+                      approved (mis. dinonaktifkan setelah ditugaskan) tetap
+                      ditampilkan. Tanpa ini <select value> tidak menemukan
+                      opsinya dan tampak "Belum ditugaskan" padahal ada. */}
+                  {(() => {
+                    const t = users.find((u) => u.id === b.technician_id);
+                    if (!t || technicians.some((x) => x.id === t.id)) return null;
+                    return <option value={t.id}>{t.name} (ditugaskan)</option>;
+                  })()}
                   {/* Kelompok sesuai kategori layanan pesanan — saran dari
                       migrasi skill (profiles.skill = categories.id):
                       kecocokan SKILL + AREA paling atas; admin tetap bisa
@@ -817,9 +1299,13 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                     };
                     const label = (t) =>
                       `${t.name}${t.skill && catId && t.skill !== catId ? " (beda keahlian)" : !t.skill ? " (tanpa data skill)" : ""}${t.rating_avg ? ` — ★ ${t.rating_avg} (${t.rating_count})` : " (belum ada rating)"}`;
-                    const sorted = technicians
-                      .filter((t) => t.id !== b.technician_id)
-                      .sort((a, c) => score(a) - score(c));
+                    // Teknisi yang sedang ditugaskan TETAP ada di daftar:
+                    // menyembunyikannya membuat <select> kehilangan opsi yang
+                    // cocok dengan value dan menampilkan "Belum ditugaskan"
+                    // padahal pesanan sudah punya teknisi.
+                    const sorted = [...technicians].sort(
+                      (a, c) => score(a) - score(c)
+                    );
                     if (!catId) {
                       // Kategori layanan tidak diketahui: satu daftar tersortir
                       // netral, tanpa header grup kosong.
@@ -951,9 +1437,17 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         />
       )}
 
+      {tab === "categories" && (
+        <CategoryAdminTab
+          categories={categoryList}
+          services={services}
+          onChange={setCategoryList}
+        />
+      )}
+
       {tab === "prices" && (
         <div className="space-y-5">
-          <AddServiceForm categories={categories} services={services} onCreated={addService} onToggled={toggleService} />
+          <AddServiceForm categories={categoryList} services={services} onCreated={addService} onToggled={toggleService} />
           <div className="grid sm:grid-cols-2 gap-4">
             {services.map((s) => (
               <PriceRow key={s.id} service={s} onSave={changePrice} onToggleActive={toggleService} onUpdated={(id, patch) => setServices((ss) => ss.map((x) => (x.id === id ? { ...x, ...patch } : x)))} />
@@ -964,8 +1458,16 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
 
       {tab === "users" && (
         <div className="space-y-3">
-          {users.length === 0 && <p className="text-ink-soft">Belum ada pengguna terdaftar.</p>}
-          {users.map((u) => (
+          {fokusUserId && (
+            <div className="rounded-xl bg-brand-tint/50 border border-brand/30 px-4 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-xs text-navy">Menampilkan hasil pencarian untuk satu pengguna.</p>
+              <button onClick={() => setFokusUserId(null)} className="btn-outline !py-1 !px-2.5 text-xs flex items-center gap-1">
+                <X size={12} /> Tampilkan semua
+              </button>
+            </div>
+          )}
+          {daftarUserTampil.length === 0 && <p className="text-ink-soft">Belum ada pengguna terdaftar.</p>}
+          {daftarUserTampil.map((u) => (
             <div key={u.id} className="card flex justify-between items-center flex-wrap gap-3">
               <div>
                 <p className="font-semibold text-navy text-sm flex items-center gap-2 flex-wrap">
@@ -1040,10 +1542,23 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           initialError={technicianBalancesError}
           initialAppFeeReport={initialTechnicianAppFee}
           initialAppFeeTotal={technicianAppFeeTotal}
+          initialAdjustments={initialAdjustments}
+          initialAdjustmentTotal={initialAdjustmentTotal}
           initialPiutangUmur={initialPiutangUmur}
           ambangHari={piutangAmbangHari}
         />
       )}
+
+      {tab === "scorecard" && (
+        <TechnicianScorecardTab
+          initialRows={initialScorecard}
+          initialDays={scorecardDays}
+          initialError={scorecardError}
+          initialReadiness={initialReadiness}
+        />
+      )}
+
+      {tab === "audit" && <AdminAuditLogTab />}
 
       {tab === "ratings" && (
         <TechnicianReviewsTab
@@ -1055,6 +1570,8 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       )}
 
       {tab === "reports" && <ReportsView reports={reports} onUpdate={handleReportUpdate} />}
+
+      {tab === "analytics" && <AdminAnalyticsTab bookings={bookings} />}
 
       {tab === "history" && (
         <div>
@@ -1082,7 +1599,27 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
       {tab === "pay-settings" && <PaymentSettingsTab />}
       {tab === "app-fee" && <AppFeeSettingsTab />}
 
+      {tab === "slot" && (
+        <SlotCapacitySettingsTab
+          pressure={slotPressure}
+          pressureError={slotPressureError}
+          pressureLoading={slotPressureLoading}
+          onSaved={refreshSlotPressure}
+          onRefresh={refreshSlotPressure}
+          onAssign={setSlotAssign}
+        />
+      )}
+
       {tab === "notify-recipients" && <AdminNotifyRecipientsTab />}
+
+      {slotAssign && (
+        <SlotTechnicianAssignModal
+          slot={slotAssign}
+          categories={categoryList}
+          onClose={() => setSlotAssign(null)}
+          onAssigned={handleSlotAssigned}
+        />
+      )}
     </div>
   );
 }
@@ -1601,12 +2138,19 @@ function HistoryView({ bookings, mode, expandedId, onToggle, users = [] }) {
               <div className="border-t border-line px-5 py-4 bg-paper/50">
                 <div className="space-y-2">
                   {r.list.map((b) => (
-                    <div key={b.id} className="flex justify-between items-center gap-3 text-xs bg-white border border-line rounded-xl px-4 py-2.5 flex-wrap">
-                      <span className="font-display font-bold text-navy">{b.code}</span>
-                      <span className="text-ink-soft">{b.services?.name}</span>
-                      <span className="text-ink-soft">{b.booking_date} · {b.booking_time}</span>
-                      <span className="text-navy font-semibold">{formatRupiah(b.total_price)}</span>
-                      <StatusPill status={b.status} />
+                    <div key={b.id} className="text-xs bg-white border border-line rounded-xl px-4 py-2.5">
+                      <div className="flex justify-between items-center gap-3 flex-wrap">
+                        <span className="font-display font-bold text-navy">{b.code}</span>
+                        <span className="text-ink-soft">{serviceLabel(b)}</span>
+                        <span className="text-ink-soft">{b.booking_date} · {b.booking_time}</span>
+                        <span className="text-navy font-semibold">{formatRupiah(b.total_price)}</span>
+                        <StatusPill status={b.status} />
+                      </div>
+                      {b.status === "cancelled" && (
+                        <p className="text-[11px] text-coral mt-1.5">
+                          Alasan batal: {b.cancelled_reason || "tidak dicatat"}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1618,6 +2162,243 @@ function HistoryView({ bookings, mode, expandedId, onToggle, users = [] }) {
           </div>
         );
       })}
+      </div>
+    </div>
+  );
+}
+
+/* --------------------------- KATEGORI LAYANAN --------------------------- */
+
+/**
+ * Tab "Kategori": tambah kategori layanan, ubah nama/ikon/urutan, dan
+ * aktif-nonaktifkan. Kategori nonaktif hilang dari katalog pelanggan
+ * (web & aplikasi) tetapi layanan, pesanan, dan keahlian teknisinya tetap utuh
+ * (supabase/migrate-admin-categories.sql).
+ *
+ * Tidak ada tombol Hapus: `services.category_id` memakai ON DELETE CASCADE,
+ * jadi menghapus kategori akan ikut menghapus seluruh layanannya. Untuk
+ * menyembunyikan, gunakan Nonaktifkan.
+ */
+function CategoryAdminTab({ categories, services, onChange }) {
+  const emptyForm = { name: "", description: "", icon: "wrench", sortOrder: "" };
+  const [form, setForm] = useState(emptyForm);
+  const [adding, setAdding] = useState(false);
+  const [editingId, setEditingId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const jumlahLayanan = (id) => services.filter((s) => s.category_id === id).length;
+  const aktif = categories.filter((c) => c.is_active !== false).length;
+
+  function startAdd() {
+    setForm(emptyForm);
+    setEditingId(null);
+    setAdding(true);
+    setError("");
+  }
+
+  function startEdit(cat) {
+    setForm({
+      name: cat.name,
+      description: cat.description || "",
+      icon: cat.icon || "wrench",
+      sortOrder: String(cat.sort_order ?? 0),
+    });
+    setEditingId(cat.id);
+    setAdding(false);
+    setError("");
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setError("");
+    setSuccess("");
+    setSending(true);
+    const res = editingId
+      ? await updateCategoryAdmin(editingId, form)
+      : await createCategoryAdmin(form);
+    setSending(false);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    onChange((list) =>
+      editingId
+        ? list.map((c) => (c.id === editingId ? res.category : c))
+        : [...list, res.category].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    );
+    setSuccess(
+      editingId
+        ? `✓ Kategori "${res.category.name}" diperbarui.`
+        : `✓ Kategori "${res.category.name}" ditambahkan (id: ${res.category.id}).`
+    );
+    setAdding(false);
+    setEditingId(null);
+    setForm(emptyForm);
+  }
+
+  async function toggle(cat) {
+    const next = cat.is_active === false;
+    if (!next && !confirm(`Nonaktifkan kategori "${cat.name}"?\n\nKategori hilang dari katalog pelanggan (web & aplikasi). Layanan dan pesanan lamanya tetap ada dan bisa diaktifkan lagi kapan saja.`)) return;
+    setBusyId(cat.id);
+    setError("");
+    const res = await toggleCategoryActiveAdmin(cat.id, next);
+    setBusyId(null);
+    if (res.error) {
+      setError(res.error);
+      return;
+    }
+    onChange((list) => list.map((c) => (c.id === cat.id ? { ...c, is_active: next } : c)));
+    setSuccess(next ? `✓ Kategori "${cat.name}" diaktifkan.` : `✓ Kategori "${cat.name}" dinonaktifkan.`);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card !p-5">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 className="font-display font-semibold text-navy">Kategori layanan</h3>
+            <p className="text-xs text-ink-soft mt-1 max-w-xl leading-relaxed">
+              {categories.length} kategori · {aktif} aktif. Kategori menaungi layanan di tab
+              <b> Harga Layanan</b> dan menjadi pilihan keahlian teknisi. Nonaktifkan untuk
+              menyembunyikannya dari katalog pelanggan tanpa menghapus layanan atau pesanan lama.
+            </p>
+          </div>
+          {!adding && editingId === null && (
+            <button onClick={startAdd} className="btn-primary !px-4 !py-2 text-sm flex items-center gap-1.5">
+              <Plus size={14} /> Tambah kategori
+            </button>
+          )}
+        </div>
+        {success && <p className="text-xs text-mint font-medium mt-3">{success}</p>}
+        {error && <p className="text-xs text-coral font-medium mt-3">{error}</p>}
+      </div>
+
+      {(adding || editingId !== null) && (
+        <form onSubmit={save} className="card !p-5 space-y-3 border-brand/40">
+          <p className="text-xs font-semibold text-brand">
+            {editingId ? `Mengedit kategori: ${editingId}` : "Kategori baru"}
+          </p>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-semibold text-navy">Nama kategori *</span>
+              <input
+                className="input mt-1"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="mis. Service Elektronik"
+                maxLength={60}
+                required
+              />
+              {!editingId && (
+                <span className="text-[11px] text-ink-soft">
+                  Id dibuat otomatis dari nama dan tidak bisa diubah setelah tersimpan.
+                </span>
+              )}
+            </label>
+            <label className="block">
+              <span className="text-xs font-semibold text-navy">Ikon</span>
+              <select
+                className="input mt-1"
+                value={form.icon}
+                onChange={(e) => setForm((f) => ({ ...f, icon: e.target.value }))}
+              >
+                {ICON_CHOICES.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </label>
+            {editingId && (
+              <label className="block">
+                <span className="text-xs font-semibold text-navy">Urutan tampil</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="999"
+                  className="input mt-1"
+                  value={form.sortOrder}
+                  onChange={(e) => setForm((f) => ({ ...f, sortOrder: e.target.value }))}
+                />
+                <span className="text-[11px] text-ink-soft">Angka kecil tampil lebih dulu.</span>
+              </label>
+            )}
+          </div>
+          <label className="block">
+            <span className="text-xs font-semibold text-navy">Deskripsi (opsional)</span>
+            <textarea
+              className="input mt-1"
+              rows={2}
+              value={form.description}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              placeholder="Ditampilkan di kartu kategori pada beranda"
+              maxLength={200}
+            />
+          </label>
+          <div className="flex gap-2">
+            <button type="submit" disabled={sending} className="btn-primary !px-4 !py-2 text-sm flex items-center gap-1.5 disabled:opacity-60">
+              {sending ? <><Loader2 size={14} className="animate-spin" /> Menyimpan...</> : editingId ? "Simpan perubahan" : "Tambah kategori"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAdding(false); setEditingId(null); setError(""); setForm(emptyForm); }}
+              className="btn-outline !px-4 !py-2 text-sm"
+            >
+              Batal
+            </button>
+          </div>
+        </form>
+      )}
+
+      <div className="grid sm:grid-cols-2 gap-4">
+        {categories.map((cat) => {
+          const nonaktif = cat.is_active === false;
+          return (
+            <div key={cat.id} className={`card ${nonaktif ? "opacity-70" : ""}`}>
+              <div className="flex items-start gap-3">
+                <span className="w-9 h-9 rounded-lg bg-brand-tint text-brand flex items-center justify-center shrink-0">
+                  <ServiceIcon name={cat.icon} size={16} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold text-navy text-sm flex items-center gap-2 flex-wrap">
+                    {cat.name}
+                    <span className="text-[10px] font-bold uppercase tracking-wide text-ink-soft bg-paper px-2 py-0.5 rounded-full">
+                      {cat.id}
+                    </span>
+                    {nonaktif && (
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-coral bg-coral-tint px-2 py-0.5 rounded-full">
+                        Nonaktif
+                      </span>
+                    )}
+                  </p>
+                  {cat.description && <p className="text-xs text-ink-soft mt-1 line-clamp-2">{cat.description}</p>}
+                  <p className="text-[11px] text-ink-soft mt-2">
+                    {jumlahLayanan(cat.id)} layanan · urutan {cat.sort_order ?? 0} · ikon {cat.icon}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-4 mt-3 flex-wrap">
+                <button onClick={() => startEdit(cat)} className="text-xs text-brand hover:text-brand-deep font-semibold flex items-center gap-1">
+                  <Pencil size={12} /> Edit
+                </button>
+                <button
+                  onClick={() => toggle(cat)}
+                  disabled={busyId === cat.id}
+                  className="text-xs text-ink-soft hover:text-navy flex items-center gap-1 disabled:opacity-50"
+                >
+                  {busyId === cat.id ? <Loader2 size={12} className="animate-spin" /> : null}
+                  {nonaktif ? "Aktifkan kembali" : "Nonaktifkan"}
+                </button>
+                {nonaktif && (
+                  <span className="text-[11px] text-ink-soft">
+                    Tidak tampil di katalog pelanggan; layanannya tetap tersimpan.
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1642,13 +2423,19 @@ function AddServiceForm({ categories, services, onCreated, onToggled }) {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [imageUrl, setImageUrl] = useState(null);
+  // Harga per meter persegi: layanan dijual per luas bidang (cat dinding).
+  const [areaPricing, setAreaPricing] = useState(false);
+  const [areaNote, setAreaNote] = useState("");
+  // Fitur jumlah pesanan (migrate-service-quantity-flag.sql): pelanggan boleh
+  // memesan lebih dari satu dalam sekali pesanan (harga × jumlah).
+  const [quantityEnabled, setQuantityEnabled] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
     setError("");
     setSuccess("");
     setSending(true);
-    const res = await createServiceAdmin({ name, categoryId, basePrice: Number(basePrice), priceNote, durationEstimate, description, icon, imageUrl });
+    const res = await createServiceAdmin({ name, categoryId, basePrice: Number(basePrice), priceNote, durationEstimate, description, icon, imageUrl, areaPricing, areaNote, quantityEnabled });
     setSending(false);
     if (res.error) {
       setError(res.error);
@@ -1656,7 +2443,7 @@ function AddServiceForm({ categories, services, onCreated, onToggled }) {
     }
     onCreated(res.service);
     setSuccess(`✓ Layanan "${res.service.name}" ditambahkan — langsung tampil di landing page & booking`);
-    setName(""); setBasePrice(""); setDurationEstimate(""); setDescription(""); setCategoryId(""); setPriceNote("mulai dari"); setIcon("wrench"); setImageUrl(null);
+    setName(""); setBasePrice(""); setDurationEstimate(""); setDescription(""); setCategoryId(""); setPriceNote("mulai dari"); setIcon("wrench"); setImageUrl(null); setAreaPricing(false); setAreaNote(""); setQuantityEnabled(false);
     setTimeout(() => setSuccess(""), 6000);
   }
 
@@ -1687,7 +2474,9 @@ function AddServiceForm({ categories, services, onCreated, onToggled }) {
           <select className="input mt-1" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} required>
             <option value="">— Pilih kategori —</option>
             {categories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+              <option key={c.id} value={c.id}>
+                {c.name}{c.is_active === false ? " (nonaktif)" : ""}
+              </option>
             ))}
           </select>
         </label>
@@ -1699,6 +2488,34 @@ function AddServiceForm({ categories, services, onCreated, onToggled }) {
           <span className="text-xs font-semibold text-navy">Catatan harga</span>
           <input className="input mt-1" value={priceNote} onChange={(e) => setPriceNote(e.target.value)} placeholder="mulai dari / per jam / per kg" />
         </label>
+        <div className="sm:col-span-2 rounded-xl border border-line bg-paper/60 p-3">
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-0.5" checked={areaPricing} onChange={(e) => setAreaPricing(e.target.checked)} />
+            <span className="text-xs text-ink-soft leading-relaxed">
+              <span className="font-semibold text-navy">Hitung per meter persegi (m²).</span>{" "}
+              Pelanggan mengisi Panjang × Lebar tiap bidang, dan nominal dihitung dari luas total × harga
+              {areaPricing ? " di atas" : " dasar/varian"}. Cocok untuk jasa cat & dinding.
+            </span>
+          </label>
+          {areaPricing && (
+            <label className="block mt-2">
+              <span className="text-xs font-semibold text-navy">Keterangan luas (Panjang × Lebar)</span>
+              <input className="input mt-1" value={areaNote} onChange={(e) => setAreaNote(e.target.value)} placeholder="Isi Panjang × Lebar tiap bidang (meter)" maxLength={200} />
+              <span className="text-[11px] text-ink-soft">Tampil di formulir booking pelanggan. Kosongkan untuk teks bawaan.</span>
+            </label>
+          )}
+        </div>
+        {/* Fitur jumlah: pelanggan memilih berapa banyak dikerjakan sekaligus. */}
+        <div className="sm:col-span-2 rounded-xl border border-line bg-paper/60 p-3">
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-0.5" checked={quantityEnabled} onChange={(e) => setQuantityEnabled(e.target.checked)} />
+            <span className="text-xs text-ink-soft leading-relaxed">
+              <span className="font-semibold text-navy">Boleh pesan lebih dari satu (fitur jumlah).</span>{" "}
+              Pelanggan memilih jumlah (1–20) saat memesan; nominal = harga satuan × jumlah. Cocok untuk layanan
+              per unit/kendaraan. Bila dimatikan, satu pesanan = satu layanan.
+            </span>
+          </label>
+        </div>
         <label className="block">
           <span className="text-xs font-semibold text-navy">Estimasi durasi</span>
           <input className="input mt-1" value={durationEstimate} onChange={(e) => setDurationEstimate(e.target.value)} placeholder="mis. 1-2 jam" />
@@ -1758,6 +2575,12 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
     // durasinya satu untuk semua layanan di tab "Garansi"
     // (app_settings.warranty_days); kolom ini hanya menyimpan tandanya.
     warrantyDays: tandaGaransi(service),
+    // Harga per meter persegi (migrate-service-area-pricing.sql): pelanggan
+    // mengisi panjang × lebar, nominal = harga satuan × luas total.
+    areaPricing: service.area_pricing === true,
+    areaNote: service.area_note || "",
+    // Fitur jumlah (migrate-service-quantity-flag.sql).
+    quantityEnabled: service.quantity_enabled === true,
   });
   const active = service.is_active !== false;
   const tanpaGaransi = Number(form.warrantyDays) === 0;
@@ -1778,7 +2601,9 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
       setError(res.error);
       return;
     }
-    onUpdated(service.id, form); // nama/deskripsi baru langsung tampil di kartu
+    // Baris dari DB (snake_case) — bukan `form` (camelCase) — supaya nama,
+    // keterangan, dan penanda "Per m²" langsung tampil tanpa muat ulang.
+    onUpdated(service.id, res.service || form);
     setEditing(false);
   }
 
@@ -1823,6 +2648,50 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
               ))}
             </select>
           </label>
+          {/* Harga per meter persegi — KHUSUS layanan yang diukur per luas. */}
+          <div className="rounded-xl border border-line bg-paper/60 p-3 space-y-2">
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={form.areaPricing}
+                onChange={(e) => setF("areaPricing", e.target.checked)}
+              />
+              <span className="text-xs text-ink-soft leading-relaxed">
+                <span className="font-semibold text-navy">Hitung harga per meter persegi (m²).</span>{" "}
+                Harga layanan/varian dibaca sebagai rupiah per m². Pelanggan mengisi Panjang × Lebar tiap
+                bidang, lalu luasnya dijumlahkan dan dikalikan harga.
+              </span>
+            </label>
+            {form.areaPricing && (
+              <label className="block">
+                <span className="text-xs font-semibold text-navy">Keterangan luas (Panjang × Lebar)</span>
+                <input
+                  className="input mt-1"
+                  value={form.areaNote}
+                  onChange={(e) => setF("areaNote", e.target.value)}
+                  placeholder="Isi Panjang × Lebar tiap bidang (meter)"
+                  maxLength={200}
+                />
+                <span className="text-[11px] text-ink-soft">Tampil di formulir booking. Kosong = teks bawaan.</span>
+              </label>
+            )}
+          </div>
+          <div className="rounded-xl border border-line bg-paper/60 p-3">
+            <label className="flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={form.quantityEnabled}
+                onChange={(e) => setF("quantityEnabled", e.target.checked)}
+              />
+              <span className="text-xs text-ink-soft leading-relaxed">
+                <span className="font-semibold text-navy">Boleh pesan lebih dari satu (fitur jumlah).</span>{" "}
+                Pelanggan memilih jumlah 1–20 saat memesan; nominal = harga satuan × jumlah. Bila
+                dimatikan, satu pesanan = satu layanan.
+              </span>
+            </label>
+          </div>
           <label className="block">
             <span className="text-xs font-semibold text-navy">Deskripsi</span>
             <textarea className="input mt-1" rows={2} value={form.description} onChange={(e) => setF("description", e.target.value)} />
@@ -1833,7 +2702,7 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
             <button type="submit" disabled={savingDetail} className="btn-primary !px-4 !py-2 text-sm flex items-center gap-1.5 disabled:opacity-60">
               {savingDetail ? <><Loader2 size={14} className="animate-spin" /> Menyimpan...</> : "Simpan perubahan"}
             </button>
-            <button type="button" onClick={() => { setEditing(false); setError(""); setForm({ name: service.name, description: service.description || "", priceNote: service.price_note || "mulai dari", durationEstimate: service.duration_estimate || "", icon: service.icon || "wrench", imageUrl: service.image_url || null, warrantyDays: tandaGaransi(service) }); }} className="btn-outline !px-4 !py-2 text-sm">
+            <button type="button" onClick={() => { setEditing(false); setError(""); setForm({ name: service.name, description: service.description || "", priceNote: service.price_note || "mulai dari", durationEstimate: service.duration_estimate || "", icon: service.icon || "wrench", imageUrl: service.image_url || null, warrantyDays: tandaGaransi(service), areaPricing: service.area_pricing === true, areaNote: service.area_note || "", quantityEnabled: service.quantity_enabled === true }); }} className="btn-outline !px-4 !py-2 text-sm">
               Batal
             </button>
           </div>
@@ -1857,10 +2726,24 @@ function PriceRow({ service, onSave, onToggleActive, onUpdated }) {
         {Number(service.warranty_days ?? 7) === 0 && (
           <span className="text-[10px] font-bold uppercase tracking-wide text-ink-soft bg-line px-2 py-0.5 rounded-full">Tanpa garansi</span>
         )}
+        {service.area_pricing === true && (
+          <span className="text-[10px] font-bold uppercase tracking-wide text-brand-deep bg-brand-tint px-2 py-0.5 rounded-full">Per m²</span>
+        )}
+        {service.quantity_enabled === true && (
+          <span className="text-[10px] font-bold uppercase tracking-wide text-ink-soft bg-line px-2 py-0.5 rounded-full">Bisa jumlah</span>
+        )}
       </p>
       <p className="text-xs text-ink-soft mb-3">{service.categories?.name}</p>
+      {service.area_pricing === true && (
+        <p className="text-[11px] text-ink-soft mb-3">
+          Harga per meter persegi — {service.area_note || "pelanggan mengisi panjang × lebar tiap bidang"}
+        </p>
+      )}
       {service.description && <p className="text-xs text-ink-soft mb-3 line-clamp-2">{service.description}</p>}
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
+        {service.area_pricing === true && (
+          <span className="text-[11px] font-semibold text-ink-soft shrink-0">Rp / m²</span>
+        )}
         <input type="number" className="input" value={value} onChange={(e) => setValue(e.target.value)} />
         <button className="btn-outline !px-4 !py-2 text-sm shrink-0" onClick={save}>
           {saved ? "Tersimpan" : "Simpan"}

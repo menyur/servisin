@@ -63,6 +63,12 @@ void main() {
       tab: 1,
     ),
     (
+      nama: 'langganan servis jatuh tempo',
+      data: {'event': 'subscription_due', 'route': '/orders'},
+      target: 'orders',
+      tab: 1,
+    ),
+    (
       nama: 'chat baru dari teknisi',
       data: {'event': 'chat_message', 'route': '/orders', 'bookingId': 'b-1'},
       target: 'orders',

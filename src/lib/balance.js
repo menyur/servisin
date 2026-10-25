@@ -13,7 +13,10 @@
  * Semua fungsi aman-dipanggil (tidak melempar) dan idempoten.
  * Kolom/tabel yang belum dimigrasi di-skip tanpa menggagalkan alur.
  */
-import { computeSplit, commissionBase, planBalanceCut, alokasiSetoran, piutangTerbukaBaris } from "@/lib/pricing";
+// Impor RELATIF (bukan alias `@/`) supaya probe Node dapat memuat modul ini
+// langsung — sama seperti src/lib/piutang-reminder.js. Alias `@/` hanya dikenal
+// bundler Next, sehingga skrip verifikasi gagal memuatnya.
+import { computeSplit, commissionBase, planBalanceCut, alokasiSetoran, piutangTerbukaBaris, rencanaKoreksiSaldo } from "./pricing.js";
 
 /**
  * Potong komisi pesanan selesai dari saldo teknisi.
@@ -149,6 +152,68 @@ async function bacaPiutangTerbuka(supabase, technicianId) {
     .filter((p) => p.outstanding > 0);
 
   return { piutang, adaTabelPelunasan: !revErr };
+}
+
+/**
+ * KOREKSI saldo teknisi oleh admin (naik atau turun).
+ *
+ * Dipakai untuk memperbaiki selisih `saldo ≠ Σ mutasi` yang ditemukan
+ * rekonsiliasi harian. Bukan setoran: baris ledger-nya bertipe `adjustment`,
+ * jadi tidak menambah "Total Setor Disetujui" di laporan.
+ *
+ * SATU transaksi di database (RPC `admin_adjust_technician_balance`, lihat
+ * supabase/migrate-admin-balance-adjustment.sql): baris ledger dan kolom saldo
+ * ditulis bersama, baris profil dikunci `for update`. Menulis keduanya dari sini
+ * (dua query terpisah) akan menghasilkan selisih BARU bila salah satunya gagal —
+ * persis alarm yang ingin dihilangkan.
+ *
+ * @param supabase klien BER-JWT admin (RPC memeriksa `is_admin()`)
+ * @param technicianId uuid teknisi
+ * @param delta nominal bertanda: negatif = menurunkan saldo
+ * @param note alasan (min. 5 karakter) — disimpan di baris ledger
+ */
+export async function sesuaikanSaldoTeknisi(supabase, technicianId, delta, note) {
+  const rencana = rencanaKoreksiSaldo({ balance: 0, delta });
+  if (!technicianId) return { ok: false, error: "Teknisi tidak ditentukan." };
+  if (!rencana.valid) return { ok: false, error: "Jumlah koreksi tidak boleh 0." };
+
+  const catatan = String(note ?? "").trim();
+  if (catatan.length < 5) {
+    return { ok: false, error: "Alasan koreksi wajib diisi (minimal 5 karakter)." };
+  }
+
+  try {
+    const { data, error } = await supabase.rpc("admin_adjust_technician_balance", {
+      p_technician: technicianId,
+      p_delta: rencana.delta,
+      p_note: catatan,
+    });
+
+    if (error) {
+      if (/could not find the function|does not exist|schema cache|function .* not found/i.test(error.message || "")) {
+        return {
+          ok: false,
+          error:
+            "Koreksi saldo belum aktif di database — jalankan supabase/migrate-admin-balance-adjustment.sql lebih dulu.",
+        };
+      }
+      return { ok: false, error: error.message };
+    }
+
+    if (!data || data.ok !== true) {
+      return { ok: false, error: data?.error || "Koreksi saldo gagal." };
+    }
+
+    return {
+      ok: true,
+      delta: Number(data.delta),
+      balanceBefore: Number(data.balance_before),
+      balanceAfter: Number(data.balance_after),
+      note: catatan,
+    };
+  } catch (e) {
+    return { ok: false, error: e?.message };
+  }
 }
 
 /**

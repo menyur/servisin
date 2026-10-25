@@ -7,6 +7,7 @@ import { createPaymentTransaction } from "@/lib/payment";
 import { sendBookingConfirmationEmail, sendAdminNewBookingEmail, sendAdminPaymentProofEmail } from "@/lib/email";
 import { notifyAdminsOrDirect, adminEmailsForEvent } from "@/lib/admin-email";
 import { alamatUji } from "@/lib/email-uji";
+import { ringkasSlotUsage } from "@/lib/slot-capacity";
 import { revalidatePath } from "next/cache";
 
 export async function createBooking(input) {
@@ -68,6 +69,24 @@ export async function createBooking(input) {
   }
   const unitPrice = option ? option.price : service.base_price;
 
+  // ---- Luas area (m²) — layanan per meter persegi (cat dinding) ----
+  // Harga satuan di atas berarti rupiah PER m² untuk layanan bertanda
+  // `area_pricing`. Batasnya sama dengan RPC (supabase/migrate-service-area-
+  // pricing.sql) supaya web dan aplikasi tidak pernah berbeda aturan.
+  let area = null;
+  if (service.area_pricing === true) {
+    const n = Number(input.area);
+    if (!Number.isFinite(n) || n < 0.5 || n > 2000) {
+      return { error: "Isi luas area antara 0,5 dan 2000 meter persegi." };
+    }
+    area = Math.round(n * 100) / 100;
+  } else if (input.area !== undefined && input.area !== null && input.area !== "") {
+    return { error: "Layanan ini dihitung per unit, bukan per meter persegi." };
+  }
+
+  // Subtotal layanan: harga per m² × luas, atau satu unit untuk layanan biasa.
+  const subtotalLayanan = area === null ? unitPrice : Math.round(unitPrice * area);
+
   const { data: profile } = await supabase
     .from("profiles")
     .select("*")
@@ -103,7 +122,7 @@ export async function createBooking(input) {
   // ditagihkan — lihat supabase/migrate-app-fee-setting.sql).
   const appFeeEfektif = await bacaAppFee(supabase);
   const { subtotal, appFee, total } = calculateTotal(
-    unitPrice,
+    subtotalLayanan,
     voucher?.amount || 0,
     appFeeEfektif
   );
@@ -116,6 +135,7 @@ export async function createBooking(input) {
       user_id: user.id,
       service_id: serviceId,
       option_label: option?.label || null,
+      area,
       booking_date: bookingDate,
       booking_time: bookingTime,
       address,
@@ -133,6 +153,11 @@ export async function createBooking(input) {
     .single();
 
   if (insertErr) {
+    // Kuota slot ditegakkan trigger database (supaya jalur web & aplikasi sama).
+    // Pesannya sudah ramah — jangan dibungkus "Gagal menyimpan booking".
+    if (/sudah penuh/i.test(insertErr.message || "")) {
+      return { error: insertErr.message };
+    }
     // kolom discount_amount belum ada di DB → ulangi tanpa diskon agar booking tetap jalan
     if (/discount_amount/.test(insertErr.message)) {
       const retry = await supabase
@@ -141,6 +166,8 @@ export async function createBooking(input) {
           code,
           user_id: user.id,
           service_id: serviceId,
+          option_label: option?.label || null,
+          area,
           booking_date: bookingDate,
           booking_time: bookingTime,
           address,
@@ -395,7 +422,7 @@ export async function getMyBookings() {
     supabase
       .from("bookings")
       .select(
-        "*, services(name, category_id), technician:profiles!bookings_technician_id_fkey(id, name, phone)"
+        "*, services(name, category_id), booking_items(label, unit_price, quantity, line_total, position), technician:profiles!bookings_technician_id_fkey(id, name, phone)"
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false }),
@@ -448,7 +475,8 @@ export async function downloadMyReceiptPdf(bookingId) {
   const { data: b, error } = await supabase
     .from("bookings")
     .select(
-      "*, services(name), profiles!bookings_user_id_fkey(name, email, phone), technician:profiles!bookings_technician_id_fkey(name, phone)"
+      "*, services(name), booking_items(label, unit_price, quantity, line_total, position), " +
+        "profiles!bookings_user_id_fkey(name, email, phone), technician:profiles!bookings_technician_id_fkey(name, phone)"
     )
     .eq("id", bookingId)
     .eq("user_id", user.id) // hanya pesanan milik sendiri
@@ -499,4 +527,23 @@ export async function getTransferAccount() {
 export async function getAppFee() {
   const supabase = await createClient();
   return { fee: await bacaAppFee(supabase) };
+}
+
+/**
+ * Pemakaian slot pada satu tanggal (jumlah saja, bukan data pesanan) untuk
+ * wizard web. RPC `booking_slot_usage` membaca setelan admin dan menghitung
+ * pesanan aktif; trigger database tetap penentu terakhir saat pesanan dibuat.
+ *
+ * Gagal / migrasi belum dijalankan → kapasitas null & semua slot tampil
+ * (fail-open). Memblokir semua slot hanya karena RPC belum ada akan mematikan
+ * pemesanan, padahal trigger-nya juga belum ada.
+ */
+export async function getSlotAvailability(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ""))) {
+    return { slots: ringkasSlotUsage(null) };
+  }
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("booking_slot_usage", { p_date: date });
+  if (error) return { slots: ringkasSlotUsage(null), error: null };
+  return { slots: ringkasSlotUsage(data) };
 }

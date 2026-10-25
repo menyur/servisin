@@ -74,6 +74,8 @@ check(
 const ROUTE_CRON = [
   "src/app/api/cron/purge-history/route.js",
   "src/app/api/cron/monthly-report/route.js",
+  "src/app/api/cron/subscription-reminder/route.js",
+  "src/app/api/cron/balance-reconciliation/route.js",
 ];
 for (const rel of ROUTE_CRON) {
   const isi = readFileSync(path.join(ROOT, rel), "utf8");

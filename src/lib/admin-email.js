@@ -63,6 +63,7 @@ import {
   sendAdminNewBookingEmail,
   sendAdminNewReportEmail,
   sendAdminNewDepositEmail,
+  sendAdminNewWithdrawalEmail,
   sendAdminNewApplicantEmail,
   sendAdminNewCustomerEmail,
   sendAdminAccountDeletionEmail,
@@ -79,7 +80,7 @@ const PAY_LABEL = {
 
 /**
  * Peristiwa yang dikenal antrean: new_booking | new_report | new_deposit |
- * new_user | account_deletion. Daftar label + kunci yang dipakai PANEL ADMIN
+ * new_withdrawal | new_user | account_deletion. Daftar label + kunci yang dipakai PANEL ADMIN
  * (dan disaring per admin di sini) ada di src/lib/admin-notify-events.js.
  */
 
@@ -232,6 +233,12 @@ export async function sendAdminEventEmail(event, refId) {
  * dijalankan. Pemanggil (route) sudah memverifikasi kepemilikan barisnya.
  */
 export async function notifyAdminEventFromClient(supabase, event, refId) {
+  // Pengajuan TARIK saldo belum punya trigger antrean (berbeda dengan setoran),
+  // jadi tidak ada baris yang bisa disapu. Kalau tetap lewat
+  // `notifyAdminsOrDirect`, fungsi itu mengira antrean yang mengirim dan email
+  // admin hilang diam-diam. Kirim langsung — sama seperti jalur web
+  // (`notifyAdminsBalanceRequest` untuk withdrawal).
+  if (event === "new_withdrawal") return sendAdminEventEmail(event, refId);
   return notifyAdminsOrDirect(supabase, () => sendAdminEventEmail(event, refId));
 }
 
@@ -472,6 +479,33 @@ async function deliver(admin, item) {
         current_balance: tech?.balance || 0,
         amount: d.amount,
         proofUrl,
+      });
+    }
+
+    case "new_withdrawal": {
+      // Pengajuan tarik saldo dari aplikasi (Flutter): saldo sudah ditahan
+      // saat baris dibuat, jadi email ini yang memancing admin mentransfer.
+      const { data: w } = await admin
+        .from("balance_withdrawals")
+        .select("amount, bank_name, account_number, account_holder, technician_id")
+        .eq("id", ref)
+        .maybeSingle();
+      if (!w) return "skip";
+      const { data: tech } = await admin
+        .from("profiles")
+        .select("name, email, balance")
+        .eq("id", w.technician_id)
+        .maybeSingle();
+      if (alamatUji(tech?.email)) return { skipped: "sumber-uji", email: tech?.email };
+      const emails = await adminEmailsForEvent(admin, "new_withdrawal");
+      return sendAdminNewWithdrawalEmail(emails, {
+        tech_name: tech?.name || "Teknisi",
+        tech_email: tech?.email || "-",
+        current_balance: tech?.balance || 0,
+        amount: w.amount,
+        bank_name: w.bank_name,
+        account_number: w.account_number,
+        account_holder: w.account_holder,
       });
     }
 

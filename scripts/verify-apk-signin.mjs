@@ -129,11 +129,22 @@ export function androidClientUntukPaket(json, pkg) {
   for (const client of json?.client ?? []) {
     const info = client?.client_info?.android_client_info;
     if (!info || info.package_name !== pkg) continue;
-    const ids = (client.oauth_client ?? [])
-      .filter((o) => Number(o.client_type) === CLIENT_TYPE_ANDROID)
-      .map((o) => o.client_id)
-      .filter(Boolean);
-    const certHash = (info.certificate_hash ?? []).filter(Boolean);
+    const androidOauth = (client.oauth_client ?? []).filter(
+      (o) => Number(o.client_type) === CLIENT_TYPE_ANDROID
+    );
+    const ids = androidOauth.map((o) => o.client_id).filter(Boolean);
+    // Sidik jari bisa ada di dua tempat: block per-app (format lama) dan
+    // `oauth_client[].android_info.certificate_hash` (format unduhan Firebase).
+    // Membaca satu tempat saja membuat laporan selalu "cert_hash 0" padahal
+    // sidik jarinya terdaftar.
+    const certHash = [
+      ...new Set(
+        [
+          ...(info.certificate_hash ?? []),
+          ...androidOauth.flatMap((o) => [].concat(o.android_info?.certificate_hash ?? [])),
+        ].filter(Boolean)
+      ),
+    ];
     return { ada: ids.length > 0, ids, certHash };
   }
   return null;

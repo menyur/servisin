@@ -5,6 +5,7 @@ import Link from "next/link";
 import { getMyBookings } from "@/app/actions/bookings";
 import { createCustomerReport } from "@/app/actions/reports";
 import { formatRupiah, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
+import { serviceLabel } from "@/lib/booking-quantity";
 import { StatusPill } from "@/components/StatusPipeline";
 import OrderReport from "@/components/OrderReport";
 import ReportForm from "@/components/ReportForm";
@@ -99,7 +100,7 @@ export default function DashboardClient({ initialBookings, customerName, custome
                     <div>
                       <p className="font-display font-bold text-navy">{b.code}</p>
                       <p className="text-sm text-ink-soft">
-                        {b.services?.name}{b.option_label ? ` — ${b.option_label}` : ""}
+                        {serviceLabel(b)}
                       </p>
                     </div>
                     <StatusPill status={b.status} />

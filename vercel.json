@@ -11,6 +11,18 @@
     {
       "path": "/api/cron/piutang-reminder",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/subscription-reminder",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/booking-reminder",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/balance-reconciliation",
+      "schedule": "0 16 * * *"
     }
   ]
 }

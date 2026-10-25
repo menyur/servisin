@@ -115,6 +115,24 @@ void main() {
     expect(find.text('Jumlah setor (Rp)'), findsOneWidget);
   });
 
+  testWidgets('tombol Tarik saldo membuka layar penarikan native', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: BalanceScreen(
+        loadPage: () => _page(_summary(balance: 42000, expected: 42000)),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Sebelumnya satu-satunya jalan mencairkan saldo adalah halaman web.
+    expect(find.text('Tarik saldo ke rekening'), findsOneWidget);
+
+    await tester.tap(find.text('Tarik saldo ke rekening'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Jumlah tarik (Rp)'), findsOneWidget);
+    expect(find.text('Ajukan penarikan'), findsOneWidget);
+  });
+
   testWidgets('banner pengingat hilang setelah saldo diisi', (tester) async {
     await tester.pumpWidget(MaterialApp(
       home: BalanceScreen(

@@ -1,7 +1,7 @@
 "use client";
 
 import { formatRupiah } from "@/lib/pricing";
-import { Wallet, TrendingUp, TrendingDown, Landmark, Clock, Users, Receipt, CheckCircle2 } from "lucide-react";
+import { Wallet, TrendingUp, TrendingDown, Landmark, Clock, Users, Receipt, CheckCircle2, HandCoins } from "lucide-react";
 
 /**
  * Ringkasan keuangan platform di tab Saldo Teknisi (admin):
@@ -85,6 +85,20 @@ export default function FinanceSummary({ summary }) {
       value: summary.pendingHold,
       sub: "Menunggu keputusan penarikan",
       icon: Clock,
+      cls: "text-amber",
+    },
+    {
+      // Kewajiban uang KELUAR karena pembatalan pesanan yang sudah dibayar
+      // (supabase/migrate-booking-refunds.sql). Angka utama = yang masih harus
+      // ditransfer; total yang sudah kembali ditampilkan sebagai pembanding
+      // supaya kedua keadaan tidak tertukar.
+      label: "Refund Pelanggan (belum ditransfer)",
+      value: summary.refunds?.pendingAmount ?? 0,
+      sub:
+        `${summary.refunds?.pendingCount ?? 0} pesanan menunggu · sudah kembali ${formatRupiah(summary.refunds?.doneTotal ?? 0)}` +
+        (summary.refunds?.donePeriode > 0 ? ` · bulan ini ${formatRupiah(summary.refunds.donePeriode)}` : "") +
+        (summary.refunds?.migrasiJalan === false ? " · migrasi refund belum jalan" : ""),
+      icon: HandCoins,
       cls: "text-amber",
     },
   ];

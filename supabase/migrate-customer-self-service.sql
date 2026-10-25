@@ -21,6 +21,8 @@
 --   * migrate-payment-proofs.sql + migrate-payment-rejection.sql → kolom
 --     bookings.payment_proof_url & payment_rejected (dipakai penjaga pembatalan;
 --     tanpa kolom itu cancel_booking GAGAL saat dipanggil, bukan saat dibuat)
+--   * migrate-booking-refunds.sql → tabel booking_refunds (dipakai versi
+--     cancel_booking terbaru untuk mengantrekan pengembalian dana)
 -- Tanpa geog/technician_locations, booking_technician_info gagal dibuat
 -- (galat muncul saat CREATE FUNCTION, bukan diam-diam).
 --
@@ -70,6 +72,13 @@ $fn$;
 -- ada bukti bayar yang menunggu/menghuni konfirmasi admin. Syarat terakhir
 -- penting karena belum ada alur refund: pembatalan setelah transfer hanya
 -- akan menyisakan uang tanpa jalan kembali.
+--
+-- CATATAN: syarat bukti bayar itu SUDAH DIGANTI oleh
+-- supabase/migrate-booking-refunds.sql — setelah alur refund ada, pembatalan
+-- setelah transfer diizinkan dan otomatis mengantrekan pengembalian dana.
+-- Versi fungsi di bawah tetap disimpan sebagai riwayat; menjalankan ulang
+-- berkas ini akan MENGEMBALIKAN penjagaan lama, jadi jalankan
+-- migrate-booking-refunds.sql setelahnya.
 create or replace function public.cancel_booking(p_booking uuid, p_reason text)
 returns jsonb
 language plpgsql

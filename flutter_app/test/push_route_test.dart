@@ -52,15 +52,18 @@ void main() {
     expect(notificationTabTarget(const {}), 'orders');
   });
 
-  test('notifikasi chat membawa bookingId untuk dibuka langsung', () {
-    expect(
-      notificationBookingId({
-        'event': 'chat_message',
-        'bookingId': 'b-123',
-        'route': '/orders',
-      }),
-      'b-123',
-    );
+  test('notifikasi chat/no-show/biaya tambahan membawa bookingId', () {
+    for (final event in ['chat_message', 'customer_no_show', 'extra_charge']) {
+      expect(
+        notificationBookingId({
+          'event': event,
+          'bookingId': 'b-123',
+          'route': '/orders',
+        }),
+        'b-123',
+        reason: '$event harus membuka detail pesanan, bukan daftar',
+      );
+    }
     expect(
       notificationBookingId({'event': 'chat_message', 'bookingId': '  '}),
       isNull,
@@ -68,8 +71,16 @@ void main() {
     expect(
       notificationBookingId({'event': 'report_status', 'bookingId': 'b-123'}),
       isNull,
-      reason: 'hanya chat yang boleh membuka detail pesanan langsung',
+      reason: 'event lain tetap mendarat di tabnya',
     );
+  });
+
+  test('hanya chat yang langsung membuka percakapan', () {
+    expect(notificationOpensChat({'event': 'chat_message'}), isTrue);
+    expect(notificationOpensChat({'event': 'customer_no_show'}), isFalse,
+        reason: 'tombol "Saya di sini" harus terlihat, bukan chat');
+    expect(notificationOpensChat({'event': 'extra_charge'}), isFalse,
+        reason: 'pelanggan harus melihat tombol setujui/tolak biaya');
   });
 
   test('chat mengikuti route tab: pelanggan Pesanan, teknisi Pekerjaan', () {

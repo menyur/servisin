@@ -144,6 +144,27 @@ void main() {
       expect(s.mismatch, 0); // saldo = ledger, tanpa selisih
     });
 
+    test('baris penyesuaian (koreksi admin / hapus piutang) ikut expectedBalance', () {
+      // Koreksi turun admin: topup 100.000, penyesuaian −40.000 → saldo 60.000.
+      // Kalau baris `adjustment` diabaikan, teknisi melihat "Ada selisih
+      // Rp 40.000" padahal saldo dan buku besar sudah sama.
+      final turun = Api.summarizeBalance(_profile(balance: 60000), [
+        _tx(type: 'topup', amount: 100000),
+        _tx(type: 'adjustment', amount: -40000),
+      ]);
+      expect(turun.expectedBalance, 60000);
+      expect(turun.mismatch, 0);
+
+      // Penghapusan piutang (adjustment positif) juga menambah expected:
+      // potongan 20.000 lalu dihapuskan 20.000 → saldo 0, bukan selisih 20.000.
+      final hapus = Api.summarizeBalance(_profile(balance: 0), [
+        _tx(type: 'earning', amount: -20000, commission: 15000, bookingTotal: 200000, appFee: 5000),
+        _tx(type: 'adjustment', amount: 20000),
+      ]);
+      expect(hapus.expectedBalance, 0);
+      expect(hapus.mismatch, 0);
+    });
+
     test('mismatch = saldo aktual − expectedBalance', () {
       final s = Api.summarizeBalance(_profile(balance: 43749), [_tx(type: 'topup', amount: 50000)]);
       expect(s.expectedBalance, 50000);

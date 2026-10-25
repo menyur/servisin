@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { sendPushToUser } from "@/lib/notify";
+import { commissionAlreadyCharged, technicianCancelNotice } from "@/lib/cancel-notice";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,14 @@ const EVENTS = {
     b.status !== "cancelled" &&
     b.last_rescheduled_at != null &&
     Date.now() - new Date(b.last_rescheduled_at).getTime() <= 10 * 60 * 1000,
+  // Pelanggan menekan "Saya di sini" setelah teknisi melapor no-show. Hanya
+  // sah bila laporannya ADA dan konfirmasinya baru (≤ 30 menit), sehingga
+  // klien tidak bisa mengirim "pelanggan sudah datang" untuk pesanan lain.
+  customer_present: (b) =>
+    b.status === "paid" &&
+    b.no_show_at != null &&
+    b.customer_present_at != null &&
+    Date.now() - new Date(b.customer_present_at).getTime() <= 30 * 60 * 1000,
 };
 
 export async function POST(request) {
@@ -70,10 +79,12 @@ export async function POST(request) {
     // Baca keadaan pesanan dengan service role: penerima notifikasi ada di
     // kolom yang tidak perlu diketahui klien.
     let booking = null;
+    let admin = null;
     try {
-      const { data } = await createAdminClient()
+      admin = createAdminClient();
+      const { data } = await admin
         .from("bookings")
-        .select("id, code, user_id, technician_id, status, booking_date, booking_time, last_rescheduled_at, services(name)")
+        .select("id, code, user_id, technician_id, status, booking_date, booking_time, last_rescheduled_at, no_show_at, customer_present_at, services(name)")
         .eq("id", bookingId)
         .maybeSingle();
       booking = data;
@@ -112,11 +123,31 @@ export async function POST(request) {
       : "";
 
     let payload;
-    if (event === "order_cancelled") {
+    if (event === "customer_present") {
       payload = {
-        title: "Pesanan dibatalkan ❌",
+        title: "Pelanggan sudah di lokasi ✅",
         event,
-        body: `${booking.code} (${serviceName}) dibatalkan pelanggan. Kamu tidak perlu datang ke lokasi.`,
+        body: `${booking.code} (${serviceName}): pelanggan menandai sudah di lokasi. Silakan mulai pekerjaan.`,
+        url: "/jobs",
+        tag,
+      };
+    } else if (event === "order_cancelled") {
+      // Kalimat dampak saldo yang SAMA dengan kotak masuk (lib/cancel-notice.js).
+      // Nominal refund pelanggan tidak pernah ikut — teknisi hanya perlu tahu
+      // apakah komisinya sudah dipotong dan apa yang harus dilakukan.
+      const commissioned = await commissionAlreadyCharged(admin, {
+        bookingId: booking.id,
+        technicianId: booking.technician_id,
+      });
+      const notice = technicianCancelNotice({
+        code: booking.code,
+        serviceName,
+        commissioned,
+      });
+      payload = {
+        title: notice.title,
+        event,
+        body: notice.body,
         url: "/jobs",
         tag,
       };

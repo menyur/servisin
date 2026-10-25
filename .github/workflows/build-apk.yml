@@ -192,6 +192,14 @@ jobs:
         with:
           node-version: "24"
 
+      # Gate keras: bila google-services.json tidak memuat client OAuth Android
+      # dengan SHA-1 rilis untuk paket ini, login native gagal di perangkat
+      # (ApiException 10) dan app terpaksa lewat OAuth browser. Lebih murah
+      # ditolak sekarang daripada ditemukan setelah APK terbit.
+      - name: Periksa SHA-1 rilis di google-services.json
+        if: ${{ !inputs.skip_gate }}
+        run: npm run verify:firebase-client
+
       - name: Periksa jalur Google Sign-In APK (pra-rilis)
         if: ${{ !inputs.skip_gate }}
         env:

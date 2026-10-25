@@ -321,6 +321,9 @@ const ARG = {
   "booking_slot_start(date, text)": { p_date: HARI_INI, p_time: "00:00" },
   "booking_technician_info(uuid)": { p_booking: TIDAK_ADA },
   "booking_warranty_info(uuid)": { p_booking: TIDAK_ADA },
+  // Status pengembalian dana (migrate-booking-refunds.sql): uuid tidak ada →
+  // fungsi menjawab ok=false tanpa membaca baris siapa pun.
+  "booking_refund_info(uuid)": { p_booking: TIDAK_ADA },
   // Hitung durasi garansi (migrate-warranty-settings.sql). Argumennya uuid
   // yang tidak ada → hasilnya 0, tidak menulis apa pun.
   "warranty_days_efektif(uuid)": { p_service: TIDAK_ADA },
@@ -328,7 +331,15 @@ const ARG = {
   "cancel_account_deletion()": {},
   "cancel_booking(uuid, text)": { p_booking: TIDAK_ADA, p_reason: "cek izin" },
   "claim_job(uuid)": { p_booking: TIDAK_ADA },
-  "create_booking_security_definer(uuid, date, text, text, uuid, text, text, text, uuid, double precision, double precision)": {
+  // Koreksi saldo admin (migrate-admin-balance-adjustment.sql). Argumen inert:
+  // uuid tidak ada → fungsi menjawab ok=false TANPA menulis baris apa pun.
+  // Yang diuji hanya IZIN: anon harus ditolak, pengguna masuk & server boleh.
+  "admin_adjust_technician_balance(uuid, numeric, text)": {
+    p_technician: TIDAK_ADA,
+    p_delta: -1000,
+    p_note: "cek izin audit",
+  },
+  "create_booking_security_definer(uuid, date, text, text, uuid, text, text, text, uuid, double precision, double precision, integer, jsonb, numeric)": {
     p_service_id: TIDAK_ADA,
     p_date: HARI_INI,
     p_time: "00:00",
