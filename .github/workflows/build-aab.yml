@@ -1,0 +1,233 @@
+# Build AAB Android Fixify untuk Google Play Console.
+#
+# KENAPA WORKFLOW TERPISAH: build-apk.yml sudah membangun AAB di dalam job APK,
+# tetapi hasilnya hanya artifact Actions yang baru bisa diunduh setelah login
+# GitHub, dan setiap kali dijalankan ia ikut membangun APK, laporan ukuran, dan
+# gate probe live (20+ menit). Job ini KHUSUS AAB: tanpa APK, tanpa menyentuh
+# public/apk, dan hasilnya diterbitkan ke Release `aab-latest` sehingga berkas
+# untuk Play Console bisa diunduh lewat tautan biasa (tanpa login).
+#
+# VERSI TIDAK DIHITUNG ULANG. AAB harus memakai versi yang SAMA dengan APK yang
+# beredar, jadi nomor build dibaca dari public/apk/manifest.json — sumber yang
+# sama dengan halaman /unduh. Dengan begitu job ini tidak "memakan" nomor versi
+# (APK 43 vs AAB 44) dan Play selalu menerima versionCode yang lebih tinggi dari
+# unggahan sebelumnya selama manifest naik.
+#
+# Unduh hasilnya:
+#   https://github.com/menyur/servisin/releases/tag/aab-latest
+# Unggah ke Play Console → Test and release → track (internal/closed/produksi)
+# → Upload, lalu cocokkan SHA-256 dengan ringkasan job ini.
+
+name: Build AAB Android (Play Console)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "versionName (kosong = ikuti public/apk/manifest.json)"
+        type: string
+        default: ""
+      version_code:
+        description: "versionCode (kosong = ikuti public/apk/manifest.json)"
+        type: string
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      # Hanya perubahan workflow ini yang memicunya. Perubahan aplikasi sudah
+      # memicu build-apk.yml (yang juga membangun AAB), jadi menambah pemicu di
+      # flutter_app/** akan membuat dua build AAB untuk commit yang sama.
+      - ".github/workflows/build-aab.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-aab:
+    runs-on: ubuntu-latest
+    # Sama dengan job APK (tanpa laporan --analyze-size, jadi lebih singkat).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Nomor versi milik release yang sedang beredar, bukan run ini. Nilai
+      # manual (workflow_dispatch) hanya untuk keadaan darurat, mis. membangun
+      # ulang AAB yang gagal diunggah — Play menolak versionCode yang sudah ada,
+      # jadi menaikkannya harus keputusan sadar, bukan efek samping build.
+      - name: Tentukan versi (dari manifest APK)
+        id: versi
+        env:
+          INPUT_VERSION_NAME: ${{ inputs.version_name }}
+          INPUT_VERSION_CODE: ${{ inputs.version_code }}
+        run: |
+          set -euo pipefail
+          VN="${INPUT_VERSION_NAME:-}"
+          VC="${INPUT_VERSION_CODE:-}"
+          if [ -z "$VN" ]; then VN=$(node -p "require('./public/apk/manifest.json').version"); fi
+          if [ -z "$VC" ]; then VC=$(node -p "require('./public/apk/manifest.json').build"); fi
+          if ! printf '%s' "$VC" | grep -Eq '^[0-9]+$'; then
+            echo "::error::versionCode tidak sah: '$VC' (harus angka)"
+            exit 1
+          fi
+          if [ -z "$VN" ]; then
+            echo "::error::versionName kosong — periksa public/apk/manifest.json"
+            exit 1
+          fi
+          echo "version_name=$VN" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VC" >> "$GITHUB_OUTPUT"
+          {
+            echo "### AAB Fixify $VN (versionCode $VC)"
+            echo ""
+            echo "Versi dibaca dari \`public/apk/manifest.json\` — sama dengan APK yang beredar."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          # Sumber tunggal versi: .fvmrc (sama dengan build-apk.yml & flutter-ci.yml).
+          flutter-version-file: .fvmrc
+
+      - name: Verifikasi versi Flutter = .fvmrc
+        run: node scripts/check-flutter-version.mjs
+
+      # Sama seperti build-apk.yml: berkas ini di-gitignore dan hanya dibuat di
+      # CI. Isinya kredensial PUBLIK client Supabase (publishable key).
+      - name: Buat lib/env_override.dart
+        working-directory: flutter_app
+        run: |
+          cat > lib/env_override.dart <<'EOT'
+          // Dihasilkan oleh CI (.github/workflows/build-aab.yml).
+          // Kredensial publik client Supabase — aman dibundel di aplikasi.
+          class EnvOverride {
+            static const String? supabaseUrl = "https://sgxlnhzezknmdhefsvvu.supabase.co";
+            static const String? supabaseAnonKey = "sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef";
+          }
+          EOT
+
+      # Play MENOLAK AAB bertanda tangan kunci debug, jadi di sini keystore
+      # WAJIB ada: berbeda dengan build-apk.yml yang boleh lanjut demi jalur APK,
+      # AAB tanpa tanda tangan rilis tidak ada gunanya. Gagal cepat + pesan jelas
+      # lebih murah daripada unggahan yang ditolak Play.
+      - name: Siapkan release signing (wajib)
+        working-directory: flutter_app/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 belum di-set — AAB bertanda tangan debug PASTI ditolak Google Play. Tambahkan secret itu (Settings → Secrets and variables → Actions) lalu jalankan ulang."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > fixify-release.keystore
+          cat > key.properties <<EOF
+          storeFile=../fixify-release.keystore
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=fixify-release
+          keyPassword=$ANDROID_KEYSTORE_PASSWORD
+          EOF
+
+      - name: Flutter pub get
+        working-directory: flutter_app
+        run: flutter pub get
+
+      # --obfuscate + --split-debug-info sama dengan APK; symbol map disimpan agar
+      # stack trace dari Play Console (deobfuscation) tetap bisa dibaca.
+      - name: Build AAB release (ter-obfuscate)
+        working-directory: flutter_app
+        run: |
+          set -o pipefail
+          flutter build appbundle --release \
+            --build-name="${{ steps.versi.outputs.version_name }}" \
+            --build-number="${{ steps.versi.outputs.version_code }}" \
+            --obfuscate --split-debug-info=build/symbols 2>&1 | tee aab-build.log
+
+      - name: Simpan symbol map obfuscation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aab-symbols
+          path: flutter_app/build/symbols
+          if-no-files-found: warn
+          retention-days: 90
+
+      # Gate yang sama dengan jalur APK: metadata Android, paket di dalam AAB,
+      # tanda tangan JAR (harus keystore rilis, bukan debug), aset listing, dan
+      # halaman legal. Tanpa ini AAB bisa terbit hanya untuk ditolak Play.
+      - name: Gate kesiapan Google Play
+        run: |
+          set -o pipefail
+          npm run verify:play 2>&1 | tee play-readiness.log
+
+      - name: Simpan log gate Play
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-readiness-log
+          path: play-readiness.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Nama berkas memuat versi supaya tidak ada dua unggahan yang tertukar di
+      # folder unduhan pengguna, dan checksum dicetak di ringkasan job — itu yang
+      # dicocokkan sebelum berkas diunggah ke Play.
+      - name: Siapkan berkas unggahan + checksum
+        id: berkas
+        env:
+          VERSION_NAME: ${{ steps.versi.outputs.version_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp flutter_app/build/app/outputs/bundle/release/app-release.aab "dist/fixify-$VERSION_NAME.aab"
+          SHA=$(sha256sum "dist/fixify-$VERSION_NAME.aab" | cut -d' ' -f1)
+          BYTES=$(stat -c%s "dist/fixify-$VERSION_NAME.aab")
+          MB=$(awk "BEGIN {printf \"%.1f\", $BYTES/1048576}")
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "bytes=$BYTES" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "| Berkas | Ukuran | SHA-256 |"
+            echo "|---|---|---|"
+            echo "| \`fixify-$VERSION_NAME.aab\` | $BYTES byte ($MB MiB) | \`$SHA\` |"
+            echo ""
+            echo "Unduh: <https://github.com/menyur/servisin/releases/tag/aab-latest>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Simpan AAB sebagai artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-aab-${{ steps.versi.outputs.version_code }}
+          path: dist/*.aab
+          if-no-files-found: error
+          retention-days: 30
+
+      # Rilis `aab-latest` sengaja diberi nama aset yang memuat versi: menimpa
+      # aset versi yang sama aman (--clobber), sedangkan versi lama tetap ada
+      # sebagai arsip bila unggahan sebelumnya gagal di Play.
+      - name: Terbitkan AAB ke GitHub Release (tag aab-latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION_NAME: ${{ steps.versi.outputs.version_name }}
+          VERSION_CODE: ${{ steps.versi.outputs.version_code }}
+        run: |
+          set -o pipefail
+          TAG="aab-latest"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Rilis $TAG sudah ada — aset versi ini diganti bila namanya sama."
+          else
+            gh release create "$TAG" \
+              --title "AAB Android Fixify (untuk Google Play)" \
+              --notes "App Bundle bertanda tangan rilis untuk diunggah ke Google Play Console. Diperbarui otomatis oleh .github/workflows/build-aab.yml dari versi yang sama dengan APK di tag apk-latest. Selalu cocokkan SHA-256 dengan ringkasan job build-nya."
+          fi
+          gh release upload "$TAG" "dist/fixify-$VERSION_NAME.aab" --clobber
+          gh release view "$TAG" --json assets \
+            --jq '.assets[] | select(.name | startswith("fixify-")) | "\(.name) — \(.size) byte"'
+          echo "AAB $VERSION_NAME (versionCode $VERSION_CODE) terbit di release $TAG."
