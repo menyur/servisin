@@ -478,6 +478,12 @@ function parseArgs(argv) {
     else if (a === "--allow-debug-signing") flags.allowDebugSigning = true;
     else if (a === "--only-apk") flags.onlyApk = true;
     else if (a === "--no-apk") flags.noApk = true;
+    // `--no-signing-source`: lewati penilaian keystore penanda tangan. Dipakai
+    // Web Lint, yang berjalan TANPA keystore rilis (berkasnya gitignored) dan
+    // memang bukan tempat memeriksa tanda tangan — itu tugas build-apk.yml
+    // atas APK yang benar-benar akan terbit. Tanpa flag ini, langkah tersebut
+    // selalu merah dengan pesan "Set secret ANDROID_KEYSTORE_BASE64".
+    else if (a === "--no-signing-source") flags.noSigningSource = true;
     else if (a.startsWith("--apk=")) flags.apk = a.slice("--apk=".length);
     else if (a.startsWith("--expect-sha1=")) flags.expectSha1 = a.slice("--expect-sha1=".length);
     else if (a.startsWith("--google-services=")) flags.googleServices = a.slice("--google-services=".length);
@@ -662,7 +668,7 @@ function main() {
   if (flags.selftest) process.exit(runSelftest());
   if (flags.help) {
     console.log(
-      "Pakai: node scripts/verify-apk-signin.mjs [--selftest] [--no-network] [--no-apk] [--only-apk] [--apk=path] [--allow-debug-signing] [--expect-sha1=…]"
+      "Pakai: node scripts/verify-apk-signin.mjs [--selftest] [--no-network] [--no-apk] [--no-signing-source] [--only-apk] [--apk=path] [--allow-debug-signing] [--expect-sha1=…]"
     );
     process.exit(0);
   }
@@ -828,7 +834,11 @@ function main() {
     }
   } else {
     sumber = "debug";
-    if (existsSync(DEBUG_KEYSTORE)) {
+    // Dengan `--no-signing-source` keystore debug TIDAK dipakai sebagai bahan
+    // penilaian: di mesin pengembang ia ada dan SHA-1-nya berbeda dari kunci
+    // rilis, sehingga perbandingan itu menghasilkan "GAGAL" yang menyesatkan
+    // untuk pemeriksaan yang memang tidak dimaksudkan di sini.
+    if (!flags.noSigningSource && existsSync(DEBUG_KEYSTORE)) {
       keystoreFile = DEBUG_KEYSTORE;
       keystorePass = DEBUG_KEY_PASS;
       keystoreAlias = DEBUG_ALIAS;
@@ -864,17 +874,19 @@ function main() {
     }
   }
 
-  if (sumber === "debug") {
-    add(
-      "signing-source",
-      "sumber penandatangan APK",
-      flags.allowDebugSigning ? "unknown" : "fail",
-      existsSync(DEBUG_KEYSTORE)
-        ? "key.properties rilis TIDAK ada → Gradle memakai keystore debug. Di CI keystore debug dibuat ACAK per runner, jadi SHA-1-nya tidak mungkin terdaftar di Google Console → login native gagal. Set secret ANDROID_KEYSTORE_BASE64."
-        : "key.properties rilis TIDAK ada dan ~/.android/debug.keystore belum ada → Gradle akan MEMBUAT keystore debug acak; SHA-1-nya tidak terdaftar → login native gagal."
-    );
-  } else if (keystoreFile) {
-    add("signing-source", "sumber penandatangan APK", "pass", `keystore rilis (${path.relative(ROOT, keystoreFile)})`);
+  if (!flags.noSigningSource) {
+    if (sumber === "debug") {
+      add(
+        "signing-source",
+        "sumber penandatangan APK",
+        flags.allowDebugSigning ? "unknown" : "fail",
+        existsSync(DEBUG_KEYSTORE)
+          ? "key.properties rilis TIDAK ada → Gradle memakai keystore debug. Di CI keystore debug dibuat ACAK per runner, jadi SHA-1-nya tidak mungkin terdaftar di Google Console → login native gagal. Set secret ANDROID_KEYSTORE_BASE64."
+          : "key.properties rilis TIDAK ada dan ~/.android/debug.keystore belum ada → Gradle akan MEMBUAT keystore debug acak; SHA-1-nya tidak terdaftar → login native gagal."
+      );
+    } else if (keystoreFile) {
+      add("signing-source", "sumber penandatangan APK", "pass", `keystore rilis (${path.relative(ROOT, keystoreFile)})`);
+    }
   }
 
   // --- 5: bandingkan dengan nilai harapan ---------------------------------
@@ -885,7 +897,12 @@ function main() {
     add("expected-format", "format SHA-1 harapan", "fail", `--expect-sha1 bukan SHA-1 40 heksadesimal: ${flags.expectSha1}`);
   }
 
-  if (sidikJari && !harapan) {
+  if (!sidikJari) {
+    // Tidak ada keystore yang bisa diukur (mis. `--no-signing-source`). Bukan
+    // ketidakcocokan dan bukan kelulusan — karena itu tidak ada temuan sama
+    // sekali; pemeriksaan tanda tangan sesungguhnya dilakukan build-apk.yml
+    // atas APK yang benar-benar akan terbit.
+  } else if (!harapan) {
     add(
       "sha1-unknown",
       "SHA-1 vs daftar Google Console",
@@ -904,9 +921,12 @@ function main() {
     add(
       "sha1-mismatch",
       "SHA-1 vs daftar Google Console",
-      sumber === "debug" && flags.allowDebugSigning ? "unknown" : "fail",
+      // Tanpa sidik jari tidak ada yang bisa disebut "beda": melaporkannya
+      // sebagai GAGAL membuat pemeriksaan tanpa keystore (Web Lint, mode
+      // --no-signing-source) merah karena kekosongan, bukan karena ketidakcocokan.
+      !sidikJari || (sumber === "debug" && flags.allowDebugSigning) ? "unknown" : "fail",
       [
-        `keystore yang dipakai : ${sidikJari}`,
+        `keystore yang dipakai : ${sidikJari ?? "(tidak ada)"}`,
         `nilai harapan terdaftar: ${harapan} (${sumberHarapan})`,
         "APK ini akan ditandatangani kunci yang berbeda dari yang terdaftar → login native",
         "gagal dengan 12500. Perbaiki: pakai keystore rilis yang benar (secret CI), atau",

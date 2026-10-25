@@ -202,9 +202,10 @@ jobs:
         # `--no-apk`: berkas APK memang TIDAK ada di repo (aset GitHub Release,
         # dibersihkan CI setiap rilis), sehingga pemeriksaan artefak di sini
         # hanya menghasilkan "tidak konklusif" (exit 3) dan memerahkan lint.
-        # Pemeriksaan artefak yang sesungguhnya tetap dijalankan di
-        # build-apk.yml (`--only-apk`) sebelum APK diterbitkan.
-        run: node scripts/verify-apk-signin.mjs --no-apk
+        # `--no-signing-source`: keystore rilis tidak ada di repo (gitignored),
+        # jadi di sini tidak ada tanda tangan yang bisa dinilai — pemeriksaan
+        # itu dilakukan build-apk.yml atas APK yang benar-benar akan terbit.
+        run: node scripts/verify-apk-signin.mjs --no-apk --no-signing-source
 
       # Penjaga cache build lokal diuji di sini karena kegagalannya SUNYI dan
       # mahal: cache pernah menumpuk 8,8 GB tanpa ada yang menyadarinya, dan
