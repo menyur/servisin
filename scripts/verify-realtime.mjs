@@ -35,6 +35,8 @@ import {
   probeTable,
   isLive,
   sleep,
+  daftarSlotUji,
+  tanggalWib,
 } from "./lib/probe-env.mjs";
 
 const TIMEOUT_MS = 12000;
@@ -52,13 +54,24 @@ async function pickFixtures(admin) {
   return { profileId: profile.id, serviceId: service.id };
 }
 
+// Slot bebas bergilir: satu baris uji per slot, karena trigger kuota menolak
+// pesanan ketiga di slot yang sama dan "00:00-00:00" bukan slot yang ada.
+let slotRealtime = [];
+let slotRealtimeKe = 0;
+function slotRealtimeBerikut() {
+  const slot = slotRealtime[slotRealtimeKe % Math.max(1, slotRealtime.length)];
+  slotRealtimeKe += 1;
+  return slot ?? { date: tanggalWib(2), time: "08:00-10:00" };
+}
+
 function bookingRow({ profileId, serviceId }, code, extra = {}) {
+  const slot = slotRealtimeBerikut();
   return {
     code,
     user_id: profileId,
     service_id: serviceId,
-    booking_date: new Date().toISOString().slice(0, 10),
-    booking_time: "00:00-00:00",
+    booking_date: slot.date,
+    booking_time: slot.time,
     address: "VERIFIKASI REALTIME — baris uji otomatis, aman dihapus",
     notes: "probe scripts/verify-realtime.mjs",
     subtotal_price: 1,
@@ -73,6 +86,7 @@ function bookingRow({ profileId, serviceId }, code, extra = {}) {
 // ---------------------------------------------------------------------------
 async function publicationMatrix(env) {
   const admin = makeAdminClient(env);
+  slotRealtime = await daftarSlotUji(admin);
   const fixtures = await pickFixtures(admin);
   const stamp = Date.now();
   const results = [];
@@ -194,6 +208,7 @@ async function publicationMatrix(env) {
 // ---------------------------------------------------------------------------
 async function rlsMatrix(env) {
   const admin = makeAdminClient(env);
+  slotRealtime = await daftarSlotUji(admin);
   const fixtures = await pickFixtures(admin);
   const stamp = Date.now();
   const tempUsers = [];

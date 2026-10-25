@@ -38,11 +38,12 @@ import {
   createTempUser,
   deleteTempUsers,
   sleep,
+  daftarSlotUji,
 } from "./lib/probe-env.mjs";
 import {
-  APP_FEE,
   DEFAULT_COMMISSION_RATE,
   computeSplit,
+  commissionBase,
   REVIEW_INCENTIVE_DAYS,
   REVIEW_INCENTIVE_AMOUNT,
   VOUCHER_VALIDITY_DAYS,
@@ -94,11 +95,14 @@ async function pickService(admin) {
   return { service: svc, unit: Number(option.price), option };
 }
 
-function bookingArgs({ service, option }, extra = {}) {
+function bookingArgs({ service, option, slot }, extra = {}) {
   return {
     p_service_id: service.id,
-    p_date: new Date().toISOString().slice(0, 10),
-    p_time: "00:00-00:00",
+    // Slot dari SERVER (besok, sisa kuota > 0). Tanggal hari ini + jam karangan
+    // "00:00-00:00" ditolak dua aturan: slot yang jam mulainya sudah lewat dan
+    // trigger kuota yang hanya mengenal empat slot sungguhan.
+    p_date: slot.date,
+    p_time: slot.time,
     p_address: "UJI E2E F7 — alamat otomatis, aman dihapus",
     p_option_id: option?.id ?? null,
     p_notes: "probe scripts/verify-e2e-lifecycle.mjs",
@@ -115,6 +119,16 @@ async function main() {
   const tempUsers = [];
   const bookingIds = [];
   const { service, unit, option } = await pickService(admin);
+  // Biaya aplikasi yang SEDANG BERLAKU dibaca dari server (`app_fee_efektif()`),
+  // bukan dari konstanta APP_FEE di repo: admin boleh menyetel tarif lain, dan
+  // probe yang mengecek angka tetap akan merah padahal tagihannya benar.
+  const { data: feeData, error: feeErr } = await admin.rpc("app_fee_efektif");
+  if (feeErr) throw new Error(`gagal membaca app_fee_efektif(): ${feeErr.message}`);
+  const FEE = Number(feeData ?? 5000);
+  console.log(`   biaya aplikasi berlaku: Rp ${FEE.toLocaleString("id-ID")}`);
+  // Dua slot BERBEDA: satu pesanan bisa mengisi kuota slot (bawaan 2), dan
+  // pesanan kedua tidak boleh gagal hanya karena berbagi slot.
+  const slots = await daftarSlotUji(admin);
 
   const { data: adminProfile } = await admin.from("profiles").select("id").eq("role", "admin").limit(1).maybeSingle();
 
@@ -167,7 +181,7 @@ async function main() {
     if (custSignErr) throw new Error(`sign-in pelanggan uji gagal: ${custSignErr.message}`);
     await sleep(400);
 
-    const create1 = await custClient.rpc("create_booking_security_definer", bookingArgs({ service, option }));
+    const create1 = await custClient.rpc("create_booking_security_definer", bookingArgs({ service, option, slot: slots[0] }));
     const booking1 = create1.data?.booking;
     check("RPC create_booking berhasil", !create1.error && Boolean(booking1?.id), create1.error?.message ?? create1.data?.error ?? `kode ${booking1?.code ?? "?"}`);
     if (!booking1?.id) throw new Error("tanpa pesanan uji, sisa langkah tidak bisa dijalankan");
@@ -175,8 +189,8 @@ async function main() {
 
     check("status awal 'pending'", booking1.status === "pending", `status=${booking1.status}`);
     check("harga dari katalog (subtotal = harga unit)", Number(booking1.subtotal_price) === unit, `subtotal=${booking1.subtotal_price} vs unit=${unit}`);
-    check("biaya aplikasi = APP_FEE (src/lib/pricing.js)", Number(booking1.app_fee) === APP_FEE, `app_fee=${booking1.app_fee} vs ${APP_FEE}`);
-    check("total = unit + APP_FEE", Number(booking1.total_price) === unit + APP_FEE, `total=${booking1.total_price} vs ${unit + APP_FEE}`);
+    check("biaya aplikasi = tarif yang berlaku (app_fee_efektif)", Number(booking1.app_fee) === FEE, `app_fee=${booking1.app_fee} vs ${FEE}`);
+    check("total = unit + biaya aplikasi", Number(booking1.total_price) === unit + FEE, `total=${booking1.total_price} vs ${unit + FEE}`);
     check("pesanan milik pelanggan uji", booking1.user_id === customer.id);
     check("belum ada teknisi", booking1.technician_id === null);
 
@@ -249,10 +263,13 @@ async function main() {
 
     // ---------------- 7. Komisi ----------------
     step("7. Komisi terpotong (rumus dari src/lib/pricing.js)");
-    const expect = computeSplit(Number(afterDone.total_price) - APP_FEE, DEFAULT_COMMISSION_RATE);
+    // Dasar komisi = total − biaya aplikasi pesanan itu (src/lib/pricing.js:
+    // commissionBase), bukan total mentah: biaya aplikasi adalah uang platform,
+    // bukan nilai pekerjaan teknisi.
+    const expect = computeSplit(commissionBase(Number(afterDone.total_price), FEE), DEFAULT_COMMISSION_RATE);
     // Aturan platform (supabase/migrate-earning-fee.sql + src/lib/balance.js):
     // potongan saldo = KOMISI + biaya aplikasi pelanggan (bookings.app_fee).
-    const expectCut = expect.commission + APP_FEE;
+    const expectCut = expect.commission + FEE;
     const { data: earnings } = await admin
       .from("balance_transactions")
       .select("amount,commission_amount,type,booking_id")
@@ -319,14 +336,14 @@ async function main() {
     check("voucher insentif terbuat (pelanggan boleh insert voucher miliknya)", !voucherInsert.error && Boolean(voucherRow?.id), voucherInsert.error?.message ?? "");
     if (!voucherRow?.id) throw new Error("tanpa voucher, langkah pemakaian tidak bisa dijalankan");
 
-    const create2 = await custClient.rpc("create_booking_security_definer", bookingArgs({ service, option }, { p_voucher_id: voucherRow.id }));
+    const create2 = await custClient.rpc("create_booking_security_definer", bookingArgs({ service, option, slot: slots[1] ?? slots[0] }, { p_voucher_id: voucherRow.id }));
     const booking2 = create2.data?.booking;
     check("pesanan kedua dibuat memakai voucher", !create2.error && Boolean(booking2?.id), create2.error?.message ?? create2.data?.error ?? "");
     if (booking2?.id) {
       bookingIds.push(booking2.id);
-      const expectedDiscount = Math.min(REVIEW_INCENTIVE_AMOUNT, unit + APP_FEE);
+      const expectedDiscount = Math.min(REVIEW_INCENTIVE_AMOUNT, unit + FEE);
       check("diskon voucher terpasang", Number(booking2.discount_amount) === expectedDiscount, `diskon=${booking2.discount_amount} vs ${expectedDiscount}`);
-      check("total berkurang sesuai diskon", Number(booking2.total_price) === unit + APP_FEE - expectedDiscount, `total=${booking2.total_price}`);
+      check("total berkurang sesuai diskon", Number(booking2.total_price) === unit + FEE - expectedDiscount, `total=${booking2.total_price}`);
       const { data: voucherAfter } = await admin.from("vouchers").select("used_at,used_booking_id").eq("id", voucherRow.id).single();
       check("voucher ditandai terpakai", Boolean(voucherAfter?.used_at) && voucherAfter.used_booking_id === booking2.id);
     }

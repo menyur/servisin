@@ -27,6 +27,8 @@ import {
   createTempUser,
   deleteTempUsers,
   sleep,
+  daftarSlotUji,
+  tanggalWib,
 } from "./lib/probe-env.mjs";
 
 const stamp = Date.now();
@@ -42,13 +44,25 @@ function report(id, title, status, detail) {
   if (status === "TERTUTUP") closed.push(id);
 }
 
+// Slot bebas yang diisi di main(). Setiap baris audit memakai slot BERBEDA:
+// trigger kuota (bawaan 2 pesanan per slot) menolak baris ketiga di slot yang
+// sama, dan jam karangan "00:00-00:00" juga bukan slot yang dikenal server.
+let slotAudit = [];
+let slotAuditKe = 0;
+function slotAuditBerikut() {
+  const slot = slotAudit[slotAuditKe % Math.max(1, slotAudit.length)];
+  slotAuditKe += 1;
+  return slot ?? { date: tanggalWib(2), time: "08:00-10:00" };
+}
+
 function probeBooking(fixtures, code, extra = {}) {
+  const slot = slotAuditBerikut();
   return {
     code,
     user_id: fixtures.profileId,
     service_id: fixtures.serviceId,
-    booking_date: new Date().toISOString().slice(0, 10),
-    booking_time: "00:00-00:00",
+    booking_date: slot.date,
+    booking_time: slot.time,
     address: "AUDIT GO-LIVE — baris uji otomatis, aman dihapus",
     notes: "probe scripts/audit-go-live-checks.mjs",
     subtotal_price: 1,
@@ -454,6 +468,7 @@ async function checkSchemaParity(admin) {
 async function main() {
   const env = loadEnv();
   const admin = makeAdminClient(env);
+  slotAudit = await daftarSlotUji(admin);
   const { data: profile, error: pErr } = await admin.from("profiles").select("id").limit(1).maybeSingle();
   const { data: service, error: sErr } = await admin.from("services").select("id").limit(1).maybeSingle();
   if (pErr || sErr) throw new Error(pErr?.message || sErr?.message);

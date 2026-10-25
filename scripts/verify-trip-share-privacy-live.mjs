@@ -29,6 +29,7 @@ import {
   createTempUser,
   deleteTempUsers,
   sleep,
+  slotUji,
 } from "./lib/probe-env.mjs";
 
 let lulus = 0;
@@ -89,6 +90,9 @@ async function main() {
   }
 
   const admin = makeAdminClient(env);
+  // Slot besok yang masih punya kuota: pesanan uji tidak boleh gagal hanya
+  // karena slot "hari ini 08:00-10:00" kebetulan sudah penuh oleh pesanan nyata.
+  const slot = await slotUji(admin);
   const anon = makeAnonClient(env);
   const users = [];
   let bookingId = null;
@@ -178,8 +182,8 @@ async function main() {
         service_id: layanan.id,
         technician_id: tech.id,
         status: "paid",
-        booking_date: new Date().toISOString().slice(0, 10),
-        booking_time: "08:00-10:00",
+        booking_date: slot.date,
+        booking_time: slot.time,
         address: "Titik uji probe (bukan alamat nyata)",
         subtotal_price: 100000,
         app_fee: 5000,

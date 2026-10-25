@@ -203,7 +203,12 @@ export function rencanaKoreksiSaldo({ balance = 0, delta = 0 } = {}) {
  * Dipakai laporan bulanan CSV, ringkasan keuangan, dan penguncian lewat probe.
  */
 export function penagihanPesanan({ totalPrice = 0, appFee = 0, rate = DEFAULT_COMMISSION_RATE } = {}) {
-  const { commission } = computeSplit(commissionBase(totalPrice), rate);
+  // Dasar komisi = total − biaya aplikasi PESANAN ITU.
+  // Sebelumnya `commissionBase(totalPrice)` dipanggil tanpa `appFee`, sehingga
+  // yang dikurangkan selalu bawaan 5.000 — begitu admin menyetel biaya lain
+  // (mis. 10.000), "ditagihkan" di laporan bulanan & panel admin kelebihan
+  // 5.000 per pesanan, dan laporan tidak lagi cocok dengan ledger.
+  const { commission } = computeSplit(commissionBase(totalPrice, appFee), rate);
   const fee = Math.max(0, Number(appFee) || 0);
   return { commission, fee, want: commission + fee };
 }

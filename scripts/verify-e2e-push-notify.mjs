@@ -42,6 +42,7 @@ import {
   createTempUser,
   deleteTempUsers,
   sleep,
+  slotUji,
 } from "./lib/probe-env.mjs";
 // Aturan pencocokan NYATA (dipakai web-push, FCM, klien Flutter, dan probe).
 import { technicianReceivesJob } from "../src/lib/skill-match.js";
@@ -270,10 +271,13 @@ async function main() {
     if (custSignErr) throw new Error(`sign-in pelanggan uji gagal: ${custSignErr.message}`);
     await sleep(400);
 
+    const slot = await slotUji(admin);
     const created = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      // Slot besok dari server: slot hari ini yang sudah lewat dan jam karangan
+      // "00:00-00:00" ditolak aturan jadwal + trigger kuota.
+      p_date: slot.date,
+      p_time: slot.time,
       p_address: address,
       p_option_id: option?.id ?? null,
       p_notes: "probe scripts/verify-e2e-push-notify.mjs",

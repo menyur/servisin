@@ -32,8 +32,8 @@
 // Kode keluar: 0 = lulus · 1 = regresi · 2 = SQL migrasi belum dijalankan ·
 //              3 = kredensial/env tidak tersedia.
 // ============================================================================
-import { loadEnv, makeAdminClient, makeUserClient, createTempUser, deleteTempUsers, sleep } from "./lib/probe-env.mjs";
-import { APP_FEE, DEFAULT_COMMISSION_RATE, penagihanPesanan, alokasiSetoran, piutangTerbukaBaris } from "../src/lib/pricing.js";
+import { loadEnv, makeAdminClient, makeUserClient, createTempUser, deleteTempUsers, sleep, daftarSlotUji } from "./lib/probe-env.mjs";
+import { DEFAULT_COMMISSION_RATE, penagihanPesanan, alokasiSetoran, piutangTerbukaBaris } from "../src/lib/pricing.js";
 
 let failed = 0;
 function check(label, ok, detail = "") {
@@ -90,6 +90,9 @@ async function main() {
   }
 
   const service = await pickService(admin);
+  // Slot dari server (besok, sisa kuota > 0) — hari ini + jam "00:00-00:00"
+  // ditolak aturan jadwal & trigger kuota, sehingga probe malam selalu merah.
+  const slots = await daftarSlotUji(admin);
   const tempUsers = [];
   const bookingIds = [];
   let technician = null;
@@ -130,8 +133,8 @@ async function main() {
 
     const created = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      p_date: slots[0].date,
+      p_time: slots[0].time,
       p_address: "UJI PIUTANG — alamat otomatis, aman dihapus",
       p_option_id: null,
       p_notes: "probe scripts/verify-debt-negative-balance.mjs",
@@ -225,8 +228,8 @@ async function main() {
     step("6. Teknisi bersaldo minus tidak bisa mengambil pekerjaan lagi");
     const booking2 = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      p_date: (slots[1] ?? slots[0]).date,
+      p_time: (slots[1] ?? slots[0]).time,
       p_address: "UJI PIUTANG 2 — alamat otomatis, aman dihapus",
       p_option_id: null,
       p_notes: "probe scripts/verify-debt-negative-balance.mjs (kedua)",

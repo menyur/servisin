@@ -33,6 +33,7 @@ import {
   createTempUser,
   deleteTempUsers,
   sleep,
+  daftarSlotUji,
 } from "./lib/probe-env.mjs";
 // Aturan pencocokan NYATA yang dipakai web-push, FCM, dan klien Flutter.
 import { technicianReceivesJob } from "../src/lib/skill-match.js";
@@ -144,10 +145,13 @@ async function main() {
     if (custSignErr) throw new Error(`sign-in pelanggan uji gagal: ${custSignErr.message}`);
     await sleep(400);
 
+    const slots = await daftarSlotUji(admin);
     const created = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      // Slot besok dari server (sisa kuota > 0), bukan "hari ini 00:00-00:00"
+      // yang ditolak aturan jadwal & trigger kuota.
+      p_date: slots[0].date,
+      p_time: slots[0].time,
       p_address: address,
       p_option_id: option?.id ?? null,
       p_notes: "probe scripts/verify-e2e-technician-claim.mjs",
@@ -250,10 +254,20 @@ async function main() {
     // KEDUA karena pesanan pertama sudah diklaim di bagian 8, dan yang penting:
     // terkunci harus bisa DIBUKA LAGI dengan mengisi saldo (bukan mati permanen).
     step("10. Saldo 0/minus tidak boleh ambil pekerjaan; saldo > 0 boleh lagi");
+    // Lepas tugas pertama lebih dulu. Sejak supabase/migrate-slot-capacity.sql
+    // seorang teknisi hanya boleh memegang SATU pekerjaan aktif; tanpa ini
+    // penolakan berbunyi 'masih_bekerja' dan gerbang SALDO yang ingin diuji
+    // tidak pernah tercapai (aturan satu-tugas sudah diuji di langkah 9).
+    const { error: lepasErr } = await admin
+      .from("bookings")
+      .update({ technician_id: null })
+      .eq("id", booking.id);
+    check("tugas pertama dilepas agar gerbang saldo bisa diuji", !lepasErr, lepasErr?.message ?? "");
+
     const created2 = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      p_date: (slots[1] ?? slots[0]).date,
+      p_time: (slots[1] ?? slots[0]).time,
       p_address: address,
       p_option_id: option?.id ?? null,
       p_notes: "probe saldo scripts/verify-e2e-technician-claim.mjs",

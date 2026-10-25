@@ -76,6 +76,61 @@ export function sleep(ms) {
 }
 
 // ---------------------------------------------------------------------------
+// Slot jadwal uji
+// ---------------------------------------------------------------------------
+
+/**
+ * Tanggal `YYYY-MM-DD` menurut jam dinding WIB, `offsetHari` hari dari hari ini.
+ *
+ * Di WIB, `new Date().toISOString()` bisa menunjuk tanggal yang BERBEDA dari
+ * tanggal yang dilihat pelanggan (server UTC). Semua aturan jadwal di RPC
+ * memakai `now() at time zone 'Asia/Jakarta'`, jadi probe harus memakai tanggal
+ * yang sama — bukan tanggal UTC.
+ */
+export function tanggalWib(offsetHari = 0) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(Date.now() + offsetHari * 24 * 60 * 60 * 1000));
+}
+
+/**
+ * Slot jadwal (tanggal + jam) yang LOLOS aturan server, mulai BESOK.
+ *
+ * Kenapa tidak "hari ini": RPC `create_booking_security_definer` menolak slot
+ * yang jam mulainya sudah lewat (`Slot jam kedatangan sudah lewat`), sehingga
+ * probe yang dijalankan malam selalu gagal. Kenapa tidak jam karangan
+ * "00:00-00:00": trigger kuota (`migrate-slot-capacity.sql`) hanya mengenal
+ * empat slot sungguhan dan menolak yang ketiga di slot yang sama.
+ *
+ * Sumber kebenaran kapasitas = `booking_slot_usage(date)` di server (menghitung
+ * `pending`, `paid`, `in_progress`). Bila RPC belum ada (database lama), jatuh
+ * ke slot pagi dua hari lagi supaya probe tidak diam-diam memakai jam yang
+ * mustahil ada.
+ */
+export async function daftarSlotUji(admin, { maksHari = 14 } = {}) {
+  const hasil = [];
+  for (let i = 1; i <= maksHari; i++) {
+    const date = tanggalWib(i);
+    const { data, error } = await admin.rpc("booking_slot_usage", { p_date: date });
+    if (error) break; // RPC belum ada → pakai fallback di bawah
+    for (const r of data ?? []) {
+      if (Number(r.remaining) > 0) hasil.push({ date, time: r.slot });
+    }
+  }
+  if (!hasil.length) hasil.push({ date: tanggalWib(2), time: "08:00-10:00" });
+  return hasil;
+}
+
+/** Satu slot uji bebas (yang pertama tersedia). */
+export async function slotUji(admin, opsi) {
+  const [slot] = await daftarSlotUji(admin, opsi);
+  return slot;
+}
+
+// ---------------------------------------------------------------------------
 // Akun uji sementara
 // ---------------------------------------------------------------------------
 
