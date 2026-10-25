@@ -70,14 +70,15 @@ hanya menghapus kebingungan "paket mana yang benar" saat membaca manifes atau lo
 | 1 | App Android `id.fixify.app` didaftarkan di Firebase (`fixify-f337a`) + `google-services.json` baru dipasang | ✅ 18 Okt 2026 — entri `id.fixify.app` ada di berkas |
 | 2 | **SHA-1 rilis didaftarkan untuk app itu** (`AB:AE:3B:79:61:72:0F:D0:49:EF:62:51:63:96:15:AA:CE:05:32:68`) | ⛔ **belum** — `npm run verify:apk-signin` merah: tidak ada OAuth client bertipe Android untuk paket ini. Akibatnya jalur **native** (SDK Google) gagal (`ApiException 10`); login Google **tetap berjalan** karena app otomatis jatuh ke OAuth browser (terbukti di emulator, 18 Okt 2026). Bedanya: pengguna melewati satu lompatan browser dan idToken native tidak dipakai |
 | 3 | OAuth client **Android** untuk paket ini di Google Cloud Console (+ SHA-1 debug bila menguji di emulator) | belum — biasanya terbuat otomatis saat langkah 2 dikerjakan; setelah itu unduh ulang `google-services.json` agar buktinya ikut masuk berkas |
-| 4 | **Build AAB baru** setelah paket pindah | ✅ build 42 (lihat §1) |
+| 4 | **Build AAB baru** setelah paket pindah | ✅ build 43 (lihat §1) |
 | 5 | Setelah rilis pertama **diterima** Play: tambahkan SHA-1 dari **Play Console → Test and release → Setup → App signing** ke client Android yang sama | belum (menunggu rilis diterima) |
 
 Penguji yang sudah memasang APK lama (`com.fixify.app`) akan mendapatkannya sebagai
 **aplikasi terpisah** — minta mereka pasang dari Play (tidak perlu uninstall dulu).
-Hal yang sama berlaku untuk halaman `/unduh`: APK yang beredar sekarang masih
-`com.fixify.app`, jadi sampai workflow APK membangun ulang dengan paket baru, pengguna
-yang memasang dari `/unduh` tidak akan menerima pembaruan dari Play (beda aplikasi).
+APK di `/unduh` sudah memakai paket baru sejak build 42 (sekarang build 43), jadi
+pemasangan dari `/unduh` memakai identitas Play yang sama — bukan aplikasi terpisah.
+Pembaruan tetap datang dari jalur pemasangannya: Play hanya memperbarui yang dipasang
+dari Play, dan APK `/unduh` diperbarui oleh workflow APK.
 
 Referensi: [Configure the app module](https://developer.android.com/build/configure-app-module) ·
 [Provider element (authority unik)](https://developer.android.com/guide/topics/manifest/provider-element) ·
@@ -89,26 +90,48 @@ Referensi: [Configure the app module](https://developer.android.com/build/config
 
 | Berkas | Lokasi | Ukuran | SHA-256 |
 |---|---|---|---|
-| **AAB siap unggah — build 42** | `~/Downloads/fixify-1.4.0.42.aab` (dan salinan kerja `app-release.aab` di folder build) | 56.362.503 byte (53,8 MiB) | `d6edb2676e1496c7275cded3077fb761ff8e46a18d4aa6edd23382a04175ce28` |
-| AAB build 41 (**arsip — jangan diunggah**) | `~/Downloads/id.fixify.app.aab` | 56.361.303 byte | `31242dde…faa1c6` |
-| APK arm64 | GitHub Release tag `apk-latest` | 21,5 MB | `1eab58ce…f6245` (lihat `public/apk/manifest.json`) |
-| APK armv7a | GitHub Release tag `apk-latest` | 18,9 MB | `b1ae1824…8a86f3` |
+| **AAB siap unggah — build 43** | Release `aab-latest` → `fixify-1.4.0.43.aab` (juga artifact CI `play-aab-43`) | 57.201.842 byte (54,6 MiB) | `dc27ea68b4dc82e232601d806969cf9b5df708c967bcc11b6952ade50528860d` |
+| AAB build 42 (**arsip — jangan diunggah**) | artifact CI lama / `~/Downloads/fixify-1.4.0.42.aab` | 56.362.503 byte | `d6edb267…f75ce28` |
+| APK arm64 | GitHub Release tag `apk-latest` | 20,9 MB | `ef843ce0…be98d1` (lihat `public/apk/manifest.json`) |
+| APK armv7a | GitHub Release tag `apk-latest` | 18,4 MB | `a6663db8…242116` |
 
-Versi AAB yang siap unggah: **versionName `1.4.0.42` · versionCode 42**, paket
+Versi AAB yang siap unggah: **versionName `1.4.0.43` · versionCode 43**, paket
 `id.fixify.app`, ditandatangani upload key (`AB:AE:3B:…:32:68`, subjek `CN=Fixify`).
-Bukti per-build (18 Okt 2026 19:17): manifes di dalam AAB hanya memuat `id.fixify.app*`
-(tanpa `com.fixify.app`), dan `npm run verify:play` lulus penuh.
+Bukti per-build (26 Okt 2026 00:03 UTC): manifes di dalam AAB memuat `1.4.0.43` dan
+hanya otoritas `id.fixify.app.*` (tanpa `com.fixify.app`), entri `META-INF/FIXIFY-R.RSA`
+ada, sertifikat `Fixify`/`Mobile` (bukan kunci debug), dan `npm run verify:play` lulus
+penuh di dalam workflow yang menerbitkannya.
 
 > AAB build 41 ber-paket `com.fixify.app` dan **tidak akan diterima Play** (§0.1). Ia hanya
 > berguna untuk uji internal lewat *Internal app sharing*. Folder build sengaja menyimpan
 > keduanya; yang diunggah adalah `app-release.aab` (gate mencetak berkas mana yang dipakai).
 
-**Sebelum mengunggah, cocokkan checksum** — memastikan yang diunggah benar build 42:
+**Sebelum mengunggah, cocokkan checksum** — memastikan yang diunggah benar build 43:
 
 ```bash
-sha256sum ~/Downloads/fixify-1.4.0.42.aab
-# harus: d6edb2676e1496c7275cded3077fb761ff8e46a18d4aa6edd23382a04175ce28
+sha256sum ~/Downloads/fixify-1.4.0.43.aab
+# harus: dc27ea68b4dc82e232601d806969cf9b5df708c967bcc11b6952ade50528860d
 ```
+
+### 1.1 Mengunduh AAB build terbaru (tanpa login GitHub)
+
+AAB diterbitkan otomatis oleh [.github/workflows/build-aab.yml](../.github/workflows/build-aab.yml)
+ke Release **`aab-latest`**, memakai **versi yang SAMA** dengan APK di `apk-latest`: nomor
+build dibaca dari [public/apk/manifest.json](../public/apk/manifest.json), bukan dihitung
+ulang, jadi tidak ada APK 43 vs AAB 44 dan nomor versi tidak terpakai sia-sia.
+
+```bash
+curl -L -o fixify-1.4.0.43.aab \
+  https://github.com/menyur/servisin/releases/download/aab-latest/fixify-1.4.0.43.aab
+sha256sum fixify-1.4.0.43.aab   # harus dc27ea68…8860d (sama dengan ringkasan job)
+```
+
+Workflow itu juga menyimpan artifact `play-aab-<versionCode>` (butuh login GitHub) dan
+menjalankan `verify:play` **sebelum** menerbitkan — bila gate merah, tidak ada AAB yang
+terbit. Keystore rilis wajib ada di secrets (`ANDROID_KEYSTORE_BASE64`); tanpa itu job
+gagal cepat dengan pesan jelas, karena AAB bertanda tangan debug pasti ditolak Play.
+Untuk membangun ulang versi lain: Actions → **Build AAB Android (Play Console)** →
+*Run workflow* (isi `version_name`/`version_code` hanya bila memang perlu menimpa).
 
 > AAB lokal bisa terhapus oleh pembersihan cache. Itu tidak berbahaya: `npm run cache:trim`
 > **mengarsipkan** semua AAB lebih dulu ke `~/Downloads/fixify-rilis` (lihat
@@ -255,7 +278,7 @@ Sumber: [App testing requirements for new personal developer accounts](https://s
 | *"harus memiliki nama paket …"* + *"otoritas penyedia konten … digunakan oleh developer lain"* | AAB masih ber-paket `com.fixify.app`, padahal paket itu milik developer lain dan aplikasi Play Anda memakai `id.fixify.app` | kerjakan §0.1 lalu **build ulang**; AAB lama tidak akan diterima |
 | Build gagal *"No matching client found for package name 'id.fixify.app'"* | `google-services.json` belum diganti untuk paket baru | daftarkan app Android `id.fixify.app` di Firebase (§0.1 langkah 1) |
 | Chrome/browser terbuka saat menekan "Masuk dengan Google" | jalur native gagal (`ApiException 10`/`12500`) karena belum ada OAuth client Android untuk `id.fixify.app` + SHA-1 | selesaikan login di browser (app menunggu deep link); untuk menghilangkan lompatan itu, buat client Android (§0.1 langkah 2) dan tambahkan SHA-1 Play App Signing (§0.1 langkah 3) |
-| *"Version code 41 telah digunakan"* | nomor build dipakai ulang | bangun rilis baru (nomor naik otomatis), jangan unggah ulang berkas lama |
+| *"Version code … telah digunakan"* | nomor build dipakai ulang | unggah AAB dengan versionCode lebih tinggi; build APK berikutnya menaikkan manifest dan workflow AAB mengikutinya |
 | Peringatan *upload key* berbeda / unggahan ditolak | AAB ditandatangani kunci lain | periksa keystore & secrets ([keystore-recovery.md](./keystore-recovery.md) §3); hindari reset kunci sebelum dicek |
 | Tester melihat "aplikasi tidak ditemukan" | belum menekan tautan opt-in | kirim ulang tautan opt-in (§4 langkah 2) |
 | *"Target API level"* merah | targetSdk < syarat Play | aplikasi ini sudah **36**; jangan diturunkan — jalankan `npm run verify:play` |
@@ -266,7 +289,8 @@ Sumber: [App testing requirements for new personal developer accounts](https://s
 ## 11. Checklist cepat
 
 - [x] Paket pindah ke `id.fixify.app`: `applicationId` + `namespace` + `google-services.json` baru (build 42)
-- [x] AAB **baru** dibangun (build 42: paket `id.fixify.app`, versionCode 42, tanda tangan upload key)
+- [x] AAB **baru** dibangun (build 43: paket `id.fixify.app`, versionCode 43, tanda tangan upload key)
+- [x] AAB build 43 terbit di Release `aab-latest` oleh workflow AAB khusus (gate `verify:play` lulus sebelum terbit)
 - [x] `npm run verify:play` lulus penuh (exit 0)
 - [x] **Smoke login Google di build 42** lulus penuh di emulator (18 Okt 2026): `ADB=<adb> npm run smoke:google -- --device=<serial> --app=id.fixify.app` → exit 0 (provider Web, 3 deep link, app boot, sesi terbentuk)
 - [ ] **SHA-1 rilis didaftarkan** untuk app Android `id.fixify.app` → `npm run verify:firebase-client` hijau (gate CI: build APK **digagalkan** selama `google-services.json` belum memuat client Android ber-SHA-1 rilis; sekarang merah ⇒ jalur native gagal dan app jatuh ke OAuth browser)
