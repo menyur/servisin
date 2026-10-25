@@ -199,7 +199,12 @@ jobs:
       # Firebase yang masih menunjuk paket lama sebelum ia sampai ke perangkat.
       # Read-only, tanpa jaringan.
       - name: Verifikasi paket aplikasi & kunci Google
-        run: npm run verify:apk-signin
+        # `--no-apk`: berkas APK memang TIDAK ada di repo (aset GitHub Release,
+        # dibersihkan CI setiap rilis), sehingga pemeriksaan artefak di sini
+        # hanya menghasilkan "tidak konklusif" (exit 3) dan memerahkan lint.
+        # Pemeriksaan artefak yang sesungguhnya tetap dijalankan di
+        # build-apk.yml (`--only-apk`) sebelum APK diterbitkan.
+        run: node scripts/verify-apk-signin.mjs --no-apk
 
       # Penjaga cache build lokal diuji di sini karena kegagalannya SUNYI dan
       # mahal: cache pernah menumpuk 8,8 GB tanpa ada yang menyadarinya, dan

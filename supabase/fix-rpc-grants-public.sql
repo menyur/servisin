@@ -166,6 +166,18 @@ begin
       -- jumlah, bukan data pesanan. Trigger kuota sendiri tidak diekspos.
       ('slot_capacity_efektif()', 'authenticated, service_role'),
       ('booking_slot_usage(date)', 'authenticated, service_role'),
+      -- Buku alamat pelanggan (migrate-customer-address-book.sql): keduanya
+      -- memakai auth.uid() sebagai pemilik — tidak ada id pengguna dari klien,
+      -- jadi orang lain tidak bisa menyunting alamat orang lain.
+      ('save_my_address(text, text, double precision, double precision, boolean)', 'authenticated, service_role'),
+      ('delete_my_address(text)', 'authenticated, service_role'),
+      -- No-show & biaya tambahan di lokasi (migrate-no-show-extra-charges.sql).
+      -- Penjaganya ADA DI DALAM RPC (pemilik pesanan / teknisi yang ditugaskan /
+      -- admin), dan nominal biaya baru masuk total setelah pelanggan menyetujui.
+      ('report_customer_no_show(uuid, double precision, double precision, text, text)', 'authenticated, service_role'),
+      ('confirm_customer_present(uuid)', 'authenticated, service_role'),
+      ('propose_extra_charge(uuid, integer, text, text)', 'authenticated, service_role'),
+      ('decide_extra_charge(uuid, boolean)', 'authenticated, service_role'),
       -- Penghapusan piutang (migrate-piutang-writeoff.sql): dipanggil panel admin.
       -- Diberikan ke `authenticated` (bukan anon) dan penjaganya ADA DI DALAM
       -- badan fungsi (`public.is_admin()` → jawaban `ok=false`), jadi teknisi yang
@@ -207,6 +219,7 @@ begin
       ('kick_push_worker_on_insert()', ''),
       ('kick_admin_email_worker_on_insert()', ''),
       ('delete_trip_share_on_booking_close()', ''),
+      ('tolak_teknisi_cuti()', ''),
       ('handle_new_user()', ''),
       ('set_initial_approval_status()', ''),
       ('guard_profile_privileged_fields()', '')

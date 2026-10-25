@@ -338,7 +338,11 @@ check("papan menautkan ke tab Saldo untuk penghapusan", boardUi.includes("onOpen
 check("papan menandai belum pernah diingatkan", boardUi.includes("belum pernah diingatkan"));
 check(
   "papan tidak mengklaim 'tidak ada yang perlu ditindak' bila ada piutang jatuh tempo",
-  /piutangJatuhTempo\.length === 0;/.test(boardUi)
+  // Boleh berupa KONDISI TUNGGAL (diakhiri `;`) atau SALAH SATU syarat gabungan
+  // (`&&`) — papan kini juga menunggu keterlambatan mulai dan laporan no-show,
+  // jadi syarat kosongnya berisi beberapa bagian. Yang dijaga tetap sama:
+  // piutang jatuh tempo HARUS ikut menentukan keadaan "tidak ada tugas".
+  /piutangJatuhTempo\.length === 0\s*(?:&&|;)/.test(boardUi)
 );
 check("AdminDashboard menyambungkan tab Saldo dari papan", /onOpenBalances=\{\(\) => setTab\("tech-balances"\)\}/.test(readFileSync(join(root, "src/components/AdminDashboard.js"), "utf8")));
 
