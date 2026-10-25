@@ -1,6 +1,8 @@
 import Link from "next/link";
 import LegalPage, { LegalSection, LegalList } from "@/components/LegalPage";
-import { formatRupiah, APP_FEE, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
+import { formatRupiah, APP_FEE } from "@/lib/pricing";
+import { createClient } from "@/lib/supabase/server";
+import { bacaReviewReward } from "@/lib/review-reward";
 
 export const metadata = {
   title: "Syarat dan Ketentuan — Fixify",
@@ -12,7 +14,12 @@ export const metadata = {
 const KONTAK_EMAIL = "halo@fixify.id";
 const BERLAKU = "12 Oktober 2026";
 
-export default function SyaratKetentuanPage() {
+export default async function SyaratKetentuanPage() {
+  // Nominal insentif = setelan yang sedang berlaku (panel admin → tab
+  // "Voucher Penilaian"). Dokumen legal tidak boleh menjanjikan angka yang
+  // berbeda dari voucher yang benar-benar diterbitkan.
+  const supabase = await createClient();
+  const reward = await bacaReviewReward(supabase);
   return (
     <LegalPage
       eyebrow="Dokumen legal"
@@ -82,7 +89,14 @@ export default function SyaratKetentuanPage() {
       <LegalSection id="penilaian" title="7. Penilaian dan voucher">
         <LegalList>
           <li>Pelanggan dapat memberi penilaian setelah pesanan selesai. Penilaian harus jujur dan tidak memuat ujaran kebencian, ancaman, atau konten terlarang.</li>
-          <li>Setiap penilaian baru berhak atas voucher insentif sebesar <strong>{formatRupiah(REVIEW_INCENTIVE_AMOUNT)}</strong>, satu kali per pesanan.</li>
+          <li>
+            Setiap penilaian baru berhak atas voucher insentif sebesar{" "}
+            <strong>{formatRupiah(reward.amount)}</strong>, satu kali per pesanan
+            {reward.delayDays > 0
+              ? `, diterbitkan ${reward.delayDays} hari setelah pesanan selesai`
+              : ", yang diterbitkan setelah penilaian dikirim"}
+            {reward.amount === 0 ? ", bila program insentif sedang berjalan" : ""}.
+          </li>
           <li>Voucher memiliki masa berlaku dan syarat pemakaian yang ditampilkan saat diterima.</li>
         </LegalList>
       </LegalSection>

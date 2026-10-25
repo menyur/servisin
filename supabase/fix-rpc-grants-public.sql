@@ -118,6 +118,10 @@ begin
       -- dari DALAM RPC security definer, bukan klien; tetap didaftarkan supaya
       -- grant bawaan PUBLIC ikut dicabut saat berkas ini dijalankan ulang.
       ('app_fee_efektif()', 'authenticated, service_role'),
+      -- Insentif voucher penilaian efektif (migrate-review-reward.sql).
+      -- Dipanggil LANGSUNG oleh aplikasi sebelum menerbitkan voucher, jadi
+      -- `authenticated` memang dibutuhkan; anon tetap tidak boleh.
+      ('review_reward_efektif()', 'authenticated, service_role'),
       ('available_jobs()', 'authenticated, service_role'),
       ('available_jobs_nearby(double precision, double precision)', 'authenticated, service_role'),
       ('booking_slot_start(date, text)', 'authenticated, service_role'),

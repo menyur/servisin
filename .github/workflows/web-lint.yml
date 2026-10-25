@@ -95,6 +95,13 @@ jobs:
       - name: Verifikasi pengaturan garansi
         run: npm run verify:garansi
 
+      # Insentif voucher penilaian kini setelan admin, bukan konstanta yang
+      # disalin ke aplikasi. Kegagalannya sunyi: web bisa menjanjikan Rp5.000
+      # sementara APK masih menerbitkan Rp2.000 (atau sebaliknya), dan tidak ada
+      # error di mana pun. Statis, tanpa jaringan.
+      - name: Verifikasi setelan insentif voucher penilaian
+        run: npm run verify:review-reward
+
       # Izin EXECUTE pada fungsi SQL diperiksa di sini karena kegagalannya
       # benar-benar senyap: PostgreSQL memberi EXECUTE kepada PUBLIC secara
       # default, sehingga RPC yang bukan untuk umum tetap bisa dipanggil

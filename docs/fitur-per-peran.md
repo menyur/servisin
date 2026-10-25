@@ -82,6 +82,7 @@ Angka pendukung dari pemeriksaan yang lulus (semuanya hari ini):
 | Pendaftar teknisi: approve/reject + verifikasi KTP | `verify:signup-endpoint` (74 dijalankan · 0 gagal) memeriksa metadata & berkas KTP; bucket KTP disiapkan lewat [setup-storage-buckets.sql](../supabase/setup-storage-buckets.sql) | ✅ |
 | Kelola layanan, varian ukuran, gambar layanan | katalog utuh pasca-pembersihan; halaman admin 200 | ✅ |
 | Voucher: daftar + pembuatan otomatis saat penilaian | `verify:review-voucher`, `verify:order-voucher` | ✅ |
+| **Setelan voucher penilaian** (tab baru): nominal (0 = insentif dimatikan tanpa deploy), masa berlaku 1–365 hari, dan jeda terbit 0–30 hari. Satu setelan dibaca web (`src/lib/review-reward.js`) dan aplikasi (RPC `review_reward_efektif`), jadi kampanye insentif tidak lagi berarti menyunting dua tempat + merilis APK. Perubahan berlaku untuk voucher yang terbit sesudahnya; voucher yang sudah dipegang pelanggan tidak berubah. Batas nilai dijaga constraint database, perubahan tercatat di jejak audit admin | `verify:review-reward` 53/53 (statis + live: setelan == RPC, anon ditolak); migrasi `migrate-review-reward.sql` **terpasang** | ✅ |
 | Saldo teknisi: setoran & penarikan (bukti transfer, terima/tolak) | gate balance-proofs **12/12** (RLS bukti), balance-reminder **9/9** | ✅ |
 | Laporan tiga kolom: ditagihkan / tertagih / piutang teknisi | `verify:balance` (offline) + `verify:balance-negative` (hidup: saldo Rp 1.000 → dipotong penuh Rp 25.000 → saldo −Rp 24.000 = piutang, klaim berikutnya ditolak) + `verify:app-fee` | ✅ |
 | Tab "Saldo Aktif": saldo per teknisi + laporan biaya aplikasi + CSV | `verify:app-fee` lulus | ⚠️ catatan B di [bagian 7](#7-empat-alat-ukur-yang-memberi-vonis-salah) |
@@ -126,7 +127,7 @@ Angka pendukung dari pemeriksaan yang lulus (semuanya hari ini):
 | **Batal SETELAH transfer** (celah lama ditutup): pembatalan tidak lagi diblokir karena bukti bayar sudah diunggah. Server membuat catatan pengembalian dana otomatis (nominal yang diklaim/total), statusnya terlihat di detail pesanan (menunggu transfer / sudah dikembalikan / ditolak + alasan) dan di struk. Pelanggan menerima push saat status refund berubah; event `refund_update` bisa dimatikan di Pengaturan Notifikasi | `verify:refund` 47/47 (e2e hidup); `flutter test` (booking_refund 11/11, termasuk kartu disembunyikan dari teknisi) | ✅ |
 | Chat per pesanan | gate realtime-publication + realtime-rls lulus | ✅ |
 | Penilaian teknisi (bintang wajib, ulasan opsional) | `verify:review-voucher`; guard review F5 tertutup | ✅ |
-| Voucher otomatis Rp 2.000 + daftar voucher saya | `verify:review-voucher`, `verify:order-voucher` | ✅ |
+| Voucher otomatis + daftar voucher saya (nominal/masa berlaku dari setelan admin, bawaan Rp 2.000/90 hari) | `verify:review-voucher`, `verify:review-reward`, `verify:order-voucher` | ✅ |
 | Laporan pelanggan + balasan admin | `verify:admin-realtime` 19/19 | ✅ |
 | Garansi: ajukan klaim dari pesanan selesai | `verify:garansi-jalur` (klaim kedua ditolak, pelanggan tak boleh memutuskan) | ✅ |
 | Lacak teknisi live (tautan perjalanan) | gate trip-share-privacy lulus; `verify:trip-share` 55/55 | ✅ |

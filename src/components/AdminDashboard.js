@@ -48,6 +48,7 @@ import ServiceOptionsManager from "@/components/ServiceOptionsManager";
 import BannerAdminTab from "@/components/BannerAdminTab";
 import PaymentSettingsTab from "@/components/PaymentSettingsTab";
 import AppFeeSettingsTab from "@/components/AppFeeSettingsTab";
+import ReviewRewardSettingsTab from "@/components/ReviewRewardSettingsTab";
 import SlotCapacitySettingsTab from "@/components/SlotCapacitySettingsTab";
 import SlotPressureBanner from "@/components/SlotPressureBanner";
 import SlotTechnicianAssignModal from "@/components/SlotTechnicianAssignModal";
@@ -815,6 +816,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         <TabButton active={tab === "banners"} onClick={() => setTab("banners")} icon={ImagePlay} label="Banner" />
         <TabButton active={tab === "pay-settings"} onClick={() => setTab("pay-settings")} icon={Banknote} label="Rekening Transfer" />
         <TabButton active={tab === "app-fee"} onClick={() => setTab("app-fee")} icon={Coins} label="Biaya Aplikasi" />
+        <TabButton active={tab === "review-reward"} onClick={() => setTab("review-reward")} icon={Gift} label="Voucher Penilaian" />
         <TabButton active={tab === "slot"} onClick={() => setTab("slot")} icon={Clock} label="Kuota Slot" />
         <TabButton active={tab === "notify-recipients"} onClick={() => setTab("notify-recipients")} icon={Mail} label="Notif Email Admin" />
       </div>
@@ -1598,6 +1600,7 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
 
       {tab === "pay-settings" && <PaymentSettingsTab />}
       {tab === "app-fee" && <AppFeeSettingsTab />}
+      {tab === "review-reward" && <ReviewRewardSettingsTab />}
 
       {tab === "slot" && (
         <SlotCapacitySettingsTab

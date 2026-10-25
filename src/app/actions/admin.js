@@ -4,6 +4,13 @@ import { createClient } from "@/lib/supabase/server";
 import { APP_FEE_MAKS, formatRupiah } from "@/lib/pricing";
 import { bacaAppFeeRinci } from "@/lib/app-fee";
 import {
+  bacaReviewReward,
+  normalisasiReviewReward,
+  REVIEW_REWARD_AMOUNT_MAKS,
+  REVIEW_REWARD_DELAY_DAYS_MAKS,
+  REVIEW_REWARD_VALID_DAYS_MAKS,
+} from "@/lib/review-reward";
+import {
   normalisasiSlotCapacity,
   SLOT_CAPACITY_DEFAULT,
   SLOT_CAPACITY_MAX,
@@ -3904,6 +3911,140 @@ export async function saveAppFeeAdmin({ fee } = {}) {
   revalidatePath("/panduan-teknisi");
   revalidatePath("/panduan-pelanggan");
   return { ok: true, fee: Number(data.app_fee) };
+}
+
+/* ================= PENGATURAN VOUCHER PENILAIAN ================= */
+
+/**
+ * Insentif voucher penilaian yang SEDANG berlaku (tabel app_settings; kolomnya
+ * ditambahkan supabase/migrate-review-reward.sql).
+ *
+ * Dipakai tab "Voucher Penilaian" di panel admin. Angka yang ditampilkan adalah
+ * angka yang BENAR-BENAR dipakai penerbit voucher: jalur web membaca
+ * src/lib/review-reward.js, jalur aplikasi membaca public.review_reward_efektif()
+ * — keduanya dari baris setelan yang sama.
+ *
+ * `sumber` dibedakan seperti biaya aplikasi: "bawaan" berarti migrasinya belum
+ * dijalankan, sehingga admin tahu kenapa perubahan tidak berpengaruh.
+ */
+export async function getReviewRewardAdmin() {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const r = await bacaReviewReward(supabase);
+  return {
+    amount: r.amount,
+    validDays: r.validDays,
+    delayDays: r.delayDays,
+    sumber: r.sumber,
+    alasan: r.alasan,
+    maks: {
+      amount: REVIEW_REWARD_AMOUNT_MAKS,
+      validDays: REVIEW_REWARD_VALID_DAYS_MAKS,
+      delayDays: REVIEW_REWARD_DELAY_DAYS_MAKS,
+    },
+  };
+}
+
+/**
+ * Simpan insentif voucher penilaian (dipanggil tab "Voucher Penilaian").
+ *
+ * ATURAN YANG DIJAGA DI SINI:
+ *   - Kolom KOSONG ditolak, bukan diartikan 0. `Number("")` bernilai 0, jadi
+ *     tanpa pemeriksaan ini satu kali kolom dikosongkan akan mematikan
+ *     insentif untuk semua pelanggan tanpa ada yang menyadari.
+ *   - Nominal 0 tetap BOLEH (harus diketik sengaja "0") — mematikan insentif
+ *     tanpa deploy, mis. setelah masa kampanye.
+ *   - Jeda terbit 0..30 hari dan masa berlaku 1..365 hari; batas atas menahan
+ *     salah ketik yang akan mengikat janji terlalu lama.
+ *
+ * Yang TIDAK diubah: voucher yang sudah terbit. Nominal & masa berlakunya
+ * dibekukan di baris `vouchers` saat terbit, jadi pelanggan yang sudah melihat
+ * "voucher Rp 2.000" tetap memilikinya meski setelan diganti.
+ */
+export async function saveReviewRewardAdmin({ amount, validDays, delayDays } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  function angka(nilai, label, min, maks) {
+    const teks = String(nilai ?? "").trim().replace(/[.\s]/g, "");
+    if (!teks) return { error: `${label} wajib diisi.` };
+    if (!/^\d+$/.test(teks)) return { error: `${label} harus angka bulat tanpa tanda lain.` };
+    const n = Number.parseInt(teks, 10);
+    if (!Number.isFinite(n) || n < min || n > maks) {
+      return { error: `${label} harus antara ${min} dan ${maks}.` };
+    }
+    return { nilai: n };
+  }
+
+  const a = angka(amount, "Nominal voucher", 0, REVIEW_REWARD_AMOUNT_MAKS);
+  if (a.error) return { error: a.error };
+  const v = angka(validDays, "Masa berlaku", 1, REVIEW_REWARD_VALID_DAYS_MAKS);
+  if (v.error) return { error: v.error };
+  const d = angka(delayDays, "Jeda terbit", 0, REVIEW_REWARD_DELAY_DAYS_MAKS);
+  if (d.error) return { error: d.error };
+
+  const baru = normalisasiReviewReward({ amount: a.nilai, validDays: v.nilai, delayDays: d.nilai });
+
+  // Nilai lama dibaca SEBELUM update supaya jejak audit menyebut sebelum/sesudah.
+  const sebelum = await bacaReviewReward(supabase);
+
+  const { data, error } = await supabase
+    .from("app_settings")
+    .update({
+      review_reward_amount: baru.amount,
+      review_reward_valid_days: baru.validDays,
+      review_reward_delay_days: baru.delayDays,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", 1)
+    .select("review_reward_amount, review_reward_valid_days, review_reward_delay_days")
+    .maybeSingle();
+
+  if (error) {
+    if (/relation|does not exist|Could not find the table|schema cache|column/i.test(error.message || "")) {
+      return {
+        error:
+          "Setelan voucher penilaian belum ada — jalankan supabase/migrate-review-reward.sql di Supabase SQL Editor dulu.",
+      };
+    }
+    return { error: error.message };
+  }
+  // Tidak ada baris id = 1 yang berubah → setelan belum siap; jangan bilang sukses.
+  if (data?.review_reward_amount == null) {
+    return {
+      error:
+        "Setelan voucher penilaian belum bisa disimpan (baris app_settings id = 1 tidak ditemukan). Jalankan supabase/migrate-review-reward.sql dulu.",
+    };
+  }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_review_reward",
+    entity: "settings",
+    entityId: "1",
+    summary: `Voucher penilaian Rp${sebelum.amount.toLocaleString("id-ID")} / ${sebelum.validDays} hari / jeda ${sebelum.delayDays} hari → Rp${Number(data.review_reward_amount).toLocaleString("id-ID")} / ${Number(data.review_reward_valid_days)} hari / jeda ${Number(data.review_reward_delay_days)} hari`,
+    before: { amount: sebelum.amount, validDays: sebelum.validDays, delayDays: sebelum.delayDays },
+    after: {
+      amount: Number(data.review_reward_amount),
+      validDays: Number(data.review_reward_valid_days),
+      delayDays: Number(data.review_reward_delay_days),
+    },
+  });
+
+  // Halaman yang menampilkan janji insentif ikut disegarkan supaya pelanggan
+  // tidak membaca angka lama setelah admin menyimpan.
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
+  revalidatePath("/panduan-pelanggan");
+  revalidatePath("/syarat");
+  return {
+    ok: true,
+    amount: Number(data.review_reward_amount),
+    validDays: Number(data.review_reward_valid_days),
+    delayDays: Number(data.review_reward_delay_days),
+  };
 }
 
 /* ================= PENGATURAN KUOTA SLOT JADWAL ================= */

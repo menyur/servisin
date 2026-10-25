@@ -2200,19 +2200,33 @@ class Api {
       );
     }
 
-    // ---- Insentif (paritas web): penilaian BARU → voucher TERIMAKASIH
-    // Rp 2.000 berlaku 90 hari, terbit SEGERA (reviewIncentiveDays = 0).
-    // Nilai & aturan wajib sama dgn grantReviewVoucher
-    // (src/app/actions/reviews.js) + REVIEW_INCENTIVE_* (src/lib/pricing.js);
-    // anti-dobel lintas platform ditopang unique partial index
+    // ---- Insentif (paritas web): penilaian BARU → voucher TERIMAKASIH.
+    // Nominal, masa berlaku, dan jeda terbit dibaca dari SETELAN ADMIN lewat
+    // RPC review_reward_efektif() (supabase/migrate-review-reward.sql) — satu
+    // angka untuk web (src/lib/review-reward.js) & aplikasi, jadi mengubah
+    // kampanye tidak perlu merilis APK baru.
+    // Gagal baca (migrasi belum jalan / luring) → nilai bawaan 2.000 / 90 / 0,
+    // BUKAN 0: penilaian tetap sah dan pelanggan tidak kehilangan haknya.
+    // Anti-dobel lintas platform ditopang unique partial index
     // vouchers_review_incentive_booking_uidx (fix-review-voucher-idempotent.sql)
     // + pre-check existing di bawah.
     Map<String, dynamic>? voucher;
     var voucherBaru = false;
     try {
-      const reviewIncentiveDays = 0;
-      const reviewIncentiveAmount = 2000;
-      const voucherValidityDays = 90;
+      var reviewIncentiveDays = 0;
+      var reviewIncentiveAmount = 2000;
+      var voucherValidityDays = 90;
+      try {
+        final res = await db.rpc('review_reward_efektif');
+        if (res is Map) {
+          final m = Map<String, dynamic>.from(res);
+          reviewIncentiveAmount = _bulatRpc(m['amount'], 2000);
+          voucherValidityDays = _bulatRpc(m['valid_days'], 90);
+          reviewIncentiveDays = _bulatRpc(m['delay_days'], 0);
+        }
+      } catch (_) {
+        // RPC belum tersedia / jaringan → bawaan di atas.
+      }
 
       // completed_at bisa belum ada di DB lama → nullable; dianggap 0 hari
       // (voucher tetap terbit karena syaratnya "sudah lewat >= 0 hari").
@@ -2228,7 +2242,8 @@ class Api {
                   .difference(DateTime.parse(completedAt))
                   .inMicroseconds /
               Duration.microsecondsPerDay;
-      if (isNewReview && days >= reviewIncentiveDays) {
+      // amount 0 = admin sengaja mematikan insentif; penilaian tetap tersimpan.
+      if (isNewReview && reviewIncentiveAmount > 0 && days >= reviewIncentiveDays) {
         // Pre-check anti-dobel (jalur lambat); race window sempit ditutup
         // oleh unique index di DB — insert kedua gagal dan ditangkap catch.
         final existing = await db
@@ -2255,7 +2270,7 @@ class Api {
                 'source': 'review_incentive',
                 'booking_id': bookingId,
                 'expires_at': DateTime.now()
-                    .add(const Duration(days: voucherValidityDays))
+                    .add(Duration(days: voucherValidityDays))
                     .toIso8601String(),
               })
               .select('code, amount')
@@ -2878,4 +2893,14 @@ class Api {
             const FileOptions(contentType: 'image/jpeg', upsert: false));
     return path;
   }
+}
+
+/// Bilangan bulat dari respons RPC (`review_reward_efektif`). PostgREST bisa
+/// mengirim int, num, atau string numerik tergantung driver; nilai yang tidak
+/// terbaca → [bawaan], BUKAN 0 — respons berbentuk lain tidak boleh diam-diam
+/// mematikan insentif penilaian.
+int _bulatRpc(dynamic nilai, int bawaan) {
+  if (nilai is num) return nilai.round();
+  if (nilai is String) return int.tryParse(nilai.trim()) ?? bawaan;
+  return bawaan;
 }

@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { getMyBookings } from "@/app/actions/bookings";
 import { createCustomerReport } from "@/app/actions/reports";
-import { formatRupiah, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
+import { formatRupiah, REVIEW_INCENTIVE_AMOUNT, REVIEW_INCENTIVE_DAYS, VOUCHER_VALIDITY_DAYS } from "@/lib/pricing";
 import { serviceLabel } from "@/lib/booking-quantity";
 import { StatusPill } from "@/components/StatusPipeline";
 import OrderReport from "@/components/OrderReport";
@@ -20,7 +20,15 @@ import ReviewForm from "@/components/ReviewForm";
 import { EmptyBoxIllustration } from "@/components/Illustrations";
 import { PlusCircle, List, FileBarChart, FilePlus2, Printer, Star, Gift, Wallet, Loader2, Hourglass, XCircle, RotateCcw, HelpCircle, Bell } from "lucide-react";
 
-export default function DashboardClient({ initialBookings, customerName, customerPhone }) {
+export default function DashboardClient({ initialBookings, customerName, customerPhone, reviewReward = null }) {
+  // Insentif yang SEDANG berlaku (setelan admin, dibaca di server). Bila belum
+  // tersedia → konstanta bawaan, bukan 0: banner tidak boleh hilang hanya
+  // karena pembacaan setelan gagal.
+  const reward = reviewReward || {
+    amount: REVIEW_INCENTIVE_AMOUNT,
+    validDays: VOUCHER_VALIDITY_DAYS,
+    delayDays: REVIEW_INCENTIVE_DAYS,
+  };
   const [bookings, setBookings] = useState(initialBookings);
   const [tab, setTab] = useState("history");
   const [receiptBooking, setReceiptBooking] = useState(null);
@@ -75,7 +83,7 @@ export default function DashboardClient({ initialBookings, customerName, custome
         </div>
       )}
 
-      {tab === "vouchers" && <MyVouchers />}
+      {tab === "vouchers" && <MyVouchers defaultValidityDays={reward.validDays} />}
 
       {tab === "notif" && (
         <div className="max-w-md">
@@ -85,7 +93,7 @@ export default function DashboardClient({ initialBookings, customerName, custome
 
       {tab === "history" && (
         <>
-          <ReviewReminderBanner bookings={bookings} onGoReview={() => setTab("review")} />
+          <ReviewReminderBanner bookings={bookings} onGoReview={() => setTab("review")} amount={reward.amount} />
           {bookings.length === 0 ? (
             <div className="card text-center py-10 flex flex-col items-center gap-2">
               <div className="w-48"><EmptyBoxIllustration /></div>
@@ -157,9 +165,9 @@ export default function DashboardClient({ initialBookings, customerName, custome
                       </span>
                     )}
                     {/* selesai + belum dinilai: insentif menunggu */}
-                    {b.status === "completed" && b.technician?.name && !b.myRating && (
+                    {reward.amount > 0 && b.status === "completed" && b.technician?.name && !b.myRating && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber bg-amber-tint px-2.5 py-1 rounded-full">
-                        <Gift size={12} /> Voucher {formatRupiah(REVIEW_INCENTIVE_AMOUNT)} menunggu — nilai sekarang
+                        <Gift size={12} /> Voucher {formatRupiah(reward.amount)} menunggu — nilai sekarang
                       </span>
                     )}
                     {/* selesai + ada teknisi: nilai langsung dari kartu */}
@@ -257,15 +265,17 @@ function payLabel(b) {
 
 /**
  * Banner pengingat: pesanan selesai yang belum dinilai — insentif voucher
- * (REVIEW_INCENTIVE_AMOUNT) masih menunggu. Voucher terbit otomatis begitu
- * penilaian baru dikirim, jadi pengingat berlaku untuk semua pesanan selesai.
+ * (`amount`, dari setelan admin) masih menunggu. Voucher terbit otomatis begitu
+ * penilaian baru dikirim, jadi pengingat berlaku untuk semua pesanan selesai —
+ * kecuali admin mematikan insentif (amount 0), karena menjanjikan voucher yang
+ * tidak akan terbit lebih buruk daripada tidak mengingatkan sama sekali.
  */
-function ReviewReminderBanner({ bookings, onGoReview }) {
+function ReviewReminderBanner({ bookings, onGoReview, amount = REVIEW_INCENTIVE_AMOUNT }) {
   const pending = bookings.filter(
     (b) => b.status === "completed" && b.technician?.name && !b.myRating
   );
 
-  if (pending.length === 0) return null;
+  if (pending.length === 0 || !(amount > 0)) return null;
 
   return (
     <div className="rounded-xl border-2 border-dashed border-amber/50 bg-amber-tint px-4 py-3 mb-4 flex items-center justify-between gap-3 flex-wrap">
@@ -276,7 +286,7 @@ function ReviewReminderBanner({ bookings, onGoReview }) {
             {pending.length} pesanan selesai belum kamu nilai.
           </span>{" "}
           <span className="text-ink-soft">
-            Beri penilaian dan dapatkan voucher diskon {formatRupiah(REVIEW_INCENTIVE_AMOUNT)} untuk booking berikutnya.
+            Beri penilaian dan dapatkan voucher diskon {formatRupiah(amount)} untuk booking berikutnya.
           </span>
         </p>
       </div>

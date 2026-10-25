@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getMyBookings } from "@/app/actions/bookings";
 import DashboardClient from "@/components/DashboardClient";
+import { bacaReviewReward } from "@/lib/review-reward";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -26,12 +27,17 @@ export default async function DashboardPage() {
   if (profile?.role === "technician") redirect("/technician");
 
   const { bookings } = await getMyBookings();
+  // Insentif penilaian yang sedang berlaku (diatur admin di panel). Dipakai
+  // banner pengingat & tab Voucher Saya supaya janji angkanya sama dengan
+  // voucher yang benar-benar terbit. Gagal baca → nilai bawaan.
+  const reward = await bacaReviewReward(supabase);
 
   return (
     <DashboardClient
       initialBookings={bookings}
       customerName={profile?.name || "Pelanggan"}
       customerPhone={profile?.phone || ""}
+      reviewReward={{ amount: reward.amount, validDays: reward.validDays, delayDays: reward.delayDays }}
     />
   );
 }

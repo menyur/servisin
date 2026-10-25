@@ -12,9 +12,10 @@ import {
   Home,
   AlertTriangle,
 } from "lucide-react";
-import { formatRupiah, REVIEW_INCENTIVE_AMOUNT } from "@/lib/pricing";
+import { formatRupiah } from "@/lib/pricing";
 import { createClient } from "@/lib/supabase/server";
 import { bacaAppFee } from "@/lib/app-fee";
+import { bacaReviewReward } from "@/lib/review-reward";
 
 export const metadata = {
   title: "Panduan Pelanggan — Fixify",
@@ -22,7 +23,7 @@ export const metadata = {
     "Cara menggunakan Fixify untuk pelanggan: memesan layanan, membayar, melacak status, menilai teknisi, dan memakai voucher.",
 };
 
-const STEPS = [
+const buatSteps = (reward) => [
   {
     icon: Search,
     title: "1. Temukan layanan & buat pesanan",
@@ -133,11 +134,18 @@ const STEPS = [
           Penilaianmu tampil publik di halaman <strong>Teknisi Kami</strong> dan membantu pelanggan lain
           memilih.
         </p>
-        <p>
-          Bonusnya: menilai pesanan yang sudah selesai memberimu{" "}
-          <strong>voucher diskon {formatRupiah(REVIEW_INCENTIVE_AMOUNT)}</strong> untuk booking berikutnya —
-          voucher otomatis muncul di tab <strong>Voucher Saya</strong>.
-        </p>
+        {reward.amount > 0 ? (
+          <p>
+            Bonusnya: menilai pesanan yang sudah selesai memberimu{" "}
+            <strong>voucher diskon {formatRupiah(reward.amount)}</strong> untuk booking berikutnya
+            {reward.delayDays > 0
+              ? ` (terbit ${reward.delayDays} hari setelah pesanan selesai)`
+              : ""}{" "}
+            — voucher otomatis muncul di tab <strong>Voucher Saya</strong>.
+          </p>
+        ) : (
+          <p>Program voucher insentif penilaian sedang tidak berjalan; penilaianmu tetap membantu pelanggan lain memilih teknisi.</p>
+        )}
       </>
     ),
   },
@@ -148,8 +156,8 @@ const STEPS = [
       <>
         <p>
           Voucher aktif otomatis terlihat di langkah <strong>Rincian Biaya</strong> saat kamu booking —
-          tinggal pilih dan diskonnya langsung dipotong dari total. Masa berlakunya 90 hari sejak terbit,
-          jadi jangan sampai hangus.
+          tinggal pilih dan diskonnya langsung dipotong dari total. Masa berlakunya {reward.validDays} hari
+          sejak terbit, jadi jangan sampai hangus.
         </p>
         <p>
           Ada keluhan, masalah layanan, atau saran? Buka tab <strong>Buat Laporan</strong> di dashboard —
@@ -161,7 +169,7 @@ const STEPS = [
   },
 ];
 
-const FAQ = [
+const buatFaq = (reward) => [
   {
     q: "Bagaimana cara membayar pesanan saya?",
     a: `Pilih metode di langkah Pembayaran: QRIS, Virtual Account, E-Wallet, atau COD. Untuk transfer, upload foto bukti lewat tombol "Konfirmasi Pembayaran" di kartu pesanan — jumlahnya harus sama dengan tagihan. Admin akan memverifikasi, dan status berubah Dibayar. COD cukup dibayar tunai ke teknisi saat pekerjaan selesai.`,
@@ -180,7 +188,10 @@ const FAQ = [
   },
   {
     q: `Kenapa saya harus menilai teknisi?`,
-    a: `Penilaianmu membantu teknisi baik mendapat reputasi dan membantu pelanggan lain. Selain itu, setiap penilaian BARU untuk pesanan selesai memberimu voucher ${formatRupiah(REVIEW_INCENTIVE_AMOUNT)} otomatis (satu voucher per pesanan, langsung masuk tab Voucher Saya) — dashboard bahkan mengingatkanmu dengan banner kalau ada penilaian yang tertunda.`,
+    a:
+      reward.amount > 0
+        ? `Penilaianmu membantu teknisi baik mendapat reputasi dan membantu pelanggan lain. Selain itu, setiap penilaian BARU untuk pesanan selesai memberimu voucher ${formatRupiah(reward.amount)} otomatis${reward.delayDays > 0 ? ` (terbit ${reward.delayDays} hari setelah pesanan selesai)` : ""} — satu voucher per pesanan, masuk tab Voucher Saya. Dashboard bahkan mengingatkanmu dengan banner kalau ada penilaian yang tertunda.`
+        : "Penilaianmu membantu teknisi baik mendapat reputasi dan membantu pelanggan lain memilih. Program voucher insentif penilaian sedang tidak berjalan saat ini.",
   },
   {
     q: "Bagaimana kalau hasil pengerjaan tidak sesuai harapan?",
@@ -195,6 +206,11 @@ export default async function PanduanPelangganPage() {
   // ditagihkan. Gagal dibaca → bawaan, bukan Rp0.
   const supabase = await createClient();
   const biayaApp = await bacaAppFee(supabase);
+  // Insentif penilaian juga setelan admin (tab "Voucher Penilaian"), untuk
+  // alasan yang sama: yang diumumkan harus sama dengan yang diterbitkan.
+  const reward = await bacaReviewReward(supabase);
+  const steps = buatSteps(reward);
+  const faq = buatFaq(reward);
   return (
     <div className="max-w-3xl mx-auto px-5 py-12">
       <div className="flex items-center gap-3 mb-2">
@@ -223,7 +239,7 @@ export default async function PanduanPelangganPage() {
 
       {/* Langkah-langkah */}
       <div className="space-y-4 mb-12">
-        {STEPS.map((s) => {
+        {steps.map((s) => {
           const Icon = s.icon;
           return (
             <div key={s.title} className="card !p-5">
@@ -251,10 +267,12 @@ export default async function PanduanPelangganPage() {
               voucher.
             </li>
             <li>Lupa mengunggah bukti transfer, sehingga pesanan tidak pernah maju dari status Menunggu.</li>
-            <li>
-              Tidak menilai teknisi — voucher {formatRupiah(REVIEW_INCENTIVE_AMOUNT)} tidak terbit dan masa
-              berlakunya terbatas 90 hari.
-            </li>
+            {reward.amount > 0 && (
+              <li>
+                Tidak menilai teknisi — voucher {formatRupiah(reward.amount)} tidak terbit dan masa
+                berlakunya terbatas {reward.validDays} hari.
+              </li>
+            )}
           </ul>
         </div>
       </div>
@@ -265,7 +283,7 @@ export default async function PanduanPelangganPage() {
           <HelpCircle size={20} className="text-brand" /> Pertanyaan yang sering diajukan
         </h2>
         <div className="space-y-3 mt-4">
-          {FAQ.map((f) => (
+          {faq.map((f) => (
             <details key={f.q} className="card !p-4 cursor-pointer">
               <summary className="font-semibold text-navy text-sm">{f.q}</summary>
               <p className="text-sm text-ink-soft mt-2 leading-relaxed">{f.a}</p>

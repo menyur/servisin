@@ -109,6 +109,14 @@ export function genBookingCode() {
 // "menilai setelah N hari baru dapat voucher". Hanya penilaian BARU yang
 // berhak — memperbarui penilaian lama tidak memberi voucher lagi (dijaga
 // unique index vouchers_review_incentive_booking_uidx).
+//
+// KETIGA ANGKA DI BAWAH ADALAH BAWAAN, bukan lagi satu-satunya sumber:
+// admin mengaturnya di panel → tab "Voucher Penilaian" (app_settings, lihat
+// supabase/migrate-review-reward.sql). Web membaca lewat
+// src/lib/review-reward.js, aplikasi lewat RPC review_reward_efektif(). Nilai
+// ini dipakai saat setelan belum ada / gagal dibaca, sehingga insentif tidak
+// pernah hilang diam-diam. Jangan menambah pemakai konstanta ini untuk jalur
+// penerbitan voucher — pakai bacaReviewReward() supaya angka tetap satu.
 // ============================================================
 export const REVIEW_INCENTIVE_DAYS = 0;
 export const REVIEW_INCENTIVE_AMOUNT = 2000;

@@ -9,7 +9,7 @@ import { Gift, Copy, Check, Ticket } from "lucide-react";
  * Tab "Voucher Saya" di dashboard pelanggan:
  * daftar voucher aktif (insentif penilaian) + cara pakai.
  */
-export default function MyVouchers() {
+export default function MyVouchers({ defaultValidityDays = VOUCHER_VALIDITY_DAYS }) {
   const [vouchers, setVouchers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [copiedId, setCopiedId] = useState(null);
@@ -96,7 +96,7 @@ export default function MyVouchers() {
       ))}
       <p className="text-xs text-ink-soft">
         Cara pakai: voucher otomatis muncul sebagai opsi diskon di langkah Rincian Biaya saat membuat
-        booking baru. Masa berlaku {VOUCHER_VALIDITY_DAYS} hari sejak diterbitkan.
+        booking baru. Masa berlaku {defaultValidityDays} hari sejak diterbitkan.
       </p>
     </div>
   );

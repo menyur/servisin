@@ -3,14 +3,17 @@
 // BARU menerbitkan voucher diskon Rp 2.000 yang BENAR-BENAR tersimpan di DB.
 //
 // Latar: penilaian bisa dikirim dari web (Server Action) maupun aplikasi
-// Flutter (klien langsung). Keduanya harus memakai nilai & syarat yang sama
-// (REVIEW_INCENTIVE_AMOUNT / REVIEW_INCENTIVE_DAYS di src/lib/pricing.js) dan
+// Flutter (klien langsung). Keduanya harus memakai nilai & syarat yang SAMA —
+// kini dibaca dari setelan admin (tab "Voucher Penilaian"): web lewat
+// src/lib/review-reward.js, aplikasi lewat RPC review_reward_efektif(). Nilai
+// 2000/90/0 di pricing.js hanya BAWAAN bila setelan belum ada. Keduanya juga
 // tidak boleh menerbitkan voucher dobel untuk pesanan yang sama (unique index
-// vouchers_review_incentive_booking_uidx).
+// vouchers_review_incentive_booking_uidx). Aturan setelannya sendiri dijaga
+// `npm run verify:review-reward`.
 //
 // Uji:
-//   A) konstanta & jalur kode (tanpa kredensial): nilai 2000, terbit langsung,
-//      hanya penilaian baru, kedua platform sinkron.
+//   A) jalur kode (tanpa kredensial): web & aplikasi membaca setelan, hanya
+//      penilaian baru yang berhak, satu sama lain tidak bisa menyimpang.
 //   B) LIVE (bila kredensial tersedia): pelanggan uji mengirim penilaian untuk
 //      pesanan selesai lalu voucher ditulis seperti yang dilakukan aplikasi —
 //      baris terbaca kembali dengan amount 2000, dan percobaan kedua DITOLAK
@@ -39,23 +42,34 @@ const reviewsSrc = readFileSync("src/app/actions/reviews.js", "utf8");
 const apiSrc = readFileSync("flutter_app/lib/api.dart", "utf8");
 
 step("A. Konstanta & jalur kode (web + aplikasi)");
-check("REVIEW_INCENTIVE_AMOUNT = 2000", REVIEW_INCENTIVE_AMOUNT === 2000, String(REVIEW_INCENTIVE_AMOUNT));
-check("REVIEW_INCENTIVE_DAYS = 0 (terbit segera)", REVIEW_INCENTIVE_DAYS === 0, String(REVIEW_INCENTIVE_DAYS));
+check("bawaan insentif 2.000 / 90 / 0 tetap ada sebagai fallback", REVIEW_INCENTIVE_AMOUNT === 2000 && REVIEW_INCENTIVE_DAYS === 0, String(REVIEW_INCENTIVE_AMOUNT));
 check(
-  "web memakai konstanta bersama (bukan angka hardcode)",
-  /grantReviewVoucher\([^)]*\)/.test(reviewsSrc) && /amount:\s*REVIEW_INCENTIVE_AMOUNT/.test(reviewsSrc)
+  "web membaca setelan admin (bukan konstanta yang disalin)",
+  /bacaReviewReward\(supabase\)/.test(reviewsSrc) && /amount:\s*reward\.amount/.test(reviewsSrc)
 );
 check(
-  "web hanya memberi voucher untuk penilaian BARU",
-  /const isNewReview = !booking\.myRatingBefore;/.test(reviewsSrc) && /if \(isNewReview\)/.test(reviewsSrc)
+  "web menghormati nominal 0 = insentif dimatikan",
+  /reward\.amount > 0/.test(reviewsSrc)
 );
 check(
-  "aplikasi memakai nilai & syarat yang sama (2000 / 0 hari)",
-  apiSrc.includes("const reviewIncentiveAmount = 2000;") && apiSrc.includes("const reviewIncentiveDays = 0;")
+  "web memakai jeda & masa berlaku dari setelan",
+  /days >= reward\.delayDays/.test(reviewsSrc) && /reward\.validDays \* 86_400_000/.test(reviewsSrc)
 );
 check(
-  "aplikasi hanya memberi voucher untuk penilaian BARU",
-  apiSrc.includes("final isNewReview = prev == null;") && apiSrc.includes("if (isNewReview && days >= reviewIncentiveDays)")
+  "web hanya memberi voucher untuk penilaian BARU (dan insentif aktif)",
+  /const isNewReview = !booking\.myRatingBefore;/.test(reviewsSrc) &&
+    /if \(isNewReview && reward\.amount > 0\)/.test(reviewsSrc)
+);
+check(
+  "aplikasi membaca RPC setelan yang sama + fallback bawaan",
+  apiSrc.includes("db.rpc('review_reward_efektif')") &&
+    apiSrc.includes("var reviewIncentiveAmount = 2000;") &&
+    apiSrc.includes("var reviewIncentiveDays = 0;")
+);
+check(
+  "aplikasi hanya memberi voucher untuk penilaian BARU (dan insentif aktif)",
+  apiSrc.includes("final isNewReview = prev == null;") &&
+    apiSrc.includes("if (isNewReview && reviewIncentiveAmount > 0 && days >= reviewIncentiveDays)")
 );
 // Regresi: kolom `reviews.comment` di produksi NOT NULL — mengirim NULL membuat
 // penilaian tanpa ulasan gagal. Kedua platform harus mengirim string kosong.
@@ -112,10 +126,12 @@ if (env) {
     if (sign.error) throw new Error(`sign-in pelanggan gagal: ${sign.error.message}`);
     await sleep(300);
 
+    // Jadwal BESOK pada slot sore: validasi slot menolak jam yang sudah lewat
+    // (probe dulu memakai "00:00-00:00" dan gagal sebelum menguji apa pun).
     const created = await custClient.rpc("create_booking_security_definer", {
       p_service_id: service.id,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_time: "00:00-00:00",
+      p_date: new Date(Date.now() + 86_400_000).toISOString().slice(0, 10),
+      p_time: "15:00-17:00",
       p_address: "UJI VOUCHER PENILAIAN — aman dihapus",
       p_option_id: option?.id ?? null,
       p_notes: "probe scripts/verify-review-voucher.mjs",
@@ -157,10 +173,18 @@ if (env) {
       .single();
     check("voucher insentif tersimpan ke database", !vInsert.error && Boolean(vInsert.data?.id), vInsert.error?.message || "");
     if (vInsert.data?.id) voucherIds.push(vInsert.data.id);
-    check("nilai voucher tersimpan = Rp 2.000", Number(vInsert.data?.amount) === 2000, String(vInsert.data?.amount));
+    check(
+      "voucher tersimpan dengan nominal probe (mekanisme DB, bukan nilai setelan)",
+      Number(vInsert.data?.amount) === REVIEW_INCENTIVE_AMOUNT,
+      String(vInsert.data?.amount)
+    );
 
     const { data: readBack } = await admin.from("vouchers").select("amount, source, booking_id").eq("code", vCode).maybeSingle();
-    check("voucher terbaca di database (service role)", Number(readBack?.amount) === 2000 && readBack?.source === "review_incentive", JSON.stringify(readBack || null));
+    check(
+      "voucher terbaca di database (service role)",
+      Number(readBack?.amount) === REVIEW_INCENTIVE_AMOUNT && readBack?.source === "review_incentive",
+      JSON.stringify(readBack || null)
+    );
 
     // 3) Anti-dobel: insert kedua untuk booking yang sama harus DITOLAK.
     const dupe = await custClient
@@ -188,7 +212,11 @@ if (env) {
       .eq("source", "review_incentive")
       .eq("booking_id", booking.id)
       .maybeSingle();
-    check("pre-check aplikasi menemukan voucher lama (tidak double di UI)", Number(existing?.amount) === 2000, JSON.stringify(existing || null));
+    check(
+      "pre-check aplikasi menemukan voucher lama (tidak double di UI)",
+      Number(existing?.amount) === REVIEW_INCENTIVE_AMOUNT,
+      JSON.stringify(existing || null)
+    );
   } finally {
     step("C. Bersih-bersih");
     if (voucherIds.length) await admin.from("vouchers").delete().in("id", voucherIds);

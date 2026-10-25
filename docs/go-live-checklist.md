@@ -228,6 +228,19 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
       Bila kolom/RPC belum ada, tab tetap tampil dan menyebut berkas migrasinya.
       Bukti ulang kapan saja: `npm run verify:app-fee-setting` (offline + baca saja; bagian live
       membuktikan `app_fee_efektif()` = setelan dan anon ditolak).
+- [x] **Voucher penilaian** — `supabase/migrate-review-reward.sql` **sudah diterapkan ke produksi**
+      (17 pernyataan, HTTP 201); kolom berisi 2000 / 90 / 0 dan `review_reward_efektif()` mengembalikan
+      `{"amount":2000,"delay_days":0,"valid_days":90}`. Bukti hidup: setelan diubah ke 5000 / 30 hari /
+      jeda 3 hari → RPC & halaman `/syarat` + `/panduan-pelanggan` ikut menampilkan Rp5.000, nilai 999999
+      ditolak check constraint, lalu dikembalikan. Isinya: kolom `app_settings.review_reward_*`,
+      RPC `review_reward_efektif()`, constraint batas, izin `authenticated`/`service_role`.
+      Sesudahnya buka panel admin → tab **Voucher Penilaian**: nominal (0 = insentif dimatikan, maks Rp100.000), masa berlaku
+      (1–365 hari), jeda terbit (0–30 hari). Satu angka ini dipakai penerbit voucher web **dan** aplikasi, serta
+      banner dashboard, panduan pelanggan, syarat & ketentuan, dan tab Voucher Saya — jadi tidak mungkin ada
+      pelanggan yang dijanjikan Rp5.000 lalu menerima Rp2.000. Voucher yang SUDAH terbit tidak berubah.
+      Bila kolom/RPC belum ada, tab tetap tampil dan menyebut berkas migrasinya (penerbit voucher kembali ke
+      bawaan 2.000/90/0). Bukti ulang: `npm run verify:review-reward` (statis + baca saja; bagian live
+      membuktikan setelan == RPC dan anon ditolak).
 - [ ] **Hapus/verifikasi akun uji** — pastikan tidak ada akun teknis/uJi nyasar di produksi (probe membersihkan dirinya sendiri; cek manual di Table Editor → `profiles`).
 - [ ] **Backup** — aktifkan backup terjadwal Supabase (Plan → Backups / PITR) **sebelum** menjalankan migrasi baru.
 

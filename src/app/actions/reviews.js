@@ -2,11 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath, revalidateTag } from "next/cache";
-import {
-  REVIEW_INCENTIVE_DAYS,
-  REVIEW_INCENTIVE_AMOUNT,
-  VOUCHER_VALIDITY_DAYS,
-} from "@/lib/pricing";
+import { bacaReviewReward } from "@/lib/review-reward";
 
 /**
  * Simpan penilaian pelanggan untuk satu pesanan selesai.
@@ -92,17 +88,21 @@ export async function submitReview({ bookingId, rating, comment }) {
   }
 
   // ---- Insentif: penilaian BARU → voucher diskon otomatis.
-  //      Nilai & syarat umur (REVIEW_INCENTIVE_DAYS, default 0 = langsung)
-  //      dari src/lib/pricing.js — paritas dengan aplikasi Flutter.
+  //      Nominal, masa berlaku, dan jeda terbit dibaca dari setelan admin
+  //      (tab "Voucher Penilaian", supabase/migrate-review-reward.sql) —
+  //      paritas dengan aplikasi Flutter lewat review_reward_efektif().
+  //      Gagal baca → nilai bawaan; penilaian tidak pernah ikut gagal.
   let voucher = null;
   try {
+    const reward = await bacaReviewReward(supabase);
     const isNewReview = !booking.myRatingBefore;
-    if (isNewReview) {
+    // amount 0 = admin sengaja mematikan insentif; penilaian tetap sah.
+    if (isNewReview && reward.amount > 0) {
       const days = booking.completed_at
         ? (Date.now() - new Date(booking.completed_at).getTime()) / 86_400_000
         : 0;
-      if (days >= REVIEW_INCENTIVE_DAYS) {
-        voucher = await grantReviewVoucher(supabase, user.id, bookingId, days);
+      if (days >= reward.delayDays) {
+        voucher = await grantReviewVoucher(supabase, user.id, bookingId, reward);
       }
     }
   } catch (e) {
@@ -120,7 +120,7 @@ export async function submitReview({ bookingId, rating, comment }) {
  * Buat voucher unik untuk insentif penilaian (idempoten per booking).
  * source = review_incentive, booking_id = pemicu — kalau sudah pernah diberi, tidak dobel.
  */
-async function grantReviewVoucher(supabase, userId, bookingId, daysLate) {
+async function grantReviewVoucher(supabase, userId, bookingId, reward) {
   const { data: existing } = await supabase
     .from("vouchers")
     .select("code, amount")
@@ -133,14 +133,16 @@ async function grantReviewVoucher(supabase, userId, bookingId, daysLate) {
     .toString(36)
     .slice(2, 6)
     .toUpperCase()}`;
-  const expires = new Date(Date.now() + VOUCHER_VALIDITY_DAYS * 86_400_000).toISOString();
+  // Nominal & masa berlaku DIBEKUKAN di baris voucher: mengubah setelan nanti
+  // tidak boleh mengubah janji yang sudah dilihat pelanggan di tab Voucher Saya.
+  const expires = new Date(Date.now() + reward.validDays * 86_400_000).toISOString();
 
   const { data, error } = await supabase
     .from("vouchers")
     .insert({
       user_id: userId,
       code,
-      amount: REVIEW_INCENTIVE_AMOUNT,
+      amount: reward.amount,
       source: "review_incentive",
       booking_id: bookingId,
       expires_at: expires,
