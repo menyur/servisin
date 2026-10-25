@@ -205,6 +205,12 @@ jobs:
         # `--no-signing-source`: keystore rilis tidak ada di repo (gitignored),
         # jadi di sini tidak ada tanda tangan yang bisa dinilai — pemeriksaan
         # itu dilakukan build-apk.yml atas APK yang benar-benar akan terbit.
+        # URL & kunci publishable Supabase bersifat PUBLIK (sama dengan yang
+        # dibundel di APK); tanpanya pemeriksa provider berhenti dengan "proyek
+        # tidak diketahui" (exit 3) dan langkah ini merah tanpa sebab nyata.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://sgxlnhzezknmdhefsvvu.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_eZZumtCE_tiZI8oB48sn8Q_lInFaxef
         run: node scripts/verify-apk-signin.mjs --no-apk --no-signing-source
 
       # Penjaga cache build lokal diuji di sini karena kegagalannya SUNYI dan
