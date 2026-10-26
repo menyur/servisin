@@ -24,22 +24,26 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
       .withTrackedAll()
       .withTracked(allNotDisposed: true)
       .withIgnored(classes: [
-        // Kebocoran internal framework (Hero/Navigator, TickerMode,
-        // ScrollPosition, PopScope) muncul sebagai `ValueNotifier<bool>` di
-        // setiap test yang memakai navigasi/scroll. Bukan kode kita, dan test
-        // Flutter sendiri pun mengabaikannya.
-        'ValueNotifier<bool>',
-        // Singleton berumur-app di lib/ui/common.dart (mainTabIndex,
-        // unseenBookingUpdates, currentRouteName, revision): sengaja hidup
-        // selama app, tidak pernah di-dispose — jadi bukan bocor.
-        'ValueNotifier<int>',
-        'ValueNotifier<String>',
-        // `Image.asset` yang belum selesai di-decode di zona async palsu ditahan
-        // ImageCache sebagai handle/entri ini — artefak lingkungan test, bukan
-        // bocor kode app (di perangkat nyata gambarnya selesai di-decode).
-        'ImageStreamCompleterHandle',
-        '_LiveImage',
-      ]);
+    // Kebocoran internal framework (Hero/Navigator, TickerMode,
+    // ScrollPosition, PopScope) muncul sebagai `ValueNotifier<bool>` di
+    // setiap test yang memakai navigasi/scroll. Bukan kode kita, dan test
+    // Flutter sendiri pun mengabaikannya.
+    'ValueNotifier<bool>',
+    // Singleton berumur-app di lib/ui/common.dart (mainTabIndex,
+    // unseenBookingUpdates, currentRouteName, revision): sengaja hidup
+    // selama app, tidak pernah di-dispose — jadi bukan bocor.
+    'ValueNotifier<int>',
+    'ValueNotifier<String>',
+    // Tujuan notifikasi yang dititipkan PushService: juga notifier global
+    // umur-app (common.dart). Dibuat saat shell pertama dilepas di tes
+    // (`removeListener` di dispose), bukan karena ada yang lupa menutup.
+    'ValueNotifier<NotificationTap?>',
+    // `Image.asset` yang belum selesai di-decode di zona async palsu ditahan
+    // ImageCache sebagai handle/entri ini — artefak lingkungan test, bukan
+    // bocor kode app (di perangkat nyata gambarnya selesai di-decode).
+    'ImageStreamCompleterHandle',
+    '_LiveImage',
+  ]);
 
   await testMain();
 }

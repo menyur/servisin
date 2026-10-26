@@ -296,21 +296,7 @@ class _BalanceScreenState extends State<BalanceScreen> {
                               const SizedBox(height: 20),
                               _RequestsSection(requests: _requests),
                               const SizedBox(height: 20),
-                              const Text('Riwayat Mutasi',
-                                  style: TextStyle(
-                                      fontSize: 15.5,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.navy)),
-                              const SizedBox(height: 10),
-                              if (tx.isEmpty)
-                                const ScreenStateView(
-                                  loading: false,
-                                  empty: true,
-                                  emptyMessage:
-                                      'Belum ada mutasi.\nTekan tombol Setor di atas untuk mengisi saldo pertamamu.',
-                                )
-                              else
-                                ...tx.map(_TxTile.new),
+                              _RiwayatBulanan(transactions: tx),
                             ],
                           ),
                         ),
@@ -842,46 +828,294 @@ class _RequestTile extends StatelessWidget {
   }
 }
 
-/// Baris satu mutasi saldo: judul sesuai jenis, kode pesanan bila ada,
-/// waktu, dan nominal (+ hijau / − merah, komisi dicatat di bawah judul).
-class _TxTile extends StatelessWidget {
-  final BalanceTransaction tx;
+/// Riwayat mutasi yang DIRANGKUM PER BULAN.
+///
+/// Dulu semua mutasi (hingga 100 baris) ditumpuk sebagai kartu terpisah,
+/// sehingga layar Saldo sangat panjang dan pertanyaan yang paling sering
+/// muncul — "bulan ini komisi + biaya aplikasi saya berapa?" — tidak bisa
+/// dijawab tanpa menggulir dan menjumlah sendiri. Sekarang tiap bulan satu
+/// kartu: ringkasan komisi & biaya aplikasi bulan itu, rinciannya dibuka satu
+/// ketukan. Bulan terbaru terbuka otomatis, sisanya tertutup (halaman tetap
+/// ringkas walau riwayatnya setahun).
+class _RiwayatBulanan extends StatefulWidget {
+  final List<BalanceTransaction> transactions;
 
-  const _TxTile(this.tx);
+  const _RiwayatBulanan({required this.transactions});
 
-  /// Nominal yang menampakkan arah dana: komisi tersimpan negatif
-  /// (saldo dipotong), penyesuaian/refund grafis sesuai tanda amount.
-  String get _amountText => formatRupiah(tx.amount.abs());
+  @override
+  State<_RiwayatBulanan> createState() => _RiwayatBulananState();
+}
 
-  /// Biaya app yang BENAR-BENAR dipotong = sisa potongan setelah komisi.
-  /// Diturunkan dari amount (bukan bookings.app_fee) agar akurat saat
-  /// potongan dibatasi saldo (kebijakan saldo tidak boleh negatif).
-  int get _appFeeCut => tx.amount < 0
-      ? ((-tx.amount).round() - (tx.commissionAmount ?? 0).round())
-      : 0;
+class _RiwayatBulananState extends State<_RiwayatBulanan> {
+  late List<_GrupBulan> _grup;
 
-  Color get _color => tx.income ? AppColors.mint : AppColors.coral;
+  /// Kunci bulan yang sedang terbuka (`tahun * 100 + bulan`).
+  final Set<int> _terbuka = <int>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _susun(bukaTerbaru: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _RiwayatBulanan oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Muat ulang (pull-to-refresh / setelah setor) memasok daftar baru:
+    // kelompokkan ulang, tetapi jangan buka-tutup pilihan pengguna.
+    if (!identical(oldWidget.transactions, widget.transactions)) {
+      _susun(bukaTerbaru: false);
+    }
+  }
+
+  /// Kelompokkan per bulan. Daftar dari server sudah terbaru-dulu, jadi urutan
+  /// kelompok mengikuti urutan kemunculan pertama (tanpa sortir ulang).
+  void _susun({required bool bukaTerbaru}) {
+    final grup = <_GrupBulan>[];
+    final peta = <int, _GrupBulan>{};
+    for (final t in widget.transactions) {
+      final lokal = t.createdAt.toLocal();
+      final kunci = lokal.year * 100 + lokal.month;
+      var g = peta[kunci];
+      if (g == null) {
+        g = _GrupBulan(tahun: lokal.year, bulan: lokal.month);
+        peta[kunci] = g;
+        grup.add(g);
+      }
+      g.items.add(t);
+    }
+    _grup = grup;
+    if (bukaTerbaru && grup.isNotEmpty) _terbuka.add(grup.first.kunci);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final tx = widget.transactions;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('Riwayat Bulanan',
+          style: TextStyle(
+              fontSize: 15.5,
+              fontWeight: FontWeight.w800,
+              color: AppColors.navy)),
+      const SizedBox(height: 4),
+      const Text(
+        'Komisi dan biaya aplikasi dirangkum per bulan — ketuk satu bulan untuk '
+        'melihat rincian mutasinya.',
+        style:
+            TextStyle(fontSize: 11.5, color: AppColors.inkSoft, height: 1.35),
+      ),
+      const SizedBox(height: 10),
+      if (tx.isEmpty)
+        const ScreenStateView(
+          loading: false,
+          empty: true,
+          emptyMessage:
+              'Belum ada mutasi.\nTekan tombol Setor di atas untuk mengisi saldo pertamamu.',
+        )
+      else ...[
+        for (final g in _grup)
+          _KartuBulan(
+            grup: g,
+            terbuka: _terbuka.contains(g.kunci),
+            onTap: () => setState(() {
+              // Satu bulan terbuka/tutup sendiri; bulan lain tidak terganggu.
+              if (!_terbuka.remove(g.kunci)) _terbuka.add(g.kunci);
+            }),
+          ),
+        if (tx.length >= 100)
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Text('Menampilkan 100 mutasi terbaru.',
+                style: TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
+          ),
+      ],
+    ]);
+  }
+}
+
+/// Satu bulan mutasi + angka yang paling dicari: komisi dan biaya aplikasi.
+///
+/// Definisi potongan sengaja SAMA dengan `Api.summarizeBalance` (kartu atas):
+/// komisi dari kolom `commission_amount` (fallback |amount| untuk baris lama),
+/// biaya app = SISA potongan setelah komisi — diturunkan dari potongan RIIL,
+/// bukan `bookings.app_fee`, supaya tetap cocok saat potongan dibatasi saldo.
+class _GrupBulan {
+  final int tahun;
+  final int bulan;
+  final List<BalanceTransaction> items = <BalanceTransaction>[];
+
+  _GrupBulan({required this.tahun, required this.bulan});
+
+  int get kunci => tahun * 100 + bulan;
+
+  String get label => formatBulanTahun(DateTime(tahun, bulan));
+
+  int get komisi {
+    var total = 0;
+    for (final t in items) {
+      if (t.type != 'earning' || t.amount >= 0) continue;
+      total += (t.commissionAmount ?? -t.amount).round();
+    }
+    return total;
+  }
+
+  int get biayaApp {
+    var total = 0;
+    for (final t in items) {
+      if (t.type != 'earning' || t.amount >= 0) continue;
+      final potong = (-t.amount).round();
+      final fee = potong - (t.commissionAmount ?? potong).round();
+      if (fee > 0) total += fee;
+    }
+    return total;
+  }
+
+  int get totalPotongan => komisi + biayaApp;
+}
+
+/// Kartu satu bulan: kepala (ringkasan) + rincian mutasi saat dibuka.
+class _KartuBulan extends StatelessWidget {
+  final _GrupBulan grup;
+  final bool terbuka;
+  final VoidCallback onTap;
+
+  const _KartuBulan({
+    required this.grup,
+    required this.terbuka,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final potongan = grup.totalPotongan;
     return Container(
-      padding: const EdgeInsets.all(12),
       margin: const EdgeInsets.only(bottom: 10),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.line),
       ),
-      child: Row(children: [
-        // Lingkaran ikon berwarna sesuai arah mutasi.
-        Container(
-          width: 34,
-          height: 34,
-          decoration: BoxDecoration(
-            color: tx.income ? AppColors.mintTint : AppColors.coralTint,
-            shape: BoxShape.circle,
+      child: Column(children: [
+        // Material + InkWell supaya ketukan di kepala kartu punya ripple
+        // (Container berwarna akan menutupinya — lihat catatan di _MenuTile
+        // layar Profil).
+        Material(
+          color: Colors.white,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(children: [
+                      Container(
+                        width: 32,
+                        height: 32,
+                        decoration: const BoxDecoration(
+                            color: AppColors.brandTint, shape: BoxShape.circle),
+                        child: const Icon(Icons.calendar_month_rounded,
+                            size: 16, color: AppColors.brand),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(grup.label,
+                            style: const TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w800,
+                                color: AppColors.navy)),
+                      ),
+                      Text(
+                        potongan == 0 ? '—' : '− ${formatRupiah(potongan)}',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: potongan == 0
+                                ? AppColors.inkSoft
+                                : AppColors.coral),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(
+                        terbuka
+                            ? Icons.expand_less_rounded
+                            : Icons.expand_more_rounded,
+                        size: 20,
+                        color: AppColors.inkSoft,
+                      ),
+                    ]),
+                    // Ringkasan potongan selebar kartu (bukan di samping nominal):
+                    // di 390 px "Komisi … · Biaya app …" terpotong bila berbagi
+                    // baris dengan nominal dan chevron.
+                    Padding(
+                      padding: const EdgeInsets.only(left: 42, top: 1),
+                      child: Text(
+                        potongan == 0
+                            ? 'Tidak ada potongan bulan ini · ${grup.items.length} mutasi'
+                            : 'Komisi ${formatRupiah(grup.komisi)} · Biaya app '
+                                '${formatRupiah(grup.biayaApp)} · ${grup.items.length} mutasi',
+                        style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.inkSoft,
+                            height: 1.3),
+                      ),
+                    ),
+                  ]),
+            ),
           ),
-          child: Icon(
+        ),
+        if (terbuka) ...[
+          const Divider(height: 1, thickness: 1, color: AppColors.line),
+          for (var i = 0; i < grup.items.length; i++) ...[
+            if (i > 0)
+              const Divider(height: 1, thickness: 1, color: AppColors.line),
+            _MutasiRow(grup.items[i]),
+          ],
+        ],
+      ]),
+    );
+  }
+}
+
+/// Satu baris mutasi di dalam kelompok bulan: jenis, rincian potongan,
+/// tanggal, dan nominal (+ hijau / − merah).
+class _MutasiRow extends StatelessWidget {
+  final BalanceTransaction tx;
+
+  const _MutasiRow(this.tx);
+
+  /// Potongan riil baris ini (amount DB negatif = saldo berkurang).
+  int get _potong => tx.amount < 0 ? (-tx.amount).round() : 0;
+
+  /// Komisi murni dari kolom; fallback |amount| untuk baris lama.
+  int get _komisi =>
+      tx.amount < 0 ? (tx.commissionAmount ?? -tx.amount).round() : 0;
+
+  /// Biaya app = sisa potongan setelah komisi (bukan bookings.app_fee).
+  int get _biayaApp {
+    final fee = _potong - _komisi;
+    return fee > 0 ? fee : 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final income = tx.income;
+    final warna = income ? AppColors.mint : AppColors.coral;
+    final rincian = [
+      if (tx.bookingCode != null && tx.bookingCode!.isNotEmpty)
+        '#${tx.bookingCode}',
+      if (_komisi > 0) 'komisi ${formatRupiah(_komisi)}',
+      if (tx.type == 'earning' && _biayaApp > 0)
+        'biaya app ${formatRupiah(_biayaApp)}',
+      if (tx.note?.isNotEmpty == true && tx.bookingCode?.isNotEmpty != true)
+        tx.note!,
+    ].join(' · ');
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Icon(
             switch (tx.type) {
               'earning' => Icons.work_history_rounded,
               'withdrawal' => Icons.south_west_rounded,
@@ -889,67 +1123,41 @@ class _TxTile extends StatelessWidget {
               'adjustment' => Icons.tune_rounded,
               _ => Icons.north_east_rounded,
             },
-            size: 16,
-            color: tx.income ? AppColors.mint : AppColors.coral,
+            size: 15,
+            color: warna,
           ),
-        ),
-        const SizedBox(width: 11),
-        Expanded(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(tx.typeLabel,
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(tx.typeLabel,
                 style: const TextStyle(
-                    fontSize: 13,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w700,
                     color: AppColors.navy)),
-            const SizedBox(height: 1),
-            Text(
-              [
-                if (tx.bookingCode != null && tx.bookingCode!.isNotEmpty)
-                  '#${tx.bookingCode}',
-                if (tx.commissionAmount != null && tx.commissionAmount! > 0)
-                  'komisi ${formatRupiah(tx.commissionAmount!)}',
-                if (tx.type == 'earning' && _appFeeCut > 0)
-                  'biaya app ${formatRupiah(_appFeeCut)}',
-                if (tx.note?.isNotEmpty == true &&
-                    tx.bookingCode?.isNotEmpty != true)
-                  tx.note!,
-              ].whereType<String>().join(' · '),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 11.5, color: AppColors.inkSoft),
+          ),
+          const SizedBox(width: 8),
+          Text('${income ? '+' : '−'} ${formatRupiah(tx.amount.abs())}',
+              style: TextStyle(
+                  fontSize: 12.5, fontWeight: FontWeight.w800, color: warna)),
+        ]),
+        // Rincian potongan + tanggal selebar baris: di 390 px ia terpotong
+        // ("biaya app Rp 2…") bila diletakkan di samping nominal.
+        Padding(
+          padding: const EdgeInsets.only(left: 23, top: 1),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Text(
+                rincian.isEmpty ? 'Tanpa rincian' : rincian,
+                style:
+                    const TextStyle(fontSize: 10.5, color: AppColors.inkSoft),
+              ),
             ),
+            const SizedBox(width: 8),
+            Text(formatTanggalBulan(tx.createdAt.toLocal()),
+                style: const TextStyle(fontSize: 10, color: AppColors.inkSoft)),
           ]),
         ),
-        Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text('${tx.income ? '+' : '−'} $_amountText',
-              style: TextStyle(
-                  fontSize: 13, fontWeight: FontWeight.w800, color: _color)),
-          const SizedBox(height: 3),
-          Text(formatDateTx(tx.createdAt),
-              style: const TextStyle(fontSize: 10.5, color: AppColors.inkSoft)),
-        ]),
       ]),
     );
-  }
-
-  /// Tanggal pendek dari DateTime langsung (tanpa ISO-String).
-  String formatDateTx(DateTime d) {
-    final bulan = <String>[
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'Mei',
-      'Jun',
-      'Jul',
-      'Agu',
-      'Sep',
-      'Okt',
-      'Nov',
-      'Des',
-    ];
-    return '${d.day} ${bulan[d.month - 1]} ${d.year}';
   }
 }
 

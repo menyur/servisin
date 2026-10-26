@@ -186,7 +186,10 @@ class _DepositScreenState extends State<DepositScreen> {
   Widget _formViewBody() {
     final acc = _account;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+      // Bilah navigasi sistem (Android 15+ edge-to-edge) ditambahkan di bawah
+      // supaya tombol "Kirim pengajuan setor" + catatan statusnya tidak
+      // tertutup.
+      padding: EdgeInsets.fromLTRB(16, 16, 16, jarakBawahSistem(context, 28)),
       children: [
         Container(
           padding: const EdgeInsets.all(13),

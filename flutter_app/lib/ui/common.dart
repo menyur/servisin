@@ -843,6 +843,23 @@ final ValueNotifier<int> unseenBalanceNotices = ValueNotifier<int>(0);
 /// event realtime pesanan/laporan; turun ke 0 saat kotak masuk dibuka.
 final ValueNotifier<int> unseenInboxUpdates = ValueNotifier<int>(0);
 
+/// Jarak bawah aman terhadap bilah navigasi sistem (gestur / 3 tombol).
+///
+/// Sejak Android 15/16 memaksa edge-to-edge (targetSdk 36), badan `Scaffold`
+/// digambar sampai tepi bawah layar dan tinggi bilah navigasi hanya tersedia
+/// sebagai `MediaQuery.viewPadding.bottom` — tidak dipotong otomatis. Daftar
+/// gulir berpadding tetap (mis. 16/28/32 px) lalu menaruh tombol terakhirnya di
+/// DALAM area bilah itu, sehingga ketukan pengguna jatuh ke tombol sistem.
+///
+/// Pakai pada daftar/scroll yang ujungnya berisi tombol aksi:
+/// ```dart
+/// padding: EdgeInsets.fromLTRB(16, 16, 16, jarakBawahSistem(context, 16)),
+/// ```
+/// Di perangkat yang belum edge-to-edge nilainya 0, jadi tampilan lama tidak
+/// berubah.
+double jarakBawahSistem(BuildContext context, [double jarak = 0]) =>
+    MediaQuery.viewPaddingOf(context).bottom + jarak;
+
 /// Jumlah pekerjaan tersedia SAAT INI untuk teknisi (badge di ikon tab
 /// Pekerjaan). Berbeda dengan dua badge di atas yang menghitung *kejadian
 /// belum dilihat*, angka ini adalah total yang sedang menunggu diambil —
@@ -910,7 +927,14 @@ void handleReportUpdate(
 /// SnackBar notifikasi dan menyiarkan tick ke layar terkait.
 class MainShell extends StatefulWidget {
   final int initialIndex;
-  const MainShell({super.key, this.initialIndex = 0});
+
+  /// Seam uji: apakah sesi masih ada (default `Api.isLoggedIn`).
+  ///
+  /// Dipakai tes untuk membuktikan shell TANPA sesi langsung dikembalikan ke
+  /// layar masuk — tanpa perlu memasang Supabase di lingkungan tes.
+  final bool Function()? sesiAda;
+
+  const MainShell({super.key, this.initialIndex = 0, this.sesiAda});
 
   @override
   State<MainShell> createState() => _MainShellState();
@@ -938,6 +962,22 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   /// menampilkan layar penjelasan, bukan aplikasi yang tampak normal.
   /// (docs/security.md §8.3)
   bool _sesiTanpaProfil = false;
+
+  /// TIDAK ADA sesi sama sekali (bukan sekadar profilnya hilang).
+  ///
+  /// Shell tidak boleh dirender dalam keadaan ini. Rute '/' bisa dibuka tanpa
+  /// sesi — riwayat browser setelah keluar, tombol back dari layar masuk, atau
+  /// sesi yang kedaluwarsa saat app di background — dan menu yang tampil akan
+  /// menyapa "Kawan", menampilkan tab kosong, serta mengirim permintaan yang
+  /// pasti ditolak server. Karena itu pengguna dikembalikan ke layar masuk dan
+  /// tumpukan rute dibersihkan (lihat [_sesiBerakhir]).
+  bool _tanpaSesi = false;
+
+  /// Pengalihan ke '/login' hanya dijadwalkan sekali.
+  bool _sudahArahkanLogin = false;
+
+  /// Apakah sesi ada — lewat seam uji bila diberikan.
+  bool get _adaSesi => widget.sesiAda?.call() ?? Api.isLoggedIn;
 
   /// Ketukan notifikasi yang sudah diterapkan shell INI. Mencegah listener
   /// yang sama menerapkannya berulang, tanpa menghalangi shell baru.
@@ -1011,6 +1051,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // Tanpa sesi tidak ada yang boleh dipasang: realtime, timer, dan hitungan
+    // badge semuanya butuh user id. Langsung kembalikan ke layar masuk.
+    if (!_adaSesi) {
+      _sesiBerakhir();
+      return;
+    }
     // Angka badge disegarkan saat app kembali ke depan layar: notifikasi yang
     // tiba selagi app tidak aktif tidak melewati websocket.
     WidgetsBinding.instance.addObserver(this);
@@ -1057,10 +1103,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       if (!mounted) return;
       if (p == null) {
         // null = baris profilnya memang tidak ada (bukan kegagalan jaringan:
-        // yang itu masuk ke catch di bawah). Yang dijaga di sini adalah SESI:
-        // tanpa sesi (mis. shell dibuka karena kesalahan alur) tidak ada
-        // identitas yang hilang, jadi halaman dibiarkan seperti biasa.
-        if (Api.session == null) return;
+        // yang itu masuk ke catch di bawah). Bila ternyata SESINYA yang tidak
+        // ada (mis. kedaluwarsa setelah shell terpasang), menu tidak boleh
+        // dibiarkan tampil — peran kosong, sapaan jatuh ke "Kawan".
+        if (!_adaSesi) {
+          _sesiBerakhir();
+          return;
+        }
         if (!_sesiTanpaProfil) setState(() => _sesiTanpaProfil = true);
         return;
       }
@@ -1210,6 +1259,12 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
+    // Sesi bisa hilang selagi app di background (refresh token ditolak /
+    // dikeluarkan dari perangkat lain). Jangan lanjut menyegarkan badge.
+    if (!_adaSesi) {
+      _sesiBerakhir();
+      return;
+    }
     final uid = Api.session?.user.id;
     if (uid != null) unawaited(_refreshReportBadge(uid));
     // Chat yang masuk saat app di background/mati tidak melewati listener FCM
@@ -1396,8 +1451,37 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     _select(reportsTabIndex(_isTechnician));
   }
 
+  /// Keluarkan pengguna dari shell karena sesinya tidak ada (lagi).
+  ///
+  /// Dua langkah, keduanya penting:
+  ///   1. `_tanpaSesi` — build berikutnya TIDAK menggambar menu/tab, sehingga
+  ///      tidak ada jeda di mana menu tanpa identitas terlihat atau bisa
+  ///      disentuh (menu itulah yang dulu menyapa "Kawan").
+  ///   2. `pushNamedAndRemoveUntil('/login')` — membersihkan SELURUH tumpukan.
+  ///      Ini inti keluhannya: bila shell hanya ditumpuk di bawah layar masuk,
+  ///      tombol back mengembalikan pengguna ke menu walau ia belum (atau tidak
+  ///      lagi) punya akses.
+  void _sesiBerakhir() {
+    if (!mounted) return;
+    if (!_tanpaSesi) setState(() => _tanpaSesi = true);
+    if (_sudahArahkanLogin) return;
+    _sudahArahkanLogin = true;
+    // Post-frame: initState tidak boleh menavigasi selagi kerangka pertama
+    // belum selesai dipasang (Navigator belum punya halaman untuk diganti).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.maybeOf(context)
+          ?.pushNamedAndRemoveUntil('/login', (r) => false);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Tanpa sesi: jangan pernah menggambar menu. Layar ringkas ini hanya
+    // bertahan sekejap sampai [_sesiBerakhir] memindahkan pengguna ke '/login'
+    // (dan membersihkan tumpukan rute, sehingga tombol back tidak bisa kembali
+    // ke menu).
+    if (_tanpaSesi) return const _SesiBerakhirScreen();
     // Sesi tanpa profil = sesi tidak sah. Ditampilkan sebagai layar penjelasan
     // (bukan Beranda yang menyapa "Kawan") supaya pengguna tahu harus apa, dan
     // supaya tidak ada pekerjaan/pesanan yang dibuat atas nama identitas kosong.
@@ -1432,6 +1516,57 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         currentIndex: _index,
         onTabSelected: _select,
         isTechnician: _isTechnician,
+      ),
+    );
+  }
+}
+
+/// Layar sekejap saat shell menemukan bahwa sesinya sudah tidak ada.
+///
+/// Bukan halaman tujuan: pengguna langsung dipindahkan ke '/login' oleh
+/// `_MainShellState._sesiBerakhir`. Tombol manual disediakan untuk keadaan
+/// langka saat navigasi otomatis tidak sempat berjalan (mis. rute '/login'
+/// tidak terdaftar karena app dibuka lewat jalur tak terduga).
+class _SesiBerakhirScreen extends StatelessWidget {
+  const _SesiBerakhirScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.paper,
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.4),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Sesi tidak ditemukan',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Kamu diarahkan kembali ke halaman masuk. Aplikasi hanya bisa '
+                'dipakai setelah masuk.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: AppColors.inkSoft, fontSize: 12.5, height: 1.45),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () => Navigator.of(context)
+                    .pushNamedAndRemoveUntil('/login', (r) => false),
+                child: const Text('Masuk sekarang'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -155,7 +155,7 @@ void main() {
       expect(find.text('Kinerja Saya'), findsNothing);
       expect(diminta, isEmpty,
           reason: 'pelanggan tidak punya kartu skor — jangan sampai ada query');
-      expect(find.text('Ubah Data Diri'), findsOneWidget);
+      expect(find.text('Data Diri'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

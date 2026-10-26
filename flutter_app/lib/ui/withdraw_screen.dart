@@ -243,7 +243,9 @@ class _WithdrawScreenState extends State<WithdrawScreen> {
 
   Widget _formView() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+      // Bilah navigasi sistem (Android 15+ edge-to-edge) ditambahkan di bawah
+      // supaya tombol "Ajukan penarikan" + catatan statusnya tidak tertutup.
+      padding: EdgeInsets.fromLTRB(16, 16, 16, jarakBawahSistem(context, 28)),
       children: [
         Container(
           padding: const EdgeInsets.all(13),

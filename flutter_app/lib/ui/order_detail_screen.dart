@@ -1988,7 +1988,10 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        // Bawah: 16 px desain + tinggi bilah navigasi sistem. Tanpa inset ini
+        // tombol aksi terakhir (Ubah Jadwal/Batalkan, Mulai/Selesai, Laporkan)
+        // tertutup bilah gestur/3 tombol di Android 15+ (edge-to-edge).
+        padding: EdgeInsets.fromLTRB(16, 16, 16, jarakBawahSistem(context, 16)),
         children: [
           // pipeline status + timeline stempel waktu
           Container(

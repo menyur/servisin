@@ -10,7 +10,6 @@ import 'format.dart';
 import 'models.dart';
 import 'theme.dart';
 import 'trip_share.dart';
-import 'ui/home_screen.dart';
 import 'ui/login_screen.dart';
 import 'ui/register_screen.dart';
 import 'ui/technician_register_screen.dart';
@@ -309,9 +308,9 @@ class _FixifyAppState extends State<FixifyApp> {
       routes: {
         '/splash': (_) => SplashScreen(
             startOnboarding: widget.startOnboarding, isLoggedIn: isLoggedIn),
-        // '/' = shell 5 tab (Beranda/Pesanan/Laporan/Voucher/Profil)
-        // dengan transisi fade+slide antar tab.
-        '/': (_) => const MainShell(),
+        // '/' = shell 5 tab (Beranda/Pesanan/Laporan/Voucher/Profil) dengan
+        // transisi fade+slide antar tab — HANYA bila ada sesi. Lihat [AuthGate].
+        '/': (_) => const AuthGate(),
         '/onboarding': (_) => const OnboardingScreen(),
         '/login': (_) => const LoginScreen(),
         '/register': (_) => const RegisterScreen(),
@@ -329,7 +328,8 @@ class _FixifyAppState extends State<FixifyApp> {
         }
         if (settings.name == '/order-detail') {
           final booking = settings.arguments as Booking;
-          return MaterialPageRoute(builder: (_) => OrderDetailScreen(booking: booking));
+          return MaterialPageRoute(
+              builder: (_) => OrderDetailScreen(booking: booking));
         }
         // Notifikasi chat: detail pesanan + percakapan langsung di atasnya.
         if (settings.name == '/order-detail-chat') {
@@ -369,7 +369,9 @@ class _FixifyAppState extends State<FixifyApp> {
         // Deep link: /booking?service=<id> — buka wizard langsung dari URL
         // (dipakai uji & nanti push notification "pesanan layanan X").
         final uri = Uri.tryParse(settings.name ?? '');
-        if (uri != null && uri.path == '/booking' && uri.queryParameters['service'] != null) {
+        if (uri != null &&
+            uri.path == '/booking' &&
+            uri.queryParameters['service'] != null) {
           final serviceId = uri.queryParameters['service']!;
           return MaterialPageRoute(
             builder: (_) => _BookingDeepLinkRoute(serviceId: serviceId),
@@ -382,13 +384,30 @@ class _FixifyAppState extends State<FixifyApp> {
   }
 }
 
-/// Fallback bila route '/' dibuka tanpa sesi (mis. sesi kedaluwarsa).
+/// Gerbang rute '/': shell tab HANYA untuk sesi yang sah.
+///
+/// Rute '/' bisa dibuka tanpa sesi — tombol back/browser history dari layar
+/// masuk, tautan yang menunjuk '/', atau sesi yang berakhir selagi app
+/// berjalan. Tanpa gerbang ini shell merender menu tab kosong yang menyapa
+/// "Kawan" meski pengguna belum (atau sudah tidak) punya akses masuk. Shell
+/// sendiri juga berjaga (`MainShell._sesiBerakhir`) untuk sesi yang hilang
+/// setelah halaman ini terpasang.
 class AuthGate extends StatelessWidget {
-  const AuthGate({super.key});
+  /// Seam uji: apakah sesi ada (default `Api.isLoggedIn`).
+  final bool Function()? sesiAda;
+
+  /// Seam uji: layar pengganti saat tidak ada sesi (default [LoginScreen]).
+  ///
+  /// LoginScreen memuat tombol Google yang memanggil `Supabase.instance` saat
+  /// dibangun, sedangkan lingkungan widget test tidak memasang Supabase.
+  final Widget? layarTanpaSesi;
+
+  const AuthGate({super.key, this.sesiAda, this.layarTanpaSesi});
 
   @override
-  Widget build(BuildContext context) =>
-      Api.isLoggedIn ? const HomeScreen() : const LoginScreen();
+  Widget build(BuildContext context) => (sesiAda?.call() ?? Api.isLoggedIn)
+      ? const MainShell()
+      : (layarTanpaSesi ?? const LoginScreen());
 }
 
 /// Route deep-link wizard booking (dipakai uji & nanti push notification).
@@ -438,13 +457,16 @@ class _BookingDeepLinkRouteState extends State<_BookingDeepLinkRoute> {
   Widget build(BuildContext context) {
     if (!Api.isLoggedIn) {
       return const Scaffold(
-          body: Center(child: Text('Masuk dulu untuk memesan.', style: TextStyle(color: AppColors.inkSoft))));
+          body: Center(
+              child: Text('Masuk dulu untuk memesan.',
+                  style: TextStyle(color: AppColors.inkSoft))));
     }
     if (_service == null) {
       return Scaffold(
         body: Center(
           child: _resolved
-              ? const Text('Layanan tidak ditemukan.', style: TextStyle(color: AppColors.inkSoft))
+              ? const Text('Layanan tidak ditemukan.',
+                  style: TextStyle(color: AppColors.inkSoft))
               : const CircularProgressIndicator(),
         ),
       );
@@ -454,7 +476,8 @@ class _BookingDeepLinkRouteState extends State<_BookingDeepLinkRoute> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         Navigator.of(context).push(MaterialPageRoute(
-          builder: (_) => BookingWizard(args: BookingArgs(service: _service!, heroEnabled: false)),
+          builder: (_) => BookingWizard(
+              args: BookingArgs(service: _service!, heroEnabled: false)),
         ));
       });
     }

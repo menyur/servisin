@@ -151,11 +151,17 @@ class GradientButton extends StatelessWidget {
                   Icon(icon, size: 20, color: Colors.white),
                   const SizedBox(width: 8),
                 ],
-                Text(label,
-                    style: const TextStyle(
-                        fontSize: 15.5,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white)),
+                // Flexible: label panjang ("Simpan Perubahan") + ikon bisa
+                // melebihi lebar tombol di layar 320 px atau saat ukuran teks
+                // sistem diperbesar. Tanpa ini label meluber, bukan membungkus.
+                Flexible(
+                  child: Text(label,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white)),
+                ),
               ]),
       ),
     );

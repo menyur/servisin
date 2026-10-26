@@ -860,7 +860,10 @@ class _BookingWizardState extends State<BookingWizard> {
       // wizard dirender sebagai route pertama (deep link): internals-nya
       // melempar constraint lebar tak terbatas ke tombol controls.
       body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        // Bawah: 32 px desain + tinggi bilah navigasi sistem — tombol
+        // "Lanjut"/"Buat Pesanan" ada di ujung gulir dan bisa tertutup bilah
+        // gestur/3 tombol di Android 15+ (edge-to-edge).
+        padding: EdgeInsets.fromLTRB(16, 16, 16, jarakBawahSistem(context, 32)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

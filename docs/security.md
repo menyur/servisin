@@ -296,6 +296,22 @@ dijaga uji offline (`npm run verify:akun-aman-offline`):
    pengunjung tanpa akun memang tidak boleh dipaksa punya profil.
 3. **Database:** trigger idempoten + tambalan ([fix-profil-hilang.sql](../supabase/fix-profil-hilang.sql)).
 
+**Tambahan 26 Okt 2026 — TANPA sesi sama sekali.** Kasus berbeda dari di atas:
+bukan "sesi tanpa profil", tetapi tidak ada sesi sama sekali. Rute `'/'` dulu
+langsung memasang `MainShell`, sehingga pengunjung yang belum masuk bisa melihat
+menu tab lengkap (disapa `'Kawan'` karena peran tak terbaca) — termasuk lewat
+tombol back/riwayat browser dari layar masuk. Sekarang penjaganya dua lapis:
+
+1. **Gerbang rute** — `'/'` memakai `AuthGate` ([main.dart](../flutter_app/lib/main.dart)):
+tanpa sesi hasilnya layar masuk, bukan shell.
+2. **Shell berhenti sendiri** — `MainShell` tidak memasang realtime/timer bila
+   sesinya tidak ada, lalu mengembalikan pengguna ke `/login` dengan
+   `pushNamedAndRemoveUntil` sehingga **tumpukan rute dibersihkan** (back tidak
+   bisa kembali ke menu). Berlaku juga saat sesi hilang setelah shell terpasang
+   (token ditolak, keluar dari perangkat lain) — diperiksa saat resume.
+
+Dijaga `flutter test` ([shell_session_guard_test.dart](../flutter_app/test/shell_session_guard_test.dart)).
+
 ### 8.4 Pendaftaran dengan surel yang sama
 
 Surel akun yang sudah dihapus **memang langsung bebas dipakai lagi** — itu akibat

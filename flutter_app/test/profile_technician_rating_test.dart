@@ -62,7 +62,7 @@ void main() {
       final rectPill = tester.getRect(find.byType(TechRatingPill));
       final pill = rectPill.center.dy;
       expect(pill, greaterThan(tester.getCenter(find.text('Andi Teknisi').first).dy));
-      expect(pill, lessThan(tester.getCenter(find.text('Ubah Data Diri')).dy));
+      expect(pill, lessThan(tester.getCenter(find.text('Data Diri')).dy));
 
       // Kartu form mengapung 24 px ke atas. Lencana harus benar-benar terlihat:
       // dulu dibungkus Transform.translate kedua (-46 px) sehingga tertutup
@@ -98,7 +98,7 @@ void main() {
       expect(find.byType(TechRatingPill), findsNothing,
           reason: 'kegagalan baca bukan bukti "belum ada rating"');
       expect(find.text('Belum ada rating'), findsNothing);
-      expect(find.text('Ubah Data Diri'), findsOneWidget);
+      expect(find.text('Data Diri'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -132,7 +132,7 @@ void main() {
       );
 
       expect(find.byType(TechRatingPill), findsNothing);
-      expect(find.text('Ubah Data Diri'), findsOneWidget);
+      expect(find.text('Data Diri'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });

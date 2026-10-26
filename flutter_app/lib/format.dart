@@ -15,7 +15,8 @@ Future<void> ensureLocaleData() async {
   _initialized = true;
 }
 
-final _rupiah = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+final _rupiah =
+    NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 final _dateId = DateFormat('EEEE, d MMM yyyy', 'id_ID');
 final _shortId = DateFormat('d MMM yyyy', 'id_ID');
 
@@ -54,8 +55,7 @@ String formatDateShort(String isoDate) {
   return _shortId.format(d);
 }
 
-String _fallbackDate(DateTime d) =>
-    '${d.day} ${_bulan[d.month - 1]} ${d.year}';
+String _fallbackDate(DateTime d) => '${d.day} ${_bulan[d.month - 1]} ${d.year}';
 
 /// Tanggal + jam (waktu lokal perangkat) untuk stempel timeline status:
 /// "6 Okt 2026 · 14:05". Tidak butuh data locale — aman dipanggil kapan pun.
@@ -67,6 +67,42 @@ String formatDateTimeId(DateTime d) {
 }
 
 const _bulan = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
-  'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'Mei',
+  'Jun',
+  'Jul',
+  'Agu',
+  'Sep',
+  'Okt',
+  'Nov',
+  'Des',
 ];
+
+const _bulanPanjang = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
+/// Nama bulan + tahun untuk pengelompokan riwayat: "Oktober 2026".
+///
+/// Tidak butuh data locale (seperti [formatDateTimeId]) supaya judul kelompok
+/// tetap benar saat layar dibuka sebelum locale termuat (cold start/deep link).
+String formatBulanTahun(DateTime d) =>
+    '${_bulanPanjang[d.month - 1]} ${d.year}';
+
+/// Tanggal pendek TANPA tahun — dipakai di dalam kelompok bulan yang tahunnya
+/// sudah tertulis di judul: "12 Okt".
+String formatTanggalBulan(DateTime d) => '${d.day} ${_bulan[d.month - 1]}';
