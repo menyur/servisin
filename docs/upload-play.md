@@ -90,14 +90,14 @@ Referensi: [Configure the app module](https://developer.android.com/build/config
 
 | Berkas | Lokasi | Ukuran | SHA-256 |
 |---|---|---|---|
-| **AAB siap unggah — build 43** | Release `aab-latest` → `fixify-1.4.0.43.aab` (juga artifact CI `play-aab-43`) | 57.201.842 byte (54,6 MiB) | `dc27ea68b4dc82e232601d806969cf9b5df708c967bcc11b6952ade50528860d` |
-| AAB build 42 (**arsip — jangan diunggah**) | artifact CI lama / `~/Downloads/fixify-1.4.0.42.aab` | 56.362.503 byte | `d6edb267…f75ce28` |
-| APK arm64 | GitHub Release tag `apk-latest` | 20,9 MB | `ef843ce0…be98d1` (lihat `public/apk/manifest.json`) |
-| APK armv7a | GitHub Release tag `apk-latest` | 18,4 MB | `a6663db8…242116` |
+| **AAB siap unggah — build 44** | Release `aab-latest` → `fixify-1.4.0.44.aab` (juga artifact CI `play-aab-44`) | 57.255.166 byte (54,6 MiB) | `0ea7d8e4a8881b79bd309adc1a85bbc7c99ac9523d2cb89332c0ae37e6b322b3` |
+| AAB build 43 (**arsip — jangan diunggah**) | Release `aab-latest` → `fixify-1.4.0.43.aab` | 57.201.842 byte | `dc27ea68…8860d` |
+| APK arm64 | GitHub Release tag `apk-latest` | 21.871.320 byte (20,9 MB) | `40e7b318…e09c180` (lihat `public/apk/manifest.json`) |
+| APK armv7a | GitHub Release tag `apk-latest` | 19.329.188 byte (18,4 MB) | `f7aec573…ab36ed` |
 
-Versi AAB yang siap unggah: **versionName `1.4.0.43` · versionCode 43**, paket
+Versi AAB yang siap unggah: **versionName `1.4.0.44` · versionCode 44**, paket
 `id.fixify.app`, ditandatangani upload key (`AB:AE:3B:…:32:68`, subjek `CN=Fixify`).
-Bukti per-build (26 Okt 2026 00:03 UTC): manifes di dalam AAB memuat `1.4.0.43` dan
+Bukti per-build (26 Okt 2026 11:58 UTC): manifes di dalam AAB memuat `1.4.0.44` dan
 hanya otoritas `id.fixify.app.*` (tanpa `com.fixify.app`), entri `META-INF/FIXIFY-R.RSA`
 ada, sertifikat `Fixify`/`Mobile` (bukan kunci debug), dan `npm run verify:play` lulus
 penuh di dalam workflow yang menerbitkannya.
@@ -106,11 +106,11 @@ penuh di dalam workflow yang menerbitkannya.
 > berguna untuk uji internal lewat *Internal app sharing*. Folder build sengaja menyimpan
 > keduanya; yang diunggah adalah `app-release.aab` (gate mencetak berkas mana yang dipakai).
 
-**Sebelum mengunggah, cocokkan checksum** — memastikan yang diunggah benar build 43:
+**Sebelum mengunggah, cocokkan checksum** — memastikan yang diunggah benar build 44:
 
 ```bash
-sha256sum ~/Downloads/fixify-1.4.0.43.aab
-# harus: dc27ea68b4dc82e232601d806969cf9b5df708c967bcc11b6952ade50528860d
+sha256sum ~/Downloads/fixify-1.4.0.44.aab
+# harus: 0ea7d8e4a8881b79bd309adc1a85bbc7c99ac9523d2cb89332c0ae37e6b322b3
 ```
 
 ### 1.1 Mengunduh AAB build terbaru (tanpa login GitHub)
@@ -121,9 +121,9 @@ build dibaca dari [public/apk/manifest.json](../public/apk/manifest.json), bukan
 ulang, jadi tidak ada APK 43 vs AAB 44 dan nomor versi tidak terpakai sia-sia.
 
 ```bash
-curl -L -o fixify-1.4.0.43.aab \
-  https://github.com/menyur/servisin/releases/download/aab-latest/fixify-1.4.0.43.aab
-sha256sum fixify-1.4.0.43.aab   # harus dc27ea68…8860d (sama dengan ringkasan job)
+curl -L -o fixify-1.4.0.44.aab \
+  https://github.com/menyur/servisin/releases/download/aab-latest/fixify-1.4.0.44.aab
+sha256sum fixify-1.4.0.44.aab   # harus 0ea7d8e4…b322b3 (sama dengan ringkasan job)
 ```
 
 Workflow itu juga menyimpan artifact `play-aab-<versionCode>` (butuh login GitHub) dan
