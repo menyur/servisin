@@ -32,6 +32,29 @@ export function skillMatchesCategory(skill, categoryId, categoryName) {
 }
 
 /**
+ * Nama bidang yang bisa dibaca manusia dari `profiles.skill`.
+ *
+ * Nilai kanonik kolom itu adalah `categories.id` (mis. "ac"), sehingga panel
+ * admin yang menampilkan nilai mentahnya hanya memperlihatkan kode yang tidak
+ * berarti apa-apa bagi admin. Fungsi ini menerjemahkannya ke `categories.name`;
+ * nilai lama berbentuk label ("Service AC") tetap tampil apa adanya karena sudah
+ * terbaca — lihat `skillMatchesCategory` untuk alasan dua bentuk itu diterima.
+ *
+ * @param {string|null} skill nilai `profiles.skill`
+ * @param {Array<{id: string, name: string}>} categories daftar kategori layanan
+ * @returns {string} nama bidang, atau "" bila belum diisi
+ */
+export function bidangLabel(skill, categories = []) {
+  const s = normalizeCategoryToken(skill);
+  if (!s) return "";
+  const list = Array.isArray(categories) ? categories : [];
+  const ketemu = list.find(
+    (c) => normalizeCategoryToken(c?.id) === s || normalizeCategoryToken(c?.name) === s
+  );
+  return String(ketemu?.name ?? skill).trim();
+}
+
+/**
  * Apakah area kerja teknisi cocok dengan alamat sebuah pesanan?
  *
  * Aturan (paritas dengan filter klien Flutter, lihat jobs_screen.dart):

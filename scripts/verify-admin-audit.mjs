@@ -195,6 +195,7 @@ const wajib = [
   ["hapus akun", "execute_account_deletion"],
   ["keahlian/area teknisi", "update_technician_skill_area"],
   ["cuti teknisi", "create_technician_leave"],
+  ["data kontak pelanggan", "update_customer_profile"],
 ];
 for (const [nama, aksi] of wajib) {
   cek(
@@ -212,6 +213,55 @@ cek(
   "pencarian audit membuang karakter filter PostgREST",
   /replace\(\/\[,\(\)\]\/g/.test(actions),
   "koma/kurung di kata kunci bisa mengubah bentuk kueri .or()"
+);
+
+// Tab "Pelanggan" kini bisa MENGUBAH nama/telepon/alamat. Yang dijaga: aksinya
+// menolak baris bukan pelanggan (alamat teknisi tidak boleh tertimpa alamat
+// pelanggan) dan panel benar-benar memakai aksi itu, bukan menulis langsung.
+const tabPelanggan = baca("src/components/CustomerProfilesTab.js");
+cek(
+  "tab Pelanggan memakai aksi admin untuk menyimpan, bukan update langsung",
+  /updateCustomerProfileAdmin\(/.test(tabPelanggan),
+  "tanpa aksi server, perubahan tidak melewati pemeriksaan peran & jejak audit"
+);
+cek(
+  "aksi hanya mengubah baris berperan customer",
+  /lama\.role !== "customer"/.test(actions),
+  "profil teknisi punya tab sendiri; mencampurnya bisa menimpa data kurasinya"
+);
+
+// ---- Validasi data kontak pelanggan (murni, tanpa sesi admin) ----
+const { validasiProfilPelanggan } = await import("../src/lib/customer-profile.js");
+cek(
+  "nama kosong ditolak, spasi saja juga",
+  !validasiProfilPelanggan({ name: "   " }).ok &&
+    !validasiProfilPelanggan({}).ok,
+  "pesanan tanpa identitas tidak boleh lahir dari panel admin"
+);
+cek(
+  "telepon & alamat kosong disimpan sebagai NULL",
+  (() => {
+    const r = validasiProfilPelanggan({ name: "Budi", phone: "  ", address: "" });
+    return r.ok && r.nilai.phone === null && r.nilai.address === null;
+  })(),
+  "string kosong membuat pemeriksaan 'belum diisi' di aplikasi tidak konsisten"
+);
+cek(
+  "format HP yang wajar diterima (spasi, strip, +62)",
+  validasiProfilPelanggan({ name: "Budi", phone: "0812-3456-7890" }).ok &&
+    validasiProfilPelanggan({ name: "Budi", phone: "+62 812 3456 7890" }).ok,
+  "pelanggan menulis nomornya dengan berbagai cara"
+);
+cek(
+  "HP berisi huruf ditolak",
+  !validasiProfilPelanggan({ name: "Budi", phone: "0812-abc-def" }).ok,
+  "nomor salah membuat teknisi tidak bisa menghubungi pelanggan"
+);
+cek(
+  "alamat > 300 karakter ditolak (batas RPC buku alamat)",
+  !validasiProfilPelanggan({ name: "Budi", address: "x".repeat(301) }).ok &&
+    validasiProfilPelanggan({ name: "Budi", address: "x".repeat(300) }).ok,
+  "alamat yang tidak bisa disimpan buku alamat berarti datanya terpecah dua"
 );
 
 const tab = baca("src/components/AdminAuditLogTab.js");

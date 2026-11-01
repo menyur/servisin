@@ -53,6 +53,7 @@ import {
   lupakanRiwayatPendaftaran,
   metadataPendaftaran,
   sisaJedaIp,
+  sinkronkanProfil,
   tujuanVerifikasi,
 } from "../src/lib/signup-verification.js";
 import {
@@ -540,6 +541,101 @@ console.log("-".repeat(72));
     email: "<script>alert(1)</script>@x.id",
   });
   cek("alamat di-escape di HTML", !jahat.includes("<script>alert(1)</script>"));
+}
+
+// ============================================================================
+// B1b — data pendaftaran benar-benar masuk ke `profiles`
+//       (admin tiruan yang punya `from()`, tanpa jaringan)
+// ============================================================================
+console.log("");
+console.log("B1b Data pendaftaran tersimpan ke profil");
+console.log("-".repeat(72));
+
+/** Admin tiruan berisi tabel profiles: `baris` = isi awal, mencatat update. */
+function adminProfilTiruan(baris = null) {
+  const update = [];
+  const klien = {
+    auth: {
+      admin: {
+        generateLink: async () => ({
+          data: { user: { id: "uid-uji" }, properties: { action_link: LINK_BAIK } },
+          error: null,
+        }),
+      },
+    },
+    from(tabel) {
+      if (tabel !== "profiles") throw new Error(`tabel tak terduga: ${tabel}`);
+      return {
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: baris, error: null }) }),
+        }),
+        update: (patch) => ({
+          eq: async () => {
+            update.push(patch);
+            return { error: null };
+          },
+        }),
+      };
+    },
+  };
+  return { klien, update };
+}
+
+{
+  // Trigger versi lama menghasilkan baris profil tanpa alamat/keahlian/KTP.
+  const { klien, update } = adminProfilTiruan({
+    name: "Tono",
+    phone: "0812",
+    address: null,
+    skill: null,
+    ktp_url: null,
+  });
+  lupakanRiwayatPendaftaran();
+  const mailer = mailerTiruan();
+  const hasil = await kirimVerifikasiPendaftaran({
+    email: "tono@example.com",
+    password: SANDI,
+    data: metadataPendaftaran({
+      name: "Tono",
+      phone: "0812",
+      address: "Jl. Melati 5, Kota Serang",
+      role: "technician",
+      skill: "kebersihan",
+      ktpUrl: "pendaftaran/ktp.jpg",
+    }),
+    redirectTo: "fixify://confirm",
+    admin: klien,
+    kirimEmail: mailer.kirim,
+  });
+  const patch = update[0] || {};
+  cek("pendaftaran teknisi: profil diisi alamat/keahlian/KTP", hasil.profilPendaftaran === "diisi", JSON.stringify(hasil));
+  cek("alamat pendaftar tersimpan", patch.address === "Jl. Melati 5, Kota Serang", JSON.stringify(patch));
+  cek("keahlian pendaftar tersimpan", patch.skill === "kebersihan", JSON.stringify(patch));
+  cek("path foto KTP tersimpan", patch.ktp_url === "pendaftaran/ktp.jpg", JSON.stringify(patch));
+  cek("nama/telepon yang sudah ada tidak ditulis ulang", !("name" in patch) && !("phone" in patch));
+}
+
+{
+  // Nilai yang SUDAH ada (hasil koreksi admin) tidak boleh ditimpa.
+  const { klien, update } = adminProfilTiruan({
+    name: "Tono",
+    phone: "0812",
+    address: "Serang",
+    skill: "ac",
+    ktp_url: "pendaftaran/lama.jpg",
+  });
+  const sinkron = await sinkronkanProfil({
+    admin: klien,
+    userId: "uid-uji",
+    data: { address: "Cilegon", skill: "tukang", ktp_url: "pendaftaran/baru.jpg" },
+  });
+  cek("profil lengkap → tidak ada update", sinkron.ok === true && sinkron.diubah === false && update.length === 0);
+}
+
+{
+  // Klien tanpa `from()` (tiruan uji lama) tidak boleh menggagalkan pendaftaran.
+  const sinkron = await sinkronkanProfil({ admin: adminTiruan(), userId: "uid-uji", data: { address: "x" } });
+  cek("klien tanpa from() dilewati, bukan melempar", sinkron.ok === false && sinkron.alasan === "tanpa_klien");
 }
 
 // ============================================================================

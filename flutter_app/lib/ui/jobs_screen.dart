@@ -16,6 +16,7 @@ import 'inbox_screen.dart';
 import 'mini_pin_map.dart';
 import 'order_detail_screen.dart';
 import 'pin_preview_sheet.dart';
+import 'release_history_screen.dart';
 
 /// Tab "Pekerjaan" untuk teknisi:
 /// - **Tersedia** — pesanan sudah dibayar & belum diambil siapa pun,
@@ -384,13 +385,20 @@ class _JobsScreenState extends State<JobsScreen> {
 
     setState(() => _claimingId = job.id);
     try {
-      final r = await Api.claimJob(job.id);
+      final r = await Api.claimJob(job.id, lat: _myLat, lng: _myLng);
       if (!mounted) return;
       if (r.ok) {
         // Tahan snack realtime pantulan klaim ("teknisi ditugaskan") —
         // snack hasil RPC di bawah sudah cukup.
         suppressBookingNotify(job.code);
-        showSnack(context, 'Berhasil! #${job.code} kini tugasmu.');
+        // Jarak yang TERCATAT server (posisi saat klaim) — angka yang sama
+        // yang nanti dipakai menilai radius layanan, jadi teknisi melihat apa
+        // yang tersimpan, bukan perkiraan klien.
+        final jarak = r.jarakM;
+        showSnack(
+            context,
+            'Berhasil! #${job.code} kini tugasmu.'
+            '${jarak != null && jarak > 0 ? ' Diambil dari ${formatJarak(jarak)}.' : ''}');
         setState(() => _tab = 1); // langsung lihat tugas baru
         await _load();
         // Rute otomatis setelah klaim (pin bila ada, alamat bila tidak).
@@ -400,6 +408,16 @@ class _JobsScreenState extends State<JobsScreen> {
         // saja menyelesaikan pekerjaan). Pesannya dari server apa adanya, lalu
         // tawarkan jalan keluarnya — bukan sekadar pesan error.
         await _tawarkanIsiSaldo(r.error);
+        await _load();
+      } else if (r.kode == 'terlalu_jauh') {
+        // Batas lunak jarak: server mengirim angka jarak & batas yang berlaku,
+        // jadi UI tidak menebak. Jalan keluarnya satu pesanan, bukan izin tetap.
+        await _tawarkanIzinJarak(
+          job,
+          pesan: r.error,
+          jarakM: r.jarakM,
+          batasKm: r.batasKm,
+        );
         await _load();
       } else if (r.kode == 'masih_bekerja') {
         // Server menolak karena masih ada tugas aktif (aturan yang sama dengan
@@ -418,6 +436,63 @@ class _JobsScreenState extends State<JobsScreen> {
       if (mounted) showSnackError(context, e, 'Gagal mengambil pekerjaan.');
     } finally {
       if (mounted) setState(() => _claimingId = null);
+    }
+  }
+
+  /// Tawaran setelah SERVER menolak klaim karena jarak melebihi batas lunak.
+  ///
+  /// Menjelaskan angka dari server (jarak & batas), lalu menawarkan MEMINTA
+  /// IZIN admin untuk pesanan itu saja. Tanpa jalan keluar ini, pesanan yang
+  /// hanya bisa dikerjakan teknisi jauh akan menggantung tanpa ada yang tahu.
+  Future<void> _tawarkanIzinJarak(
+    AvailableJob job, {
+    String? pesan,
+    double? jarakM,
+    int? batasKm,
+  }) async {
+    if (!mounted) return;
+    final minta = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Di luar batas jarak'),
+        content: Text(
+          [
+            pesan ?? 'Jarakmu melebihi batas klaim yang berlaku.',
+            if (jarakM != null && batasKm != null)
+              'Jarak: ${formatJarak(jarakM)} · batas: $batasKm km.',
+            'Minta izin admin untuk mengambil pesanan ini saja. Setelah disetujui, tekan Ambil lagi.',
+          ].join('\n\n'),
+          style: const TextStyle(fontSize: 13, height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Minta izin admin'),
+          ),
+        ],
+      ),
+    );
+    if (minta != true || !mounted) return;
+
+    try {
+      final r = await Api.requestClaimPermit(job.id, lat: _myLat, lng: _myLng);
+      if (!mounted) return;
+      if (r.ok) {
+        showSnack(
+            context,
+            'Permintaan izin terkirim untuk #${job.code}. '
+            'Coba Ambil lagi setelah admin menyetujui.');
+      } else if (r.kode == 'tidak_perlu_izin') {
+        showSnack(context, r.error ?? 'Jarakmu sudah di dalam batas — coba Ambil lagi.');
+      } else {
+        showSnack(context, r.error ?? 'Gagal meminta izin.', error: true);
+      }
+    } catch (e) {
+      if (mounted) showSnackError(context, e, 'Gagal meminta izin.');
     }
   }
 
@@ -480,6 +555,18 @@ class _JobsScreenState extends State<JobsScreen> {
           title: 'Pekerjaan',
           subtitle: 'Ambil pekerjaan baru atau lanjutkan tugasmu',
           actions: [
+            // Jejak tugas yang pernah dilepas. Dulu hanya tersimpan di database
+            // (dan panel admin); tombol ini membuka riwayatnya, dan sengaja
+            // ditempatkan di sini — bukan sebagai baris baru di Profil — supaya
+            // halaman Profil teknisi tetap ringkas.
+            IconButton(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                    builder: (_) => const ReleaseHistoryScreen()),
+              ),
+              tooltip: 'Riwayat lepas tugas',
+              icon: const Icon(Icons.history_rounded, color: Colors.white),
+            ),
             ValueListenableBuilder<int>(
               valueListenable: unseenInboxUpdates,
               builder: (_, unread, __) =>
@@ -1176,6 +1263,22 @@ class AssignedJobCard extends StatelessWidget {
                           '${formatDateShort(booking.bookingDate)} · ${booking.bookingTime}',
                           style: const TextStyle(
                               fontSize: 12, color: AppColors.inkSoft)),
+                      // Jarak yang tersimpan saat mengambil tugas ini (GPS saat
+                      // klaim → pin pesanan). Hanya tampil bila terukur: jangan
+                      // mengarang angka saat GPS mati atau pesanan tanpa pin.
+                      if (booking.claimDistanceM != null &&
+                          booking.claimDistanceM! > 0) ...[
+                        const SizedBox(height: 4),
+                        Row(children: [
+                          const Icon(Icons.near_me_rounded,
+                              size: 12, color: AppColors.inkSoft),
+                          const SizedBox(width: 4),
+                          Text(
+                              'Diambil dari ${formatJarak(booking.claimDistanceM)}',
+                              style: const TextStyle(
+                                  fontSize: 11, color: AppColors.inkSoft)),
+                        ]),
+                      ],
                       const SizedBox(height: 4),
                       Row(children: [
                         Text(formatRupiah(booking.totalPrice),

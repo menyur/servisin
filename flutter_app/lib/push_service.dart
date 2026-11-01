@@ -271,6 +271,14 @@ const _eventBukaPesanan = {
   'chat_message',
   'customer_no_show',
   'extra_charge',
+  // Pengingat menilai H+1: tombol "Beri penilaian teknisi" hanya ada di detail
+  // pesanan, jadi mendarat di daftar Pesanan berarti pelanggan harus mencari
+  // pesanannya lagi sebelum bisa menilai.
+  'review_reminder',
+  // Pengingat bayar: tombol unggah bukti transfer ada di detail pesanan, dan
+  // pesanan ini akan dibatalkan otomatis kalau dibiarkan — pelanggan tidak
+  // boleh harus mencari barisnya dulu di daftar.
+  'payment_reminder',
 };
 
 /// ID pesanan yang harus dibuka langsung saat notifikasi diketuk.
@@ -300,6 +308,10 @@ String notificationTabTarget(Map<String, dynamic> data) {
   final event = (data['event'] ?? '').toString();
   if (event == 'report_status' || event == 'report_replied') return 'reports';
   if (event == 'technician_approved') return 'jobs';
+  // Keputusan izin jarak: tombol "Ambil" hanya ada di tab Pekerjaan. Dipetakan
+  // dari event (bukan hanya route) supaya notifikasi lama/kanal yang tidak
+  // mengirim route tetap mendarat di tempat tindakannya berada.
+  if (event == 'claim_permit') return 'jobs';
   if (event == 'technician_rejected') return 'profile';
   if (event == 'voucher_received') return 'vouchers';
 

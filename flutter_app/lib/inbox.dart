@@ -29,7 +29,7 @@ import 'report_seen.dart';
 /// sehingga status yang berubah lagi muncul sebagai kabar baru.
 
 /// Jenis kabar di kotak masuk.
-enum InboxKind { saldo, pesanan, refund, laporan }
+enum InboxKind { saldo, pesanan, refund, laporan, tersedia }
 
 /// Label tab/filter untuk satu jenis kabar.
 String inboxKindLabel(InboxKind kind) => switch (kind) {
@@ -37,6 +37,7 @@ String inboxKindLabel(InboxKind kind) => switch (kind) {
       InboxKind.pesanan => 'Pesanan',
       InboxKind.refund => 'Refund',
       InboxKind.laporan => 'Laporan',
+      InboxKind.tersedia => 'Tersedia',
     };
 
 /// Satu baris kotak masuk.
@@ -89,6 +90,12 @@ List<InboxItem> buildInboxItems({
   List<Booking> bookings = const <Booking>[],
   List<BookingRefund> refunds = const <BookingRefund>[],
   List<Report> reports = const <Report>[],
+
+  /// Pekerjaan yang SUDAH dibayar tetapi belum ada teknisinya — dari RPC
+  /// `available_jobs` (sudah tersaring keahlian + area teknisi). Ini yang
+  /// membuat "pesanan berubah menjadi dibayar" muncul sebagai pekerjaan baru
+  /// di aplikasi teknisi, bukan hanya sebagai push yang bisa terlewat.
+  List<AvailableJob> availableJobs = const <AvailableJob>[],
   Map<String, String> seen = const <String, String>{},
   bool technician = true,
   Set<String>? commissionedBookingIds,
@@ -151,6 +158,27 @@ List<InboxItem> buildInboxItems({
             r.createdAt ??
             DateTime.fromMillisecondsSinceEpoch(0),
         bookingId: r.bookingId.isEmpty ? null : r.bookingId,
+        unread: seen[key] != version,
+      ));
+    }
+  }
+
+  // ---- Pekerjaan tersedia: pesanan dibayar yang belum diambil siapa pun ----
+  // Kabar ini menetap selama pekerjaannya masih terbuka; begitu diambil teknisi
+  // ini (atau teknisi lain sehingga hilang dari hasil RPC), kabarnya hilang
+  // sendiri dan tidak perlu ditandai manual.
+  if (technician) {
+    for (final j in availableJobs) {
+      final key = 'tersedia:${j.id}';
+      final version = '${j.bookingDate}|${j.bookingTime}';
+      items.add(InboxItem(
+        key: key,
+        version: version,
+        kind: InboxKind.tersedia,
+        title: 'Pekerjaan baru tersedia',
+        body: availableJobNotice(j),
+        at: j.createdAt,
+        bookingId: j.id,
         unread: seen[key] != version,
       ));
     }
@@ -283,6 +311,24 @@ List<InboxItem> buildInboxItems({
         '#${b.code} · ${b.serviceName} dibatalkan.'
       );
   }
+}
+
+/// Isi kabar satu pekerjaan tersedia: kode, layanan, jadwal, dan area.
+///
+/// Alamat lengkap sengaja TIDAK ditampilkan di kotak masuk — sama seperti kartu
+/// pekerjaan tersedia, detail lokasi baru dibuka setelah pekerjaan diambil
+/// (privasi pelanggan). Area cukup untuk memutuskan pekerjaan itu terjangkau.
+String availableJobNotice(AvailableJob j) {
+  final jadwal =
+      '${formatDateShort(j.bookingDate)} ${j.bookingTime}'.trim();
+  final area = (j.address).trim();
+  final bagian = [
+    if (j.code.isNotEmpty) '#${j.code}',
+    if (j.serviceName.isNotEmpty) j.serviceName,
+    jadwal,
+    if (area.isNotEmpty) area,
+  ];
+  return bagian.join(' · ');
 }
 
 /// Judul + isi kabar pengembalian dana, dari sudut pandang pelanggan.
@@ -440,6 +486,11 @@ Future<InboxData> loadInbox({
       ? await Api.fetchMyCommissionedBookingIdsSafe()
       : const <String>{};
   final reps = reports ?? await Api.fetchMyReportsSafe();
+  // Teknisi: pekerjaan yang sudah dibayar tapi belum ada teknisinya. RPC-nya
+  // sudah menyaring keahlian + area, dan kegagalannya tidak boleh mengosongkan
+  // kotak masuk (fetchAvailableJobsSafe mengembalikan daftar kosong).
+  final tersedia =
+      technician ? await Api.fetchAvailableJobsSafe() : const <AvailableJob>[];
 
   String uid = '';
   try {
@@ -455,6 +506,7 @@ Future<InboxData> loadInbox({
       bookings: bks,
       refunds: refs,
       reports: reps,
+      availableJobs: tersedia,
       seen: seen,
       technician: technician,
       commissionedBookingIds: komisi,

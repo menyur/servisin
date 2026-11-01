@@ -3,6 +3,7 @@ import { Space_Grotesk, Inter } from "next/font/google";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import SwRegister from "@/components/SwRegister";
+import HideInApp from "@/components/HideInApp";
 import { createClient } from "@/lib/supabase/server";
 import { siteUrl } from "@/lib/site";
 
@@ -89,9 +90,19 @@ export default async function RootLayout({ children }) {
   return (
     <html lang="id" className={`${display.variable} ${body.variable}`}>
       <body className="font-body min-h-screen flex flex-col">
-        <Navbar user={user} profile={profile} pendingTechnicians={pendingTechnicians} pendingBookings={pendingBookings} openReports={openReports} />
+        {/* Dengan `?embed=1` (dibuka aplikasi Flutter) navbar DAN footer situs
+            disembunyikan: AppBar aplikasi sudah menyediakan judul + tombol
+            kembali, tombol "Masuk" di halaman legal tidak berguna, dan footer
+            hanya menambah gulir panjang berisi tautan ke halaman web lain
+            (Tentang, Gabung teknisi, Hapus akun) yang bukan tujuan pengguna
+            yang sedang membaca dokumen legal di dalam aplikasi. */}
+        <HideInApp>
+          <Navbar user={user} profile={profile} pendingTechnicians={pendingTechnicians} pendingBookings={pendingBookings} openReports={openReports} />
+        </HideInApp>
         <main className="flex-1">{children}</main>
-        <Footer />
+        <HideInApp>
+          <Footer />
+        </HideInApp>
         <SwRegister />
       </body>
     </html>

@@ -13,7 +13,7 @@
 // Tanpa jaringan dan tanpa rahasia asli: CRON_SECRET-nya nilai uji.
 // Exit code: 0 = lulus, 1 = ada regresi. Jalankan: npm run verify:cron-auth
 // ============================================================================
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,12 +71,19 @@ check(
 );
 
 // 4) Penjaga statis: semua route cron wajib memakai helper bersama.
-const ROUTE_CRON = [
-  "src/app/api/cron/purge-history/route.js",
-  "src/app/api/cron/monthly-report/route.js",
-  "src/app/api/cron/subscription-reminder/route.js",
-  "src/app/api/cron/balance-reconciliation/route.js",
-];
+//
+// Daftar ini DIBACA dari folder, bukan ditulis tangan. Daftar manual selalu
+// ketinggalan setiap kali cron baru ditambahkan (booking-reminder,
+// piutang-reminder, dan review-reminder sempat lolos tanpa diperiksa), jadi
+// cron yang lupa auth tidak akan pernah terlihat merah.
+const ROUTE_CRON = readdirSync(path.join(ROOT, "src/app/api/cron"), { withFileTypes: true })
+  .filter((d) => d.isDirectory())
+  .map((d) => `src/app/api/cron/${d.name}/route.js`)
+  .filter((rel) => existsSync(path.join(ROOT, rel)))
+  .sort();
+if (ROUTE_CRON.length === 0) {
+  check("ada route cron untuk diperiksa", false, "folder src/app/api/cron kosong atau tidak terbaca");
+}
 for (const rel of ROUTE_CRON) {
   const isi = readFileSync(path.join(ROOT, rel), "utf8");
   check(`${rel} memakai cronAuthorized()`, /cronAuthorized\(request\)/.test(isi));

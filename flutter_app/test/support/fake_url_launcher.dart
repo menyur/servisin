@@ -36,7 +36,7 @@ class LaunchedUrl {
 ///   final launcher = FakeUrlLauncher()..install();
 ///   addTearDown(launcher.restore);
 class FakeUrlLauncher extends UrlLauncherPlatform {
-  FakeUrlLauncher({this.hasHandler = true, this.error});
+  FakeUrlLauncher({this.hasHandler = true, this.error, this.tanpaMode = const {}});
 
   /// false = platform menolak membuka URL (return false, tanpa exception),
   /// seperti Maps tidak terpasang / intent tidak ada yang menangani.
@@ -44,6 +44,11 @@ class FakeUrlLauncher extends UrlLauncherPlatform {
 
   /// Bila diisi: peluncuran melempar error ini (mis. gagal jaringan).
   final Object? error;
+
+  /// Mode yang DITOLAK platform (return false) walau [hasHandler] true —
+  /// dipakai untuk menguji rantai cadangan, mis. perangkat menolak keluar ke
+  /// browser luar tetapi masih bisa menampilkan Custom Tab.
+  final Set<PreferredLaunchMode> tanpaMode;
 
   /// Urutan peluncuran; index 0 = pertama. Kosong = tidak ada yang dibuka.
   final List<LaunchedUrl> launched = <LaunchedUrl>[];
@@ -74,6 +79,7 @@ class FakeUrlLauncher extends UrlLauncherPlatform {
     launched.add(LaunchedUrl(url, options));
     final e = error;
     if (e != null) throw e;
+    if (tanpaMode.contains(options.mode)) return false;
     return hasHandler;
   }
 }

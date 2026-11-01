@@ -49,6 +49,8 @@ List<NotifGroup> notificationGroupsFor({required bool isTechnician}) {
             'Jadwal tugas yang kamu tangani dipindahkan admin.'),
         NotifEvent('job_released', 'Pesan tugas dilepas',
             'Ringkasan untuk admin saat kamu melepas tugas.'),
+        NotifEvent('claim_permit', 'Izin jarak klaim',
+            'Admin menyetujui atau menolak permintaanmu mengambil pesanan di luar batas jarak.'),
       ]),
       NotifGroup('Pesanan & chat', [
         NotifEvent('work_started', 'Pengerjaan dimulai', 'Status pesanan yang kamu tangani berubah.'),
@@ -76,9 +78,13 @@ List<NotifGroup> notificationGroupsFor({required bool isTechnician}) {
     NotifGroup('Pesanan', [
       NotifEvent('payment_confirmed', 'Pembayaran dikonfirmasi', 'Admin menerima bukti pembayaranmu.'),
       NotifEvent('payment_rejected', 'Bukti pembayaran ditolak', 'Unggah ulang bukti pembayaran yang benar.'),
+      NotifEvent('payment_reminder', 'Pengingat menyelesaikan pembayaran',
+          'Sebelum pesanan dibatalkan otomatis karena belum dibayar.'),
       NotifEvent('technician_assigned', 'Teknisi ditugaskan', 'Teknisi yang akan datang sudah ditentukan.'),
       NotifEvent('work_started', 'Pengerjaan dimulai', 'Teknisi mulai mengerjakan pesananmu.'),
       NotifEvent('order_completed', 'Pesanan selesai', 'Pekerjaan selesai — waktunya memberi penilaian.'),
+      NotifEvent('review_reminder', 'Pengingat menilai teknisi',
+          'Sehari setelah pekerjaan selesai bila kamu belum memberi penilaian.'),
       NotifEvent('order_cancelled', 'Pesanan dibatalkan', 'Pesanan dibatalkan teknisi/admin.'),
       NotifEvent('refund_update', 'Pengembalian dana',
           'Uang pesanan yang dibatalkan sedang diproses atau sudah ditransfer kembali.'),

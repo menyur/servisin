@@ -21,6 +21,14 @@
       "schedule": "30 3 * * *"
     },
     {
+      "path": "/api/cron/review-reminder",
+      "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/payment-deadline",
+      "schedule": "0 */2 * * *"
+    },
+    {
       "path": "/api/cron/balance-reconciliation",
       "schedule": "0 16 * * *"
     }

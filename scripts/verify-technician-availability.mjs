@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import {
   AREA_LAYANAN_MAKS,
   CUTI_RENTANG_MAKS_HARI,
+  areaDariAlamat,
   cariCutiAktif,
   cutiBerlakuPada,
   formatRentangCuti,
@@ -136,6 +137,31 @@ cek(
   !normalisasiAreaLayanan("x".repeat(AREA_LAYANAN_MAKS + 1)).ok,
   "kolom teks tanpa batas merusak pencocokan"
 );
+
+// Area yang diisi otomatis saat admin menyetujui pendaftar (dari alamatnya).
+const areaDipakai = ["serang", "cilegon, Pandeglang"];
+cek(
+  "area dari alamat memakai area yang sudah dipakai teknisi lain",
+  areaDariAlamat("Kp. Baru RT 02/RW 03, Serang", areaDipakai) === "serang",
+  "nilai turunan harus memakai kosakata yang sama dengan filter pekerjaan"
+);
+cek(
+  "area dari alamat membaca Kota/Kecamatan bila belum ada yang cocok",
+  areaDariAlamat("Jl. A. Yani, Kel. Sukajadi, Kec. Sukajadi, Kota Bandung, Jawa Barat 40162", []) ===
+    "Bandung",
+  "alamat kota besar tanpa data lama tetap harus menghasilkan area"
+);
+cek(
+  "kode pos tidak ikut menjadi nama area",
+  !/\d/.test(areaDariAlamat("Jl. Raya Anyer KM 7, Cilegon 42411", []) || ""),
+  "kode pos membuat pencocokan teks alamat gagal"
+);
+cek(
+  "potongan alamat bukan wilayah tidak dipakai",
+  areaDariAlamat("Jl. Melati No. 5", []) === null,
+  "area bernilai \"Jl. Melati\" tidak akan pernah cocok dengan alamat pesanan"
+);
+cek("alamat kosong tidak menghasilkan area", areaDariAlamat("  ", areaDipakai) === null);
 
 cek("rentang cuti terbalik ditolak", !normalisasiRentangCuti({ startDate: "2026-10-14", endDate: "2026-10-12", hariIni: hari }).ok);
 cek("rentang cuti lewat ditolak", !normalisasiRentangCuti({ startDate: "2026-10-01", endDate: "2026-10-02", hariIni: hari }).ok);

@@ -16,6 +16,16 @@ void main() {
     expect(notificationTabTarget({'event': 'technician_rejected', 'route': '/profile'}), 'profile');
   });
 
+  test('keputusan izin jarak → tab Pekerjaan walau route tidak dikirim', () {
+    // Tombol "Ambil" hanya ada di tab Pekerjaan; notifikasi izin yang mendarat
+    // di daftar Pesanan akan tampak seperti tidak ada tindakan lanjutan.
+    expect(notificationTabTarget({'event': 'claim_permit'}), 'jobs');
+    expect(
+      notificationTabTarget({'event': 'claim_permit', 'route': '/jobs'}),
+      'jobs',
+    );
+  });
+
   test('route /profile eksplisit → tab Profil', () {
     expect(notificationTabTarget({'route': '/profile'}), 'profile');
   });

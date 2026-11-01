@@ -22,6 +22,12 @@ import {
 } from "@/lib/slot-capacity";
 import { TIME_SLOTS } from "@/lib/booking-slots";
 import {
+  JARAK_HARI_DEFAULT,
+  JARAK_HARI_PILIHAN,
+  bacaBatasJarakKlaim,
+  normalisasiBatasJarakKlaim,
+} from "@/lib/claim-distance";
+import {
   SLOT_ACTIVE_STATUSES,
   rencanakanPenugasanOtomatis,
   susunKandidatTeknisi,
@@ -44,12 +50,14 @@ import { debitTechnicianCommission, creditTechnicianBalance, sesuaikanSaldoTekni
 import { alasanRefundSah, nominalRefundSah, ringkasRefund } from "@/lib/booking-refund";
 import { formatTerlambat, menitTerlambat, ringkasTerlambat } from "@/lib/late-start";
 import { bedaKolom, catatAuditAdmin } from "@/lib/admin-audit";
+import { validasiProfilPelanggan } from "@/lib/customer-profile";
 import { sendPushToUser, sendNewJobPushToTechnicians } from "@/lib/notify";
 import { commissionAlreadyCharged, technicianCancelNotice } from "@/lib/cancel-notice";
 import { kirimUlangVerifikasiPendaftaran } from "@/lib/signup-verification";
 import { ICONS } from "@/lib/icons";
 import { normalizeScorecardRow, PERIODE_HARI } from "@/lib/technician-scorecard";
 import {
+  areaDariAlamat,
   formatRentangCuti,
   geserTanggal,
   hariIniWib,
@@ -643,6 +651,67 @@ async function sendReceiptForBooking(supabase, bookingId) {
   } catch (err) {
     console.error("Gagal kirim struk PDF:", err.message);
   }
+}
+
+/**
+ * Ubah data kontak PELANGGAN (nama, telepon, alamat) dari tab "Pelanggan".
+ *
+ * Kenapa perlu: tab itu sebelumnya hanya menampilkan — admin yang menerima
+ * telepon "alamat saya salah, yang benar ..." tidak punya cara memperbaikinya,
+ * padahal alamat itulah yang dipakai wizard (pengisian otomatis) dan rute
+ * teknisi. Satu-satunya jalan sebelumnya adalah SQL manual.
+ *
+ * Batasan yang dijaga:
+ *   1. Hanya baris berperan `customer` yang bisa diubah di sini — peran teknisi
+ *      punya tab sendiri (keahlian/area) dan mencampurnya akan membuat "alamat"
+ *      teknisi bisa tertimpa alamat pelanggan.
+ *   2. Hanya kolom kontak. Peran, saldo, dan status kurasi TIDAK bisa diubah
+ *      lewat jalur ini walau pemanggil mengirimnya.
+ *   3. Setiap perubahan dicatat di jejak audit (diff-nya disamarkan untuk
+ *      telepon/alamat, lihat src/lib/admin-audit.js) — tanpa itu, sengketa
+ *      "alamat pesanan berubah" tidak bisa dijawab.
+ *
+ * `alamat`/`telepon` kosong disimpan sebagai NULL (bukan string kosong) supaya
+ * pemeriksaan "belum diisi" di aplikasi dan panel tetap konsisten.
+ */
+export async function updateCustomerProfileAdmin(customerId, patch = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+  if (!customerId) return { error: "Pelanggan tidak dikenal." };
+
+  // Validasi murni (src/lib/customer-profile.js) — diuji tanpa sesi admin.
+  const cek = validasiProfilPelanggan(patch);
+  if (!cek.ok) return { error: cek.error };
+
+  const { data: lama, error: bacaErr } = await supabase
+    .from("profiles")
+    .select("id, name, phone, address, role")
+    .eq("id", customerId)
+    .maybeSingle();
+  if (bacaErr) return { error: bacaErr.message };
+  if (!lama) return { error: "Pelanggan tidak ditemukan." };
+  if (lama.role !== "customer") {
+    return { error: "Hanya data pelanggan yang bisa diubah dari tab ini." };
+  }
+
+  const baru = cek.nilai;
+  const { error } = await supabase.from("profiles").update(baru).eq("id", customerId);
+  if (error) return { error: error.message };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_customer_profile",
+    entity: "profile",
+    entityId: customerId,
+    summary: `Ubah data pelanggan ${baru.name}`,
+    ...bedaKolom(
+      { name: lama.name, phone: lama.phone, address: lama.address },
+      baru
+    ),
+  });
+
+  revalidatePath("/admin");
+  return { ok: true, profile: baru };
 }
 
 export async function updateServicePriceAdmin(serviceId, basePrice) {
@@ -1399,16 +1468,34 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
   // pastikan target memang teknisi — jangan sampai mengubah status customer/admin
   const { data: target } = await supabase
     .from("profiles")
-    .select("role, name, email, approval_status")
+    .select("role, name, email, address, service_area, approval_status")
     .eq("id", userId)
     .single();
   if (!target || target.role !== "technician") {
     return { error: "Hanya akun teknisi yang bisa disetujui/ditolak." };
   }
 
+  // Area layanan kosong = teknisi menerima SEMUA pekerjaan (areaMatchesBooking
+  // fail-open), dan pendaftaran tidak pernah mengisinya. Saat menyetujui, isi
+  // dari alamat yang sudah ditulis pendaftar — nilai area yang sudah ada TIDAK
+  // pernah ditimpa, karena itu hasil keputusan admin/teknisi sendiri.
+  let areaBaru = null;
+  if (approvalStatus === "approved" && !String(target.service_area ?? "").trim()) {
+    const { data: areaRows } = await supabase
+      .from("profiles")
+      .select("service_area")
+      .eq("role", "technician")
+      .not("service_area", "is", null)
+      .limit(500);
+    areaBaru = areaDariAlamat(
+      target.address,
+      (areaRows || []).map((r) => r.service_area)
+    );
+  }
+
   const { error } = await supabase
     .from("profiles")
-    .update({ approval_status: approvalStatus })
+    .update(areaBaru ? { approval_status: approvalStatus, service_area: areaBaru } : { approval_status: approvalStatus })
     .eq("id", userId)
     .eq("role", "technician");
   if (error) return { error: error.message };
@@ -1422,15 +1509,19 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
       action: "decide_technician",
       entity: "profile",
       entityId: userId,
-      summary: `Status teknisi ${target.name || target.email || userId}: ${target.approval_status || "?"} → ${approvalStatus}`,
-      before: { approval_status: target.approval_status ?? null },
-      after: { approval_status: approvalStatus },
+      summary: `Status teknisi ${target.name || target.email || userId}: ${target.approval_status || "?"} → ${approvalStatus}${areaBaru ? ` · area layanan diisi dari alamat: ${areaBaru}` : ""}`,
+      before: { approval_status: target.approval_status ?? null, service_area: target.service_area ?? null },
+      after: { approval_status: approvalStatus, ...(areaBaru ? { service_area: areaBaru } : {}) },
     });
     if (approvalStatus === "approved") {
       await sendPushToUser(userId, {
         title: "Akun teknisi disetujui 🎉",
         event: "technician_approved",
-        body: `Selamat${target.name ? `, ${target.name}` : ""}! Kamu sudah bisa mengambil pekerjaan. Lengkapi area layanan di Profil agar pekerjaan di sekitarmu muncul.`,
+        // Area yang baru diisi dari alamat disebutkan supaya teknisi tahu apa
+        // yang dipakai filter pekerjaan — dan bisa minta ubah bila meleset.
+        body: areaBaru
+          ? `Selamat${target.name ? `, ${target.name}` : ""}! Kamu sudah bisa mengambil pekerjaan. Area layananmu: ${areaBaru} — hubungi admin bila perlu diubah.`
+          : `Selamat${target.name ? `, ${target.name}` : ""}! Kamu sudah bisa mengambil pekerjaan. Lengkapi area layanan di Profil agar pekerjaan di sekitarmu muncul.`,
         url: "/jobs",
         tag: `approval-${userId}`,
       });
@@ -1448,7 +1539,9 @@ export async function setTechnicianApprovalAdmin(userId, approvalStatus) {
   revalidatePath("/admin");
   revalidatePath("/", "layout"); // refresh badge navbar (jumlah pendaftar pending)
   revalidateTag("technicians"); // daftar publik /teknisi berubah (approve/reject)
-  return { ok: true };
+  // Area hasil turunan alamat dikembalikan supaya kartu pendaftar langsung
+  // menampilkan pil hijau, tanpa perlu memuat ulang halaman.
+  return { ok: true, area: areaBaru };
 }
 
 /**
@@ -5784,6 +5877,279 @@ export async function saveTechnicianLeaveAdmin({ technicianId, startDate, endDat
 }
 
 /** Hapus satu catatan cuti (mis. teknisi membatalkan liburnya). */
+/* ============ SEBARAN JARAK KLAIM (DASAR RADIUS LAYANAN) ============ */
+
+/**
+ * Klaim pekerjaan pada periode terakhir beserta jarak teknisi → pesanan.
+ *
+ * Angka ini yang menjawab "perlukah radius layanan?": selama ini pertanyaan
+ * itu hanya bisa dijawab dari SQL manual. Yang dikembalikan adalah baris
+ * mentah (dibatasi 5.000 terbaru) + jumlah klaim tanpa jarak; pengelompokan
+ * per 5 km dilakukan di klien lewat `src/lib/claim-distance.js` supaya aturan
+ * embernya bisa diuji tanpa database.
+ *
+ * `tanpaJarak` sengaja dipisah: GPS mati / aplikasi versi lama bukan "0 km".
+ */
+export async function getClaimDistanceReportAdmin({ hari = JARAK_HARI_DEFAULT } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const rentang = JARAK_HARI_PILIHAN.includes(Number(hari)) ? Number(hari) : JARAK_HARI_DEFAULT;
+  const sejak = new Date(Date.now() - rentang * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data, error, count } = await supabase
+    .from("bookings")
+    .select("claim_distance_m, created_at", { count: "exact" })
+    .not("claim_distance_m", "is", null)
+    .gte("created_at", sejak)
+    .order("created_at", { ascending: false })
+    .limit(5000);
+
+  if (error) {
+    if (/claim_distance_m|column|schema cache|does not exist|PGRST204/i.test(error.message || "")) {
+      return {
+        error:
+          "Laporan jarak klaim belum aktif — jalankan supabase/migrate-job-claim-distance.sql, lalu muat ulang.",
+        migrasi: true,
+      };
+    }
+    return { error: error.message };
+  }
+
+  // Klaim yang TIDAK membawa jarak: pesanan yang benar-benar pernah diambil
+  // tetapi GPS-nya mati atau aplikasinya versi lama. `claimed_at` diisi trigger
+  // saat klaim; `technician_id` dipakai sebagai cadangan untuk database yang
+  // kolom itu belum ada.
+  const hitungTanpaJarak = (kolom) =>
+    supabase
+      .from("bookings")
+      .select("id", { count: "exact", head: true })
+      .is("claim_distance_m", null)
+      .not(kolom, "is", null)
+      .gte("created_at", sejak);
+
+  let tanpa = await hitungTanpaJarak("claimed_at");
+  if (tanpa.error && /claimed_at|column|schema cache|PGRST204/i.test(tanpa.error.message || "")) {
+    tanpa = await hitungTanpaJarak("technician_id");
+  }
+
+  return {
+    rows: data || [],
+    terukurTotal: count ?? (data?.length ?? 0),
+    tanpaJarak: tanpa.error ? 0 : tanpa.count || 0,
+    hari: rentang,
+    terpotong: (count ?? 0) > (data?.length ?? 0),
+    batas: await bacaBatasJarakKlaim(supabase),
+  };
+}
+
+/* ====== BATAS LUNAK JARAK KLAIM & IZIN ADMIN ====== */
+
+/** Pesan seragam saat migrasi batas jarak belum dijalankan. */
+const PESAN_BATAS_JARAK_BELUM_ADA =
+  "Batas jarak klaim belum aktif di database — jalankan supabase/migrate-claim-distance-limit.sql, lalu muat ulang.";
+
+function gagalTabelBatasJarak(error) {
+  return (
+    /relation|does not exist|schema cache|column|PGRST204|PGRST205/i.test(error?.message || "") ||
+    error?.code === "PGRST204" ||
+    error?.code === "PGRST205"
+  );
+}
+
+/**
+ * Aktifkan/ubah batas lunak jarak klaim.
+ *
+ * Bawaan pabrik `enabled: false`; admin yang memutuskan angkanya. Setiap
+ * perubahan dicatat di Jejak Audit karena ini mengubah siapa yang boleh
+ * mengambil pekerjaan.
+ */
+export async function updateClaimDistanceLimitAdmin({ enabled, km } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const sah = normalisasiBatasJarakKlaim({ enabled, km });
+  const sebelum = await bacaBatasJarakKlaim(supabase);
+
+  const { error } = await supabase
+    .from("app_settings")
+    .update({
+      claim_distance_limit_enabled: sah.enabled,
+      claim_distance_limit_km: sah.km,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", 1);
+
+  if (error) {
+    return { error: gagalTabelBatasJarak(error) ? PESAN_BATAS_JARAK_BELUM_ADA : error.message };
+  }
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "update_claim_distance_limit",
+    entity: "settings",
+    summary: sah.enabled
+      ? `Batas jarak klaim diaktifkan: ${sah.km} km`
+      : "Batas jarak klaim dinonaktifkan",
+    before: { enabled: sebelum.enabled, km: sebelum.km },
+    after: { enabled: sah.enabled, km: sah.km },
+  });
+
+  revalidatePath("/admin");
+  return { ok: true, batas: sah };
+}
+
+/**
+ * Daftar permintaan izin jarak: yang masih menunggu + keputusan terakhir.
+ *
+ * Nama teknisi & kode pesanan diambil terpisah (bukan join FK) supaya nama
+ * constraint tidak menjadi syarat yang rapuh saat migrasi dijalankan.
+ */
+export async function getClaimPermitsAdmin({ limit = 30 } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const jumlah = Math.min(Math.max(Math.trunc(Number(limit) || 30), 1), 100);
+  const { data, error } = await supabase
+    .from("claim_distance_permits")
+    .select(
+      "id, booking_id, technician_id, distance_m, limit_km, note, status, decision_note, decided_at, created_at, used_at"
+    )
+    .order("created_at", { ascending: false })
+    .limit(jumlah);
+
+  if (error) {
+    return { error: gagalTabelBatasJarak(error) ? PESAN_BATAS_JARAK_BELUM_ADA : error.message };
+  }
+
+  const baris = data || [];
+  if (!baris.length) return { pending: [], riwayat: [] };
+
+  const bookingIds = [...new Set(baris.map((r) => r.booking_id))];
+  const techIds = [...new Set(baris.map((r) => r.technician_id))];
+
+  const [{ data: pesanan }, { data: teknisi }] = await Promise.all([
+    supabase.from("bookings").select("id, code, address, booking_date, booking_time").in("id", bookingIds),
+    supabase.from("profiles").select("id, name").in("id", techIds),
+  ]);
+
+  const petaPesanan = new Map((pesanan || []).map((b) => [b.id, b]));
+  const petaTeknisi = new Map((teknisi || []).map((t) => [t.id, t]));
+
+  const lengkapi = (r) => ({
+    ...r,
+    code: petaPesanan.get(r.booking_id)?.code || "-",
+    address: petaPesanan.get(r.booking_id)?.address || "",
+    jadwal: [petaPesanan.get(r.booking_id)?.booking_date, petaPesanan.get(r.booking_id)?.booking_time]
+      .filter(Boolean)
+      .join(" "),
+    technician_name: petaTeknisi.get(r.technician_id)?.name || "Teknisi",
+  });
+
+  return {
+    pending: baris.filter((r) => r.status === "pending").map(lengkapi),
+    riwayat: baris.filter((r) => r.status !== "pending").slice(0, 10).map(lengkapi),
+  };
+}
+
+/**
+ * Setujui/tolak satu permintaan izin jarak.
+ *
+ * Keputusan disimpan di RPC security definer (hanya admin, hanya yang masih
+ * `pending`) lalu dicatat di Jejak Audit. Izin yang disetujui tetap harus
+ * dipakai lewat `claim_job` — persetujuan tidak menugaskan teknisi secara
+ * otomatis.
+ */
+export async function decideClaimPermitAdmin({ id, setuju, catatan = null } = {}) {
+  const supabase = await createClient();
+  const admin = await requireAdmin(supabase);
+  if (!admin) return { error: "Akses ditolak." };
+
+  const permitId = String(id || "").trim();
+  if (!UUID_RE.test(permitId)) return { error: "Permintaan izin tidak valid." };
+  if (typeof setuju !== "boolean") return { error: "Keputusan tidak valid." };
+
+  const { data: izin } = await supabase
+    .from("claim_distance_permits")
+    .select("id, booking_id, technician_id, distance_m, limit_km, status")
+    .eq("id", permitId)
+    .maybeSingle();
+
+  const { data, error } = await supabase.rpc("decide_claim_permit", {
+    p_id: permitId,
+    p_status: setuju ? "approved" : "rejected",
+    p_note: String(catatan || "").trim() || null,
+  });
+
+  if (error) {
+    return { error: gagalTabelBatasJarak(error) ? PESAN_BATAS_JARAK_BELUM_ADA : error.message };
+  }
+  if (!data?.ok) return { error: data?.error || "Izin gagal diputuskan." };
+
+  const { data: pesanan } = izin?.booking_id
+    ? await supabase
+        .from("bookings")
+        .select("code, technician_id, status")
+        .eq("id", izin.booking_id)
+        .maybeSingle()
+    : { data: null };
+
+  await catatAuditAdmin(supabase, admin, {
+    action: "decide_claim_permit",
+    entity: "booking",
+    entityId: izin?.booking_id || null,
+    summary: `${setuju ? "Setujui" : "Tolak"} izin jarak ${pesanan?.code ? `#${pesanan.code}` : ""}${
+      izin?.distance_m ? ` (${Math.round(izin.distance_m / 100) / 10} km)` : ""
+    }`.trim(),
+    before: { status: izin?.status || "pending" },
+    after: { status: setuju ? "approved" : "rejected", catatan: String(catatan || "").trim() || null },
+  });
+
+  // Kabari teknisinya lewat push. Tanpa ini keputusan hanya terlihat oleh admin:
+  // teknisi tidak punya panel, dan izin yang disetujui bisa tidak terpakai
+  // karena pesanannya sudah diambil teknisi lain. Push bersifat best-effort —
+  // keputusan yang sudah tersimpan tidak boleh gagal karena kanal notifikasi.
+  try {
+    if (izin?.technician_id) {
+      const jarak = izin.distance_m
+        ? `${String(Math.round(izin.distance_m / 100) / 10).replace(".", ",")} km`
+        : null;
+      const batas = izin.limit_km ? `${izin.limit_km} km` : null;
+      const ukuran = jarak ? `${jarak}${batas ? ` · batas ${batas}` : ""}` : null;
+      const kode = pesanan?.code ? `#${pesanan.code}` : "Pesanan";
+      const alasan = String(catatan || "").trim();
+      // Izin bisa disetujui SETELAH pesanannya diambil teknisi lain atau
+      // dibatalkan pelanggan. Menyuruh "tekan Ambil" saat itu mustahil
+      // dikerjakan, jadi kalimatnya dibedakan — keputusannya sendiri tetap
+      // sah dan tercatat seperti biasa.
+      const masihBisaDiambil = pesanan?.status === "paid" && !pesanan?.technician_id;
+
+      await sendPushToUser(izin.technician_id, {
+        title: setuju
+          ? masihBisaDiambil
+            ? "Izin jarak disetujui ✅"
+            : "Izin jarak disetujui — pesanan sudah diambil"
+          : "Izin jarak ditolak ❌",
+        body: setuju
+          ? masihBisaDiambil
+            ? `${kode}${ukuran ? ` (${ukuran})` : ""} — buka tab Pekerjaan dan tekan Ambil sebelum diambil teknisi lain.`
+            : `${kode}${ukuran ? ` (${ukuran})` : ""} sudah diambil teknisi lain atau tidak lagi tersedia, jadi izin ini tidak bisa dipakai. Pekerjaan lain di dalam batas tetap bisa kamu ambil.`
+          : `${kode}${ukuran ? ` (${ukuran})` : ""}${alasan ? ` — ${alasan}` : "."} Kamu masih bisa mengambil pekerjaan lain di dalam batas.`,
+        url: "/jobs",
+        tag: `permit-${permitId}`,
+        event: "claim_permit",
+      });
+    }
+  } catch (e) {
+    console.error("[claim-permit] push keputusan gagal:", e?.message || e);
+  }
+
+  revalidatePath("/admin");
+  return { ok: true };
+}
+
 export async function deleteTechnicianLeaveAdmin(leaveId) {
   const supabase = await createClient();
   const admin = await requireAdmin(supabase);

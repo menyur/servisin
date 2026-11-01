@@ -8,14 +8,22 @@ import '../app_update.dart';
 import '../format.dart';
 import '../category_thumbs.dart';
 import '../models.dart';
+import '../review_reminder.dart';
 import '../theme.dart';
+import 'address_reminder_card.dart';
 import 'booking_wizard.dart';
 import 'common.dart';
 import 'inbox_screen.dart';
+import 'review_reminder_card.dart';
+import 'review_sheet.dart';
 import 'update_banner.dart';
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, this.simpanAlamat});
+
+  /// Seam uji widget: cara menyimpan alamat pelanggan. `null` (produksi) =
+  /// `Api.updateMyProfile(address: ...)`.
+  final Future<void> Function(String alamat)? simpanAlamat;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -34,11 +42,30 @@ class _HomeScreenState extends State<HomeScreen> {
   /// server tidak bisa dihubungi) — beranda tidak boleh terganggu karenanya.
   AppUpdateInfo? _pembaruan;
 
+  /// Pesanan selesai milik pelanggan yang BELUM dinilai (pengingat di beranda).
+  /// Selalu kosong selain untuk role 'customer': daftar pesanan teknisi berisi
+  /// pekerjaan yang ditugaskan kepadanya sendiri, jadi menilai di sana berarti
+  /// menilai diri sendiri.
+  List<Booking> _belumDinilai = const <Booking>[];
+
+  /// Langganan realtime status pesanan (shell memancarkan tick setiap ada baris
+  /// `bookings` milik pengguna yang berubah). Dipakai supaya pengingat menilai
+  /// muncul sendiri saat teknisi menyelesaikan pekerjaan SELAGI pelanggan
+  /// berada di beranda — tanpa perlu menarik layar atau berpindah tab.
+  StreamSubscription<BookingUpdate>? _tickSub;
+
   @override
   void initState() {
     super.initState();
     _load();
     _cekPembaruan();
+    _tickSub = bookingUpdatesTick.stream.listen((_) => _muatPengingat());
+  }
+
+  @override
+  void dispose() {
+    _tickSub?.cancel();
+    super.dispose();
   }
 
   /// Tanya `/api/apk-status` sekali saat beranda dibuka.
@@ -75,6 +102,89 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() => _pembaruan = null);
   }
 
+  /// Muat ulang daftar pesanan yang menunggu penilaian saja (tanpa menyentuh
+  /// katalog). Dipakai tick realtime; diam bila profil belum terbaca atau
+  /// bukan pelanggan, dan tidak pernah melempar (fetchMyBookingsSafe).
+  Future<void> _muatPengingat() async {
+    if (_profile?.role != 'customer') return;
+    final belum = pesananBelumDinilai(await Api.fetchMyBookingsSafe());
+    if (!mounted) return;
+    // Bandingkan id + jumlah dulu: tick bisa datang berkali-kali untuk satu
+    // perubahan, dan setState tanpa perubahan isi hanya membangun ulang layar.
+    final sama = belum.length == _belumDinilai.length &&
+        belum.every((b) => _belumDinilai.any((x) => x.id == b.id));
+    if (sama) return;
+    setState(() => _belumDinilai = belum);
+  }
+
+  /// Nilai teknisi untuk satu pesanan langsung dari beranda.
+  ///
+  /// Alurnya sama dengan tombol di detail pesanan (`_writeReview`): sheet
+  /// bintang + ulasan opsional, lalu `Api.submitReview`. Bedanya, pesanan yang
+  /// berhasil dinilai langsung dibuang dari daftar pengingat supaya kartunya
+  /// menyusut saat itu juga — tanpa menunggu beranda dimuat ulang.
+  Future<void> _nilaiPesanan(Booking b) async {
+    final teknisiId = b.technicianId;
+    if (teknisiId == null) return;
+    final input = await showReviewSheet(context, technicianName: b.technicianName);
+    if (input == null || !mounted) return; // pelanggan menutup sheet
+    try {
+      final r = await Api.submitReview(
+        bookingId: b.id,
+        technicianId: teknisiId,
+        rating: input.rating,
+        comment: input.comment,
+      );
+      if (!mounted) return;
+      if (!r.ok) {
+        showSnack(context, r.error ?? 'Gagal menyimpan penilaian.',
+            error: true);
+        return;
+      }
+      final voucher = r.voucher;
+      showSnack(
+        context,
+        voucher != null
+            ? 'Penilaian tersimpan! Voucher ${voucher['code']} '
+                '(${formatRupiah((voucher['amount'] as num?) ?? 0)}) ada di tab Voucher.'
+            : 'Terima kasih! Penilaianmu tersimpan.',
+      );
+      setState(() =>
+          _belumDinilai = _belumDinilai.where((x) => x.id != b.id).toList());
+    } catch (e) {
+      if (mounted) showSnackError(context, e, 'Gagal menyimpan penilaian.');
+    }
+  }
+
+  /// Minta & simpan alamat pelanggan yang belum punya alamat di profil.
+  ///
+  /// Ini penutup celah pendaftaran: alamat hanya terisi lewat formulir
+  /// pendaftaran email. Akun yang dibuat lewat **Google** (Google tidak
+  /// mengirim alamat) — dan akun lama sebelum kolom alamat dipakai — tidak
+  /// pernah punya `profiles.address`, sehingga wizard tidak bisa mengisi
+  /// otomatis. Setelah tersimpan, kartu pengingatnya hilang seketika.
+  Future<void> _isiAlamat() async {
+    final alamat = await showAddressInputDialog(context, initial: _profile?.address);
+    if (alamat == null || alamat.isEmpty || !mounted) return;
+    try {
+      if (widget.simpanAlamat != null) {
+        await widget.simpanAlamat!(alamat);
+      } else {
+        await Api.updateMyProfile(address: alamat);
+      }
+      if (!mounted) return;
+      // Baca ulang profil supaya kartu memakai nilai yang benar-benar
+      // tersimpan di database, bukan tebakan lokal.
+      final prof = await Api.myProfile();
+      if (!mounted) return;
+      setState(() => _profile = prof);
+      showSnack(context,
+          'Alamat tersimpan — pesanan berikutnya terisi otomatis.');
+    } catch (e) {
+      if (mounted) showSnackError(context, e, 'Gagal menyimpan alamat.');
+    }
+  }
+
   /// Kotak masuk notifikasi — tersedia untuk pelanggan dan teknisi. Peran
   /// menentukan sumber pesanan & teks kabarnya.
   Future<void> _bukaInbox() async {
@@ -107,12 +217,21 @@ class _HomeScreenState extends State<HomeScreen> {
       // Banner gagal dimuat tidak boleh menggagalkan beranda — fallback statis.
       final banners =
           await Api.fetchBanners().catchError((_) => <PromoBanner>[]);
+      // Pengingat penilaian: HANYA pelanggan (role persis 'customer').
+      // Teknisi tidak boleh diminta menilai dirinya sendiri, dan profil yang
+      // gagal dibaca (role null) juga tidak boleh menebak — lebih baik tanpa
+      // pengingat daripada pengingat yang salah sasaran. Kegagalan membaca
+      // pesanan tidak menggagalkan beranda (fetchMyBookingsSafe tidak melempar).
+      final belumDinilai = prof?.role == 'customer'
+          ? pesananBelumDinilai(await Api.fetchMyBookingsSafe())
+          : const <Booking>[];
       if (!mounted) return;
       setState(() {
         _categories = cats;
         _services = svcs;
         _profile = prof;
         _banners = banners;
+        _belumDinilai = belumDinilai;
       });
     } catch (e) {
       if (mounted) {
@@ -224,6 +343,25 @@ class _HomeScreenState extends State<HomeScreen> {
                       onUpdate: _bukaUnduhan,
                       onLater: _tundaPembaruan,
                     ),
+
+                  // ===== Alamat profil belum diisi (pelanggan) =====
+                  // Pendaftaran lewat Google tidak membawa alamat, jadi tanpa
+                  // kartu ini alamat tidak pernah masuk database dan wizard
+                  // pesanan selalu kosong. Menetap sampai tersimpan.
+                  if (_profile?.role == 'customer')
+                    AddressReminderCard(
+                      address: _profile?.address,
+                      onIsi: _isiAlamat,
+                    ),
+
+                  // ===== Pengingat menilai pesanan yang sudah selesai =====
+                  // Menetap sampai dinilai — satu-satunya ajakan menilai yang
+                  // tidak hilang saat kabar kotak masuk ditandai terbaca.
+                  ReviewReminderCard(
+                    pesanan: _belumDinilai,
+                    onNilai: _nilaiPesanan,
+                    onLihatSemua: () => mainTabIndex.value = 1,
+                  ),
 
                   // ===== Chip kategori (pintu masuk utama layanan) =====
                   if (_categories == null)

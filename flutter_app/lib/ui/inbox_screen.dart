@@ -119,6 +119,14 @@ class _InboxScreenState extends State<InboxScreen> {
   }
 
   Future<void> _openItem(InboxItem item) async {
+    if (item.kind == InboxKind.tersedia) {
+      // Pekerjaan tersedia diambil dari tab Pekerjaan (di sana tombol Ambil
+      // berada). Detail pesanan belum boleh dibuka sebelum diklaim: alamat & pin
+      // pelanggan baru terbuka setelah pekerjaan menjadi milik teknisi ini.
+      mainTabIndex.value = kJobsTabIndex;
+      if (mounted) Navigator.pop(context);
+      return;
+    }
     if (item.kind == InboxKind.saldo) {
       await Navigator.push(
         context,
@@ -327,6 +335,7 @@ class _InboxTile extends StatelessWidget {
   const _InboxTile({required this.item, required this.onTap});
 
   (Color, Color) get _colors => switch (item.kind) {
+        InboxKind.tersedia => (AppColors.brandDeep, AppColors.brandTint),
         InboxKind.saldo => (AppColors.amber, AppColors.amberTint),
         InboxKind.pesanan => (AppColors.brand, AppColors.brandTint),
         InboxKind.refund => (AppColors.coral, AppColors.coralTint),
@@ -334,6 +343,7 @@ class _InboxTile extends StatelessWidget {
       };
 
   IconData get _icon => switch (item.kind) {
+        InboxKind.tersedia => Icons.work_outline_rounded,
         InboxKind.saldo => Icons.account_balance_wallet_rounded,
         InboxKind.pesanan => Icons.assignment_rounded,
         InboxKind.refund => Icons.currency_exchange_rounded,

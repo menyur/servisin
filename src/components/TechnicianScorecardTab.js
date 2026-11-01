@@ -28,6 +28,7 @@ import {
   saveTechnicianSkillAreaAdmin,
 } from "@/app/actions/admin";
 import { formatRentangCuti } from "@/lib/technician-availability";
+import { bidangLabel } from "@/lib/skill-match";
 import {
   AMBANG,
   MIN_PEKERJAAN,
@@ -196,10 +197,13 @@ export default function TechnicianScorecardTab({
         (r.name || "").toLowerCase().includes(s) ||
         (r.email || "").toLowerCase().includes(s) ||
         (r.skill || "").toLowerCase().includes(s) ||
+        // Pencarian memakai nama bidang yang TERBACA, bukan hanya id kategori
+        // yang tersimpan — admin mencari "service ac", bukan "ac".
+        bidangLabel(r.skill, kesiapan.categories).toLowerCase().includes(s) ||
         (r.area || "").toLowerCase().includes(s)
     );
     return urutkanSkor(hasil, sort);
-  }, [rows, q, sort]);
+  }, [rows, q, sort, kesiapan.categories]);
 
   const ringkas = useMemo(() => ringkasPutusan(rows), [rows]);
 
@@ -322,6 +326,7 @@ export default function TechnicianScorecardTab({
             <KartuTeknisi
               key={t.technicianId}
               t={t}
+              categories={kesiapan.categories}
               cuti={cutiTeknisi(t.technicianId)}
               onAtur={bukaAtur}
             />
@@ -516,7 +521,7 @@ const NADA = {
   "layak-diperluas": { pill: "bg-mint-tint text-mint", border: "border-mint/40", ikon: TrendingUp },
 };
 
-function KartuTeknisi({ t, cuti = null, onAtur }) {
+function KartuTeknisi({ t, categories = [], cuti = null, onAtur }) {
   const putusan = putusanTeknisi(t);
   const nada = NADA[putusan.kode] || NADA.pantau;
   const Ikon = nada.ikon;
@@ -532,7 +537,7 @@ function KartuTeknisi({ t, cuti = null, onAtur }) {
           <p className="text-xs text-ink-soft truncate">{t.email || "-"}</p>
           <div className="flex items-center gap-1.5 mt-1 flex-wrap text-[10px]">
             <span className="pill bg-brand-tint text-brand-deep font-semibold">
-              {t.skill ? `Keahlian: ${t.skill}` : "Keahlian belum diisi"}
+              {t.skill ? `Keahlian: ${bidangLabel(t.skill, categories)}` : "Keahlian belum diisi"}
             </span>
             <span className="pill bg-brand-tint text-brand-deep font-semibold">
               {t.area ? `Area: ${t.area}` : "Area belum diisi"}

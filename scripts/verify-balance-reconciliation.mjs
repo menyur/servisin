@@ -15,7 +15,7 @@
 //   npm run verify:rekonsiliasi          (offline, tanpa jaringan)
 //   npm run verify:rekonsiliasi-live     (baca data sungguhan, read-only)
 // ============================================================================
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -325,10 +325,21 @@ console.log("\nF. Wiring: jadwal, auth, preferensi, dan larangan mengoreksi send
     /"\/api\/cron\/balance-reconciliation"/.test(vercel) && /"0 16 \* \* \*"/.test(vercel),
     "endpoint yang tidak terjadwal tidak pernah berjalan otomatis"
   );
+  // Penjaga auth cron kini MENEMUKAN route sendiri dengan membaca folder
+  // src/app/api/cron (daftar manual selalu ketinggalan setiap cron baru), jadi
+  // yang perlu dibuktikan bukan lagi "nama route tertulis di skrip itu",
+  // melainkan: penemuannya dari folder + berkas route ini benar-benar ada.
   cek(
-    "route terdaftar di penjaga auth cron",
-    /cron\/balance-reconciliation\/route\.js/.test(baca("scripts/verify-cron-auth.mjs")),
-    "route baru harus ikut diperiksa verify:cron-auth"
+    "penjaga auth cron menemukan route dari folder (bukan daftar manual)",
+    /readdirSync\(\s*path\.join\(ROOT, "src\/app\/api\/cron"\)/.test(
+      baca("scripts/verify-cron-auth.mjs")
+    ),
+    "daftar manual membuat cron baru tidak pernah diperiksa"
+  );
+  cek(
+    "berkas route rekonsiliasi ada di folder cron",
+    existsSync(path.join(ROOT, "src/app/api/cron/balance-reconciliation/route.js")),
+    "route yang hilang membuat cron 200 tetapi tidak melakukan apa pun"
   );
   cek(
     "peristiwa email bisa dimatikan per admin di tab Notif Email Admin",

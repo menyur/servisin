@@ -15,6 +15,7 @@ import {
   assignTechnicianAdmin,
   fetchNearestTechniciansAdmin,
   setTechnicianApprovalAdmin,
+  saveTechnicianSkillAreaAdmin,
   kirimUlangVerifikasiPendaftarAdmin,
   updateReportAdmin,
   confirmBookingPaymentAdmin,
@@ -35,8 +36,10 @@ import { formatRupiah, computeSplit, commissionBase } from "@/lib/pricing";
 import { bookingArea, bookingItems, bookingQuantity, serviceLabel } from "@/lib/booking-quantity";
 import { formatArea } from "@/lib/area-pricing";
 import { ringkasPutusan } from "@/lib/technician-scorecard";
+import { bidangLabel } from "@/lib/skill-match";
 import { STATUS_LABELS, StatusPill } from "@/components/StatusPipeline";
-import { ClipboardList, Tags, Users, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, Clock, ShieldCheck, Coins, LayoutGrid, Gauge, HandCoins, ScrollText, Search, X } from "lucide-react";
+import CustomerProfilesTab from "@/components/CustomerProfilesTab";
+import { ClipboardList, Tags, Users, UserRound, UserCheck, Filter, ArrowDownWideNarrow, History, FileWarning, ChevronDown, Banknote, Percent, Star, Ticket, Plus, Trash2, Wallet, Gift, XCircle, AlertTriangle, FileDown, Loader2, Pencil, Save, IdCard, MapPin, ImagePlay, PieChart, Mail, CalendarDays, Clock, ShieldCheck, Coins, LayoutGrid, Gauge, HandCoins, ScrollText, Search, X, Ruler } from "lucide-react";
 import { ServiceIcon } from "@/lib/icons";
 import ServiceImageUpload from "@/components/ServiceImageUpload";
 import LocationPickerMap from "@/components/LocationPickerMap";
@@ -59,6 +62,7 @@ import RefundAdminTab from "@/components/RefundAdminTab";
 import WarrantyClaimsAdminTab from "@/components/WarrantyClaimsAdminTab";
 import AccountDeletionAdminTab from "@/components/AccountDeletionAdminTab";
 import AdminAuditLogTab from "@/components/AdminAuditLogTab";
+import ClaimDistanceTab from "@/components/ClaimDistanceTab";
 import { useAdminRealtime, useAgoLabel } from "@/lib/realtime";
 
 const ALL_STATUSES = ["pending", "paid", "in_progress", "completed", "cancelled"];
@@ -101,6 +105,8 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
   // benar-benar terlihat, bukan hilang di urutan ribuan baris.
   const [pinnedBookingId, setPinnedBookingId] = useState(null);
   const [fokusUserId, setFokusUserId] = useState(null);
+  // Teknisi yang keahlian/areanya sedang diubah dari tab Pengguna & Teknisi.
+  const [aturBidang, setAturBidang] = useState(null);
   const [services, setServices] = useState(initialServices);
   // Kategori layanan: admin bisa menambah & menonaktifkan lewat tab Kategori.
   // Salinan lokal supaya perubahan langsung tampil tanpa muat ulang halaman.
@@ -486,10 +492,24 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
     const res = await setTechnicianApprovalAdmin(userId, approvalStatus);
     setBusyId(null);
     if (!res.error) {
-      setUsers((us) => us.map((u) => (u.id === userId ? { ...u, approval_status: approvalStatus } : u)));
+      // Persetujuan juga bisa MENGISI area layanan dari alamat pendaftar
+      // (setTechnicianApprovalAdmin) — pakai nilai balikannya supaya pil area
+      // langsung hijau, bukan menunggu muat ulang halaman.
+      setUsers((us) =>
+        us.map((u) =>
+          u.id === userId
+            ? { ...u, approval_status: approvalStatus, service_area: res.area || u.service_area }
+            : u
+        )
+      );
     } else {
       alert(res.error);
     }
+  }
+
+  /** Keahlian/area pendaftar diubah dari kartu Pendaftar Teknisi. */
+  function ubahBidangPendaftar(userId, patch) {
+    setUsers((us) => us.map((u) => (u.id === userId ? { ...u, ...patch } : u)));
   }
 
   async function handleReportUpdate(reportId, status, adminNote) {
@@ -781,6 +801,12 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           label={`Kategori${categoryList.some((c) => c.is_active === false) ? ` (${categoryList.filter((c) => c.is_active !== false).length}/${categoryList.length})` : ""}`}
         />
         <TabButton active={tab === "users"} onClick={() => setTab("users")} icon={Users} label="Pengguna & Teknisi" />
+        <TabButton
+          active={tab === "customers"}
+          onClick={() => setTab("customers")}
+          icon={UserRound}
+          label="Pelanggan"
+        />
         <TabButton active={tab === "balance"} onClick={() => setTab("balance")} icon={Wallet} label={`Saldo Teknisi${(() => { const n = balanceDeposits.filter((d) => d.status === "pending").length + withdrawals.filter((w) => w.status === "pending").length; return n ? ` (${n})` : ""; })()}`} />
         <TabButton active={tab === "tech-balances"} onClick={() => setTab("tech-balances")} icon={PieChart} label="Saldo Aktif" />
         <TabButton
@@ -796,6 +822,8 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           icon={Gauge}
           label={`Kartu Skor Teknisi${scorecardPerluDitinjau ? ` (${scorecardPerluDitinjau})` : ""}`}
         />
+        <TabButton active={tab === "skills"} onClick={() => setTab("skills")} icon={LayoutGrid} label="Bidang Teknisi" />
+        <TabButton active={tab === "claim-distance"} onClick={() => setTab("claim-distance")} icon={Ruler} label="Jarak Klaim" />
         <TabButton active={tab === "audit"} onClick={() => setTab("audit")} icon={ScrollText} label="Jejak Audit" />
         <TabButton active={tab === "applicants"} onClick={() => setTab("applicants")} icon={UserCheck} label={`Pendaftar Teknisi${pendingTechs.length ? ` (${pendingTechs.length})` : ""}`} />
         <TabButton active={tab === "reports"} onClick={() => setTab("reports")} icon={FileWarning} label={`Laporan Masuk${openReportsCount ? ` (${openReportsCount})` : ""}`} />
@@ -1458,6 +1486,20 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
         </div>
       )}
 
+      {/* Profil pelanggan: satu tempat untuk nama, kontak, ALAMAT, jumlah & nilai
+          pesanan. Tab "Pengguna & Teknisi" tetap ada untuk peran/penugasan. */}
+      {tab === "customers" && (
+        <CustomerProfilesTab
+          users={users}
+          bookings={bookings}
+          // Perubahan nama/telepon/alamat pelanggan langsung tercermin di kartu
+          // & tab "Pengguna & Teknisi" tanpa memuat ulang halaman.
+          onUpdate={(userId, patch) =>
+            setUsers((us) => us.map((u) => (u.id === userId ? { ...u, ...patch } : u)))
+          }
+        />
+      )}
+
       {tab === "users" && (
         <div className="space-y-3">
           {fokusUserId && (
@@ -1490,6 +1532,19 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                   )}
                 </p>
                 <p className="text-xs text-ink-soft">{u.email} · {u.phone || "-"}</p>
+                {/* Bidang & area kerja teknisi. `profiles.skill` menyimpan ID
+                    kategori, bukan namanya (src/lib/skill-match.js); tanpa
+                    penerjemahan ini admin hanya melihat kode seperti "ac". */}
+                {u.role === "technician" && (
+                  <p className="mt-1 flex items-center gap-1.5 flex-wrap text-[10px]">
+                    <span className="pill bg-brand-tint text-brand-deep font-semibold">
+                      Bidang: {bidangLabel(u.skill, categoryList) || "belum diisi"}
+                    </span>
+                    <span className="pill bg-brand-tint text-brand-deep font-semibold">
+                      Area: {u.service_area || "belum diisi"}
+                    </span>
+                  </p>
+                )}
                 {u.role === "technician" && (
                   <p className="text-xs mt-0.5 flex items-center gap-1">
                     {u.rating_avg ? (
@@ -1505,6 +1560,25 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
                 )}
               </div>
               <div className="flex items-center gap-2 flex-wrap">
+                {/* Tombol yang sama dengan kartu Pendaftar Teknisi: teknisi
+                    yang sudah disetujui pun sering perlu dikoreksi bidang atau
+                    areanya tanpa berpindah ke Kartu Skor. */}
+                {u.role === "technician" && (
+                  <button
+                    type="button"
+                    className="btn-outline !px-3 !py-2 text-xs"
+                    onClick={() =>
+                      setAturBidang({
+                        id: u.id,
+                        name: u.name,
+                        skill: u.skill || "",
+                        area: u.service_area || "",
+                      })
+                    }
+                  >
+                    Ubah keahlian & area
+                  </button>
+                )}
                 {u.role === "technician" && (
                   <CommissionInput value={u.commission_rate} onSave={(rate) => changeCommission(u.id, rate)} />
                 )}
@@ -1520,11 +1594,28 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
               </div>
             </div>
           ))}
+
+          {aturBidang && (
+            <ModalBidangPendaftar
+              atur={aturBidang}
+              categories={categoryList}
+              onTutup={() => setAturBidang(null)}
+              onTersimpan={(patch) => {
+                ubahBidangPendaftar(aturBidang.id, patch);
+                setAturBidang(null);
+              }}
+            />
+          )}
         </div>
       )}
 
       {tab === "applicants" && (
-        <ApplicantList users={users} onReview={reviewApplicant} />
+        <ApplicantList
+          users={users}
+          categories={categoryList}
+          onReview={reviewApplicant}
+          onUbah={ubahBidangPendaftar}
+        />
       )}
 
       {tab === "balance" && (
@@ -1559,6 +1650,10 @@ export default function AdminDashboard({ initialBookings, initialServices, initi
           initialReadiness={initialReadiness}
         />
       )}
+
+      {tab === "skills" && <BidangTeknisiTab users={users} categories={categoryList} />}
+
+      {tab === "claim-distance" && <ClaimDistanceTab />}
 
       {tab === "audit" && <AdminAuditLogTab />}
 
@@ -1865,6 +1960,124 @@ function fmtDateTime(iso) {
   return d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/**
+ * Tab "Bidang Teknisi" — teknisi aktif dikelompokkan menurut bidang kerjanya.
+ *
+ * Sumbernya sama dengan tab lain (`users` yang sudah dimuat server), bukan
+ * query baru: pengelompokan ini pertanyaan tampilan, bukan data tambahan.
+ * Yang dilaporkan tiap kelompok ADALAH yang dipakai mesin pencocokan —
+ * `profiles.skill` → `categories.id` (lihat src/lib/skill-match.js) — supaya
+ * admin melihat kesiapan nyata, bukan daftar nama belaka.
+ *
+ * Kategori kosong sengaja tetap tampil: itulah celah cakupan yang perlu diisi
+ * lewat pendaftaran atau perluasan keahlian di kartu skor.
+ */
+function BidangTeknisiTab({ users = [], categories = [] }) {
+  const teknisi = (users || []).filter((u) => u.role === "technician" && u.approval_status === "approved");
+  const menunggu = (users || []).filter(
+    (u) => u.role === "technician" && u.approval_status === "pending"
+  ).length;
+
+  // Nilai `skill` bisa berupa id kategori ATAU label lama — keduanya dihitung
+  // masuk kelompok yang sama lewat bidangLabel().
+  const cocok = (t, c) =>
+    Boolean(t.skill) &&
+    (t.skill === c.id || bidangLabel(t.skill, categories).toLowerCase() === String(c.name).toLowerCase());
+
+  const grup = (categories || []).map((c) => ({
+    id: c.id,
+    nama: c.name,
+    anggota: teknisi.filter((t) => cocok(t, c)),
+  }));
+
+  const sisa = teknisi.filter(
+    (t) => t.skill && !(categories || []).some((c) => cocok(t, c))
+  );
+  if (sisa.length) grup.push({ id: "__lain", nama: "Bidang lain (nilai lama)", anggota: sisa });
+
+  const kosong = teknisi.filter((t) => !t.skill);
+  if (kosong.length) grup.push({ id: "__kosong", nama: "Bidang belum diisi", anggota: kosong });
+
+  const bidangKosong = grup.filter((g) => g.id !== "__kosong" && g.anggota.length === 0).length;
+
+  if (teknisi.length === 0) {
+    return (
+      <p className="text-ink-soft">
+        Belum ada teknisi aktif. Setujui pendaftar di tab &quot;Pendaftar Teknisi&quot; agar kelompok bidang terisi.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="card !p-4 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-ink-soft">
+        <span className="inline-flex items-center gap-1.5 font-semibold text-navy">
+          <Users size={14} className="text-brand" /> {teknisi.length} teknisi aktif
+        </span>
+        <span>{grup.length} kelompok bidang</span>
+        {bidangKosong > 0 && (
+          <span className="text-amber font-semibold">{bidangKosong} bidang belum punya teknisi</span>
+        )}
+        {kosong.length > 0 && (
+          <span className="text-amber font-semibold">{kosong.length} teknisi tanpa bidang</span>
+        )}
+        {menunggu > 0 && (
+          <span>
+            {menunggu} pendaftar menunggu review — lengkapi bidangnya di tab Pendaftar Teknisi sebelum disetujui.
+          </span>
+        )}
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        {grup.map((g) => (
+          <div key={g.id} className="card !p-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="font-semibold text-navy text-sm flex items-center gap-2 min-w-0">
+                <Tags size={14} className="text-brand shrink-0" />
+                <span className="truncate">{g.nama}</span>
+              </p>
+              <span
+                className={`pill text-[10px] font-bold whitespace-nowrap ${g.anggota.length ? "bg-brand-tint text-brand-deep" : "bg-amber-tint text-amber"}`}
+              >
+                {g.anggota.length} teknisi
+              </span>
+            </div>
+
+            {g.anggota.length === 0 ? (
+              <p className="text-xs text-ink-soft">
+                Belum ada teknisi di bidang ini — pertimbangkan memperluas keahlian teknisi terdekat di
+                Kartu Skor, atau mengarahkan pendaftar ke sini.
+              </p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {g.anggota.map((t) => (
+                  <li key={t.id} className="py-2 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-navy truncate">{t.name}</p>
+                      <p className={`text-[11px] truncate ${t.service_area ? "text-ink-soft" : "text-amber"}`}>
+                        {t.service_area ? `Area: ${t.service_area}` : "Area belum diisi"}
+                      </p>
+                    </div>
+                    <span className="text-[11px] text-ink-soft whitespace-nowrap">
+                      {t.rating_avg ? `★ ${t.rating_avg} · ${t.rating_count} ulasan` : "belum ada ulasan"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p className="text-[11px] text-ink-soft">
+        Hanya teknisi yang sudah disetujui yang dihitung. Pengelompokan memakai keahlian utama
+        (profiles.skill) — teknisi dengan area kosong menerima semua area, jadi lengkapi areanya bila
+        filter area ingin dipakai.
+      </p>
+    </div>
+  );
+}
+
 function ApprovalBadge({ status }) {
   const map = {
     pending: { label: "Menunggu review", cls: "bg-amber-tint text-amber" },
@@ -1875,7 +2088,9 @@ function ApprovalBadge({ status }) {
   return <span className={`pill !px-2 !py-0.5 text-[10px] ${it.cls}`}>{it.label}</span>;
 }
 
-function ApplicantList({ users, onReview }) {
+function ApplicantList({ users, categories = [], onReview, onUbah }) {
+  // Pendaftar yang keahlian/areanya sedang diubah (modal kecil di kartu).
+  const [atur, setAtur] = useState(null);
   // Kirim ulang surel verifikasi untuk pendaftar yang belum mengonfirmasi.
   // Tanpa ini, pendaftar seperti itu tidak bisa masuk sama sekali sehingga KTP
   // dan datanya tidak akan pernah bisa dinilai admin — antreannya menggantung.
@@ -1920,6 +2135,23 @@ function ApplicantList({ users, onReview }) {
                 Akun ini belum pernah mengonfirmasi surel — ia tidak bisa masuk sebelum tautannya diklik.
               </p>
             )}
+            {/* Bidang & area pendaftar. Nilai `profiles.skill` tersimpan sebagai
+                ID kategori (src/lib/skill-match.js), jadi tanpa penerjemahan ini
+                admin menilai dari kode seperti "tukang". Area jarang terisi
+                saat mendaftar — ditandai amber supaya admin tahu itu PR dia,
+                bukan data yang hilang. */}
+            <p className="mt-1 flex items-center gap-1.5 flex-wrap text-[10px]">
+              <span
+                className={`pill font-semibold ${bidangLabel(u.skill, categories) ? "bg-brand-tint text-brand-deep" : "bg-amber-tint text-amber"}`}
+              >
+                Bidang: {bidangLabel(u.skill, categories) || "belum diisi"}
+              </span>
+              <span
+                className={`pill font-semibold ${u.service_area ? "bg-brand-tint text-brand-deep" : "bg-amber-tint text-amber"}`}
+              >
+                Area: {u.service_area || "belum diisi"}
+              </span>
+            </p>
             {pesanKirim[u.id] && <p className="text-[11px] text-ink-soft mt-0.5">{pesanKirim[u.id]}</p>}
             {u.address && (
               <p className="text-xs text-ink-soft mt-0.5 flex items-start gap-1">
@@ -1928,6 +2160,24 @@ function ApplicantList({ users, onReview }) {
             )}
           </div>
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Koreksi SEBELUM menyetujui: penilaian kecocokan tidak berguna
+                bila admin tidak bisa membetulkan bidang/area yang salah isi
+                saat mendaftar. */}
+            {onUbah && (
+              <button
+                className="btn-outline !px-3 !py-2 text-xs"
+                onClick={() =>
+                  setAtur({
+                    id: u.id,
+                    name: u.name,
+                    skill: u.skill || "",
+                    area: u.service_area || "",
+                  })
+                }
+              >
+                Ubah keahlian & area
+              </button>
+            )}
             {u.ktp_url && <KtpViewer path={u.ktp_url} name={u.name} />}
             {u.surel_terkonfirmasi === false && (
               <button
@@ -1952,6 +2202,123 @@ function ApplicantList({ users, onReview }) {
           </div>
         </div>
       ))}
+
+      {atur && (
+        <ModalBidangPendaftar
+          atur={atur}
+          categories={categories}
+          onTutup={() => setAtur(null)}
+          onTersimpan={(patch) => {
+            onUbah?.(atur.id, patch);
+            setAtur(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Modal keahlian & area untuk satu pendaftar.
+ *
+ * Sengaja HANYA dua kolom itu (bukan modal lengkap kartu skor): yang dibutuhkan
+ * admin saat menilai pendaftar adalah membetulkan bidang/area yang salah isi,
+ * bukan mengatur cuti. Penyimpanan memakai server action yang sama dengan kartu
+ * skor, jadi validasi & jejak auditnya identik.
+ */
+function ModalBidangPendaftar({ atur, categories = [], onTutup, onTersimpan }) {
+  const [skill, setSkill] = useState(atur.skill || "");
+  const [area, setArea] = useState(atur.area || "");
+  const [sibuk, setSibuk] = useState(false);
+  const [pesan, setPesan] = useState("");
+
+  async function simpan() {
+    setSibuk(true);
+    setPesan("");
+    try {
+      const res = await saveTechnicianSkillAreaAdmin({
+        technicianId: atur.id,
+        skill,
+        serviceArea: area,
+      });
+      if (res.error) {
+        setPesan(res.error);
+        return;
+      }
+      onTersimpan({ skill: res.skill || null, service_area: res.area || null });
+    } catch (e) {
+      setPesan(e?.message || "Gagal menyimpan.");
+    } finally {
+      setSibuk(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 bg-navy/40 flex items-end sm:items-center justify-center p-3">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl">
+        <div className="flex items-start justify-between gap-3 p-4 border-b border-line">
+          <div>
+            <p className="font-display font-bold text-navy">Keahlian & area</p>
+            <p className="text-xs text-ink-soft">{atur.name}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onTutup}
+            className="p-1 rounded-lg hover:bg-brand-tint"
+            aria-label="Tutup"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-3">
+          <div>
+            <label className="text-xs font-semibold text-navy block mb-1">Keahlian utama</label>
+            <select
+              value={skill}
+              onChange={(e) => setSkill(e.target.value)}
+              className="input text-sm w-full"
+            >
+              <option value="">Tanpa filter keahlian (menerima semua kategori)</option>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-navy block mb-1">Area layanan</label>
+            <input
+              value={area}
+              onChange={(e) => setArea(e.target.value)}
+              placeholder="mis. Serang, Cilegon"
+              className="input text-sm w-full"
+            />
+            <p className="text-[11px] text-ink-soft mt-1">
+              Dipakai menyaring pekerjaan yang masuk. Bila dikosongkan saat menyetujui, area akan diisi
+              otomatis dari alamat pendaftar.
+            </p>
+          </div>
+
+          {pesan && <p className="text-xs text-coral bg-coral-tint rounded-lg px-3 py-2">{pesan}</p>}
+
+          <div className="flex items-center gap-2 justify-end pt-1">
+            <button type="button" onClick={onTutup} className="btn-outline !px-4 !py-2 text-sm">
+              Batal
+            </button>
+            <button
+              type="button"
+              onClick={simpan}
+              disabled={sibuk}
+              className="btn-primary !px-4 !py-2 text-sm inline-flex items-center gap-1.5 disabled:opacity-60"
+            >
+              {sibuk ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Simpan
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

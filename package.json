@@ -103,6 +103,11 @@
     "verify:kesiapan": "node scripts/verify-technician-availability.mjs",
     "verify:audit": "node scripts/verify-admin-audit.mjs",
     "verify:terlambat": "node scripts/verify-late-start.mjs",
+    "verify:claim-distance": "node scripts/verify-claim-distance.mjs",
+    "verify:nilai": "node scripts/verify-review-reminder.mjs",
+    "verify:nilai-live": "node scripts/verify-review-reminder.mjs --live",
+    "verify:tempo": "node scripts/verify-payment-deadline.mjs",
+    "verify:tempo-live": "node scripts/verify-payment-deadline.mjs --live",
     "verify:alamat": "node scripts/verify-customer-address-book.mjs",
     "verify:alamat-live": "node scripts/verify-customer-address-book.mjs --live"
   },

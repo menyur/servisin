@@ -342,6 +342,18 @@ export async function kirimVerifikasiPendaftaran({
     return { ok: false, alasan: "akun_gagal_dibuat", pesan: error?.message };
   }
 
+  // Simpan data pendaftaran ke `profiles` secara EKSPLISIT.
+  //
+  // Trigger `handle_new_user` versi lama hanya menyalin name/phone/role:
+  // ALAMAT, KEAHLIAN, dan path KTP yang dikirim formulir tetap tinggal di
+  // `raw_user_meta_data`, sehingga pendaftar teknisi muncul di panel admin
+  // sebagai "bidang/area belum diisi" dan fotonya tidak bisa dibuka. Migrasi
+  // supabase/migrate-registration-profile-fields.sql memperbaiki trigger-nya;
+  // penulisan di sini membuat data tetap tersimpan walau migrasi itu belum
+  // dijalankan di suatu environment. Dijalankan SEBELUM email dikirim supaya
+  // data pendaftar tidak hilang ketika pengiriman email gagal.
+  const profil = await sinkronkanProfil({ admin: klien, userId: hasil?.user?.id, data });
+
   const kirim = await kirimEmail({
     to: alamat,
     actionLink: tautan,
@@ -376,7 +388,64 @@ export async function kirimVerifikasiPendaftaran({
     idPesan: kirim?.id ?? null,
     pembatasPersisten: pembatas?.tersedia !== false,
     ditandaiBekas: Boolean(tanda?.ditandai),
+    profilPendaftaran: profil?.ok ? (profil.diubah ? "diisi" : "lengkap") : "gagal",
   };
+}
+
+/**
+ * Pastikan data pendaftaran benar-benar masuk ke `profiles`.
+ *
+ * Kenapa tidak cukup mengandalkan trigger: kontrak `metadataPendaftaran`
+ * mengirim `address`, `skill`, dan `ktp_url`, tetapi fungsi `handle_new_user`
+ * yang berjalan di database bisa tertinggal versi (project ini sempat begitu —
+ * hanya name/phone/role yang disalin). Pendaftar teknisi lalu tampil tanpa
+ * bidang, tanpa area, dan tanpa KTP di panel admin, padahal ia sudah mengisi
+ * semuanya di formulir.
+ *
+ * Aturan yang dijaga:
+ *   1. HANYA kolom yang masih kosong yang diisi. Nilai yang sudah ada tidak
+ *      pernah ditimpa — bisa jadi hasil koreksi admin di panel (mis. keahlian
+ *      dipindahkan lewat Kartu Skor).
+ *   2. Tidak pernah melempar: gagal menyimpan profil dicatat, bukan
+ *      menggagalkan pendaftaran yang akunnya sudah terlanjur dibuat.
+ *   3. Klien tanpa `from()` (tiruan uji lama) dilewati dengan tenang.
+ *
+ * @returns {Promise<{ok:boolean, diubah?:boolean, bidang?:string[], alasan?:string, pesan?:string}>}
+ */
+export async function sinkronkanProfil({ admin, userId, data } = {}) {
+  if (!userId) return { ok: false, alasan: "tanpa_user" };
+  if (!admin || typeof admin.from !== "function") return { ok: false, alasan: "tanpa_klien" };
+
+  const kosong = (v) => v === null || v === undefined || String(v).trim() === "";
+  const patch = {};
+  try {
+    const { data: profil, error } = await admin
+      .from("profiles")
+      .select("name, phone, address, skill, ktp_url")
+      .eq("id", userId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!profil) return { ok: false, alasan: "tanpa_profil" };
+
+    if (kosong(profil.name) && !kosong(data?.name)) patch.name = String(data.name).trim();
+    if (kosong(profil.phone) && !kosong(data?.phone)) patch.phone = String(data.phone).trim();
+    if (kosong(profil.address) && !kosong(data?.address)) patch.address = String(data.address).trim();
+    if (kosong(profil.skill) && !kosong(data?.skill)) patch.skill = String(data.skill).trim();
+    if (kosong(profil.ktp_url) && !kosong(data?.ktp_url)) patch.ktp_url = String(data.ktp_url).trim();
+
+    if (!Object.keys(patch).length) return { ok: true, diubah: false };
+
+    const { error: errUpdate } = await admin.from("profiles").update(patch).eq("id", userId);
+    if (errUpdate) throw new Error(errUpdate.message);
+
+    return { ok: true, diubah: true, bidang: Object.keys(patch) };
+  } catch (err) {
+    console.error(
+      "[signup-verification] gagal menyimpan data pendaftaran ke profil:",
+      err?.message ?? err
+    );
+    return { ok: false, alasan: "gagal_simpan", pesan: err?.message ?? null };
+  }
 }
 
 /**

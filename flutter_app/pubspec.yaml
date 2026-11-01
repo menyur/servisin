@@ -21,6 +21,7 @@ dependencies:
   flutter_map: ^8.1.1             # peta OSM gratis — pilih titik lokasi (tanpa API key)
   latlong2: ^0.9.1                # tipe lat/lng companion flutter_map
   url_launcher: ^6.3.0            # buka rute Google Maps dari detail pesanan teknisi
+  webview_flutter: ^4.9.0         # syarat & kebijakan privasi dibuka DI DALAM aplikasi
   geolocator: ^13.0.1             # GPS on-duty teknisi (simpan lokasi saat layar Pekerjaan aktif)
   intl: ^0.19.0                   # format rupiah & tanggal id-ID
   http: ^1.2.0                    # panggil API web (notifikasi admin saat lepas tugas)

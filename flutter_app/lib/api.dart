@@ -13,6 +13,7 @@ import 'account_deletion.dart';
 import 'chat_moderation.dart';
 import 'config.dart';
 import 'format.dart';
+import 'job_release.dart';
 import 'models.dart';
 import 'register_http.dart';
 import 'report_seen.dart';
@@ -22,6 +23,18 @@ import 'subscription.dart';
 
 /// Fungsi cleanup langganan realtime chat (dipanggil di dispose).
 typedef ChatUnsubscribe = Future<void> Function();
+
+/// Hasil klaim pekerjaan (RPC `claim_job`).
+///
+/// `jarakM` = jarak yang TERCATAT server saat klaim; `batasKm` hanya terisi
+/// bila klaim ditolak karena melewati batas lunak jarak (`terlalu_jauh`).
+typedef ClaimResult = ({
+  bool ok,
+  String? error,
+  String? kode,
+  double? jarakM,
+  int? batasKm,
+});
 
 /// Helper kick worker push: POST sederhana, gagal = diam (worker akan
 /// dipicu interaksi berikutnya).
@@ -1354,6 +1367,17 @@ class Api {
         .toList();
   }
 
+  /// [fetchAvailableJobs] yang tidak pernah melempar — dipakai kotak masuk
+  /// teknisi: kabar lain tidak boleh hilang hanya karena RPC pekerjaan tersedia
+  /// gagal (mis. migrasi GPS/keahlian belum jalan atau sinyal buruk).
+  static Future<List<AvailableJob>> fetchAvailableJobsSafe() async {
+    try {
+      return await fetchAvailableJobs();
+    } catch (_) {
+      return const <AvailableJob>[];
+    }
+  }
+
   /// Sisa kuota tiap slot pada satu tanggal (jumlah saja, bukan data pesanan).
   ///
   /// Gagal / migrasi `migrate-slot-capacity.sql` belum jalan → peta kosong;
@@ -1397,13 +1421,73 @@ class Api {
   ///     dulu (atau lepas) sebelum mengambil yang baru;
   ///   * `tidak_tersedia` — sudah diambil teknisi lain / di luar keahlian;
   ///   * `bukan_teknisi_aktif` — belum disetujui admin.
-  static Future<({bool ok, String? error, String? kode})> claimJob(
-      String bookingId) async {
-    final res = await db.rpc('claim_job', params: {'p_booking': bookingId});
-    final m = (res as Map).cast<String, dynamic>();
+  ///
+  /// [lat]/[lng] = posisi teknisi saat menekan "Ambil Pekerjaan". Server memakai
+  /// titik itu untuk mencatat jarak ke pin pesanan (`claim_distance_m`,
+  /// supabase/migrate-job-claim-distance.sql) — angka yang dibutuhkan untuk
+  /// memutuskan radius layanan nanti. Posisi OPSIONAL: tanpa GPS klaim tetap
+  /// berjalan, hanya jaraknya tidak tercatat. Bila migrasi itu belum dijalankan,
+  /// RPC lama (satu argumen) dipakai otomatis supaya klaim tidak ikut mati.
+  static Future<ClaimResult> claimJob(String bookingId,
+      {double? lat, double? lng}) async {
+    final punyaPosisi = lat != null && lng != null;
+    Future<Map<String, dynamic>> kirim({required bool denganPosisi}) async {
+      final res = await db.rpc('claim_job', params: {
+        'p_booking': bookingId,
+        if (denganPosisi) 'p_lat': lat,
+        if (denganPosisi) 'p_lng': lng,
+      });
+      return (res as Map).cast<String, dynamic>();
+    }
+
+    Map<String, dynamic> m;
+    try {
+      m = await kirim(denganPosisi: punyaPosisi);
+    } catch (e) {
+      // Migrasi jarak klaim belum jalan → fungsi 3 argumen tidak ada. Jangan
+      // gagalkan klaim hanya karena jarak tidak bisa dicatat.
+      if (!punyaPosisi || !_fungsiBelumAda(e)) rethrow;
+      m = await kirim(denganPosisi: false);
+    }
     final ok = m['ok'] == true;
     if (ok) unawaited(notifyBookingStatus(bookingId, 'technician_assigned'));
-    return (ok: ok, error: m['error'] as String?, kode: m['kode'] as String?);
+    return (
+      ok: ok,
+      error: m['error'] as String?,
+      kode: m['kode'] as String?,
+      jarakM: (m['distance_m'] as num?)?.toDouble(),
+      batasKm: (m['limit_km'] as num?)?.toInt(),
+    );
+  }
+
+  /// Minta izin admin untuk mengambil pesanan di luar **batas lunak jarak**.
+  ///
+  /// Server (RPC `request_claim_permit`, migrate-claim-distance-limit.sql)
+  /// memeriksa ulang: teknisi aktif, pesanan masih terbuka, keahlian cocok, dan
+  /// jaraknya memang melebihi batas. Permintaan hanya bisa diputuskan admin;
+  /// teknisi tidak bisa menyetujui izinnya sendiri. Satu permintaan terbuka per
+  /// (pesanan, teknisi) — menekan tombol berkali-kali tidak menumpuk.
+  ///
+  /// Setelah disetujui, teknisi menekan Ambil lagi: izin dipakai sekali pada
+  /// klaim yang berhasil.
+  static Future<({bool ok, String? error, String? kode})> requestClaimPermit(
+    String bookingId, {
+    double? lat,
+    double? lng,
+    String? note,
+  }) async {
+    final res = await db.rpc('request_claim_permit', params: {
+      'p_booking': bookingId,
+      if (lat != null && lng != null) 'p_lat': lat,
+      if (lat != null && lng != null) 'p_lng': lng,
+      'p_note': (note ?? '').trim().isEmpty ? null : note!.trim(),
+    });
+    final m = (res as Map).cast<String, dynamic>();
+    return (
+      ok: m['ok'] == true,
+      error: m['error'] as String?,
+      kode: m['kode'] as String?,
+    );
   }
 
   /// Pekerjaan yang ditugaskan ke saya (teknisi).
@@ -1445,6 +1529,29 @@ class Api {
       commission: m['commission'] as num?,
       balance: m['balance'] as num?,
     );
+  }
+
+  /// Riwayat tugas yang PERNAH dilepas teknisi ini (50 terbaru, terbaru dulu).
+  ///
+  /// Sumbernya `job_releases` — policy "tech can read own releases" sudah
+  /// membatasi ke baris milik pemanggil, jadi tidak perlu filter tambahan.
+  /// Kode pesanan & nama layanan sudah tersalin di baris itu (migrasi
+  /// `migrate-job-release-history.sql`); join ke `bookings` tidak mungkin
+  /// dipakai karena setelah dilepas pesanan itu tidak lagi terlihat teknisi.
+  ///
+  /// Tidak melempar: tabel yang belum dimigrasikan atau offline menghasilkan
+  /// daftar kosong, dan layar riwayat menampilkan keadaannya sendiri.
+  static Future<List<JobRelease>> myJobReleases() async {
+    try {
+      final rows = await db
+          .from('job_releases')
+          .select('id, booking_id, booking_code, service_name, reason, created_at')
+          .order('created_at', ascending: false)
+          .limit(50);
+      return rows.map<JobRelease>(JobRelease.fromMap).toList();
+    } catch (_) {
+      return const <JobRelease>[];
+    }
   }
 
   /// Lepas tugas dengan alasan → pesanan kembali ke daftar Tersedia

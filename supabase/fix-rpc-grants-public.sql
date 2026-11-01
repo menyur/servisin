@@ -133,7 +133,15 @@ begin
       ('bookings_nearby(double precision, double precision, double precision, integer)', 'authenticated, service_role'),
       ('cancel_account_deletion()', 'authenticated, service_role'),
       ('cancel_booking(uuid, text)', 'authenticated, service_role'),
-      ('claim_job(uuid)', 'authenticated, service_role'),
+      -- Klaim pekerjaan + catat jarak teknisi→pesanan (migrate-job-claim-distance.sql).
+      -- Posisi opsional, jadi tanda tangan 3 argumen ini tetap bisa dipanggil
+      -- aplikasi versi lama dengan satu argumen.
+      ('claim_job(uuid, double precision, double precision)', 'authenticated, service_role'),
+      -- Batas lunak jarak klaim (migrate-claim-distance-limit.sql): teknisi
+      -- meminta izin, admin memutuskan, aplikasi membaca batas yang berlaku.
+      ('claim_distance_limit_efektif()', 'authenticated, service_role'),
+      ('request_claim_permit(uuid, double precision, double precision, text)', 'authenticated, service_role'),
+      ('decide_claim_permit(uuid, text, text)', 'authenticated, service_role'),
       ('create_booking_security_definer(uuid, date, text, text, uuid, text, text, text, uuid, double precision, double precision, integer, jsonb, numeric)', 'authenticated, service_role'),
       ('create_warranty_claim(uuid, text)', 'authenticated, service_role'),
       ('decide_warranty_claim(uuid, text, text, date, text)', 'authenticated, service_role'),

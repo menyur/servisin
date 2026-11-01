@@ -12,12 +12,14 @@ import '../format.dart';
 import '../job_queue.dart';
 import '../models.dart';
 import '../no_show.dart';
+import '../payment_deadline.dart';
 import '../theme.dart';
 import '../trip_share.dart';
 import 'chat_screen.dart';
 import 'chat_unread_badge.dart';
 import 'common.dart';
 import 'mini_pin_map.dart';
+import 'payment_deadline_card.dart';
 import 'receipt_screen.dart';
 import 'report_screen.dart';
 import 'review_sheet.dart';
@@ -125,6 +127,15 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
   BookingTechPosition _posisi = BookingTechPosition.kosong;
   Timer? _posisiTimer;
 
+  /// Waktu acuan hitungan mundur batas bayar.
+  ///
+  /// Tanpa timer, "sisa 5 jam lagi" akan tetap tertulis 5 jam walau layar
+  /// dibiarkan terbuka setengah jam — hitungan mundur yang berbohong lebih
+  /// buruk daripada tidak ada hitungan mundur. 30 detik cukup rapat untuk
+  /// satuan menit dan tetap murah (hanya setState, tanpa jaringan).
+  DateTime _sekarang = DateTime.now();
+  Timer? _tempoTimer;
+
   /// Sesi berbagi milik APLIKASI (bukan layar ini) — itulah sebabnya posisi
   /// tetap diperbarui setelah teknisi menutup layar detail. Di sini kita hanya
   /// memantau keadaannya untuk menggambar tombol & jarak.
@@ -163,6 +174,9 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
       _posisiTimer =
           Timer.periodic(_intervalPosisi, (_) => unawaited(_muatPosisi()));
     }
+    _tempoTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() => _sekarang = DateTime.now());
+    });
     // Detail pesanan terbuka — perubahan item ini langsung tampak, reset badge.
     unseenBookingUpdates.value = 0;
     if (widget.openChatOnOpen) {
@@ -196,6 +210,7 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     // Timer pelacakan pelanggan: tanpa ini, layar yang ditutup tetap memanggil
     // server setiap 15 detik dan test pelacakan kebocoran akan menangkapnya.
     _posisiTimer?.cancel();
+    _tempoTimer?.cancel();
     // Pendengar sesi WAJIB dilepas: sesinya sendiri hidup lebih lama daripada
     // layar ini (itu tujuannya), jadi ia tidak boleh memegang layar yang sudah mati.
     _sesi.aktif.removeListener(_segarkan);
@@ -1967,6 +1982,22 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
     // pembayaran pelanggan bukan miliknya sehingga tidak boleh muncul di sana.
     final isOwner = b.isOwnedBy(myId);
     final cekNoShow = cekLaporanNoShow(b, uid: myId);
+    // Batas bayar (lihat src/lib/payment-deadline.js untuk aturan servernya).
+    // Hanya untuk pemilik yang pesanannya masih menunggu bayar TANPA bukti
+    // tertunda: pesanan yang buktinya sedang diperiksa admin tidak akan
+    // dibatalkan otomatis, jadi hitungan mundur di sini akan menyesatkan.
+    final batasBayarPesanan = perluTampilBatas(
+      status: b.status.name,
+      isOwner: isOwner,
+      paymentProofUrl: b.paymentProofUrl,
+      paymentRejected: b.paymentRejected,
+    )
+        ? batasBayar(
+            createdAt: b.createdAt,
+            bookingDate: b.bookingDate,
+            bookingTime: b.bookingTime,
+          )
+        : null;
 
     return Scaffold(
       appBar: AppBar(
@@ -1993,6 +2024,16 @@ class _OrderDetailScreenState extends State<OrderDetailScreen> {
         // tertutup bilah gestur/3 tombol di Android 15+ (edge-to-edge).
         padding: EdgeInsets.fromLTRB(16, 16, 16, jarakBawahSistem(context, 16)),
         children: [
+          // Batas bayar: satu-satunya tempat pelanggan bisa tahu kapan pesanan
+          // akan dibatalkan otomatis. Ditaruh paling atas karena ini yang
+          // menuntut tindakan, bukan informasi status.
+          if (batasBayarPesanan != null)
+            PaymentDeadlineCard(
+              batas: batasBayarPesanan,
+              sekarang: _sekarang,
+              onBayar: _uploadProof,
+            ),
+
           // pipeline status + timeline stempel waktu
           Container(
             padding: const EdgeInsets.all(16),

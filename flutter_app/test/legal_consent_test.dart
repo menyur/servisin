@@ -1,128 +1,188 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import 'package:fixify_app/config.dart';
 import 'package:fixify_app/theme.dart';
 import 'package:fixify_app/ui/legal_consent.dart';
+import 'package:fixify_app/ui/legal_page_screen.dart';
 import 'package:fixify_app/ui/register_screen.dart';
 
 import 'support/fake_url_launcher.dart';
 
-/// Regresi keluhan "syarat layanan dan kebijakan privasi tidak bisa diklik":
-/// di layar Daftar keduanya dulu hanya `TextSpan` berwarna brand TANPA
-/// `recognizer`, jadi tampak seperti tautan tetapi tidak ada satu pun area yang
-/// bisa diketuk — mengetuknya tidak membuka apa pun.
+/// Regresi DUA keluhan berurutan atas tautan legal di layar Daftar:
 ///
-/// Yang dijaga di sini: kedua label itu benar-benar widget yang bisa diketuk,
-/// dan mengetuknya membuka HALAMAN YANG BENAR di situs web (jalur /syarat dan
-/// /privasi — sama dengan footer web yang dijaga verify-legal-links.mjs),
-/// dengan kegagalan yang tidak diam-diam.
+///  1. "tidak bisa diklik" — keduanya dulu hanya `TextSpan` berwarna brand
+///     TANPA `recognizer`, jadi tampak seperti tautan tetapi tidak ada satu pun
+///     area yang bisa diketuk;
+///  2. "membuka browser" — setelah bisa diketuk, halamannya diluncurkan ke
+///     Chrome/Custom Tab sehingga pengguna keluar dari alur pendaftaran.
+///
+/// Kontrak yang dijaga sekarang: mengetuk tautan membuka halaman legal **di
+/// dalam aplikasi** (LegalPageScreen) dengan URL resmi yang benar, dan TIDAK
+/// memanggil peluncur URL sama sekali.
 void main() {
-  Future<void> pompaWidget(
+  /// Membungkus widget dengan halaman palsu pengganti WebView, sambil mencatat
+  /// judul & URL yang diminta.
+  Future<List<(String, String)>> pompaWidget(
     WidgetTester tester, {
-    Future<bool> Function(String url)? openPage,
+    required void Function(Widget) pasang,
   }) async {
-    await tester.pumpWidget(MaterialApp(
-      theme: AppTheme.light,
-      home: Scaffold(body: Center(child: LegalConsentText(openPage: openPage))),
-    ));
+    final dibuka = <(String, String)>[];
+    final widget = LegalConsentText(
+      pageBuilder: (context, title, url) {
+        dibuka.add((title, url));
+        return Scaffold(
+          appBar: AppBar(title: Text(title)),
+          body: Text('halaman:$url'),
+        );
+      },
+    );
+    await tester.pumpWidget(MaterialApp(theme: AppTheme.light, home: Scaffold(body: Center(child: widget))));
     await tester.pumpAndSettle();
+    return dibuka;
   }
 
   group('tautan legal (widget)', () {
     testWidgets('kedua label tampil sebagai teks yang bisa diketuk', (tester) async {
-      await pompaWidget(tester);
-
-      // Kalimat lengkapnya tetap utuh — hanya dua bagian yang menjadi tautan.
+      await pompaWidget(tester, pasang: (_) {});
       expect(find.text(LegalConsentText.syaratLabel), findsOneWidget);
       expect(find.text(LegalConsentText.privasiLabel), findsOneWidget);
       expect(find.byType(GestureDetector), findsNWidgets(2),
           reason: 'dua tautan = dua area ketuk; sebelumnya nol');
     });
 
-    testWidgets('ketuk "syarat layanan" → buka halaman /syarat di browser luar',
+    testWidgets('ketuk "syarat layanan" → halaman dibuka DI DALAM aplikasi',
         (tester) async {
       final launcher = FakeUrlLauncher()..install();
       addTearDown(launcher.restore);
+      final dibuka = await pompaWidget(tester, pasang: (_) {});
 
-      await pompaWidget(tester);
       await tester.tap(find.text(LegalConsentText.syaratLabel));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
 
-      final buka = launcher.last;
-      expect(buka, isNotNull, reason: 'mengetuk tautan HARUS membuka sesuatu');
-      final uri = buka!.uri;
-      expect(uri.path, '/syarat');
-      expect(uri.scheme, 'https');
-      expect(uri.host, Uri.parse(AppConfig.webBaseUrl).host);
-      expect(buka.mode, PreferredLaunchMode.externalApplication,
-          reason: 'halaman legal dibuka di browser, bukan webview di dalam app');
+      expect(dibuka.length, 1);
+      expect(dibuka.single.$1, LegalConsentText.syaratJudul);
+      expect(dibuka.single.$2, AppConfig.syaratUrl);
+      expect(find.text('halaman:${AppConfig.syaratUrl}'), findsOneWidget);
+      expect(launcher.launched, isEmpty,
+          reason: 'browser TIDAK boleh dibuka lagi');
     });
 
-    testWidgets('ketuk "kebijakan privasi" → buka halaman /privasi di browser luar',
+    testWidgets('ketuk "kebijakan privasi" → halaman dibuka DI DALAM aplikasi',
         (tester) async {
       final launcher = FakeUrlLauncher()..install();
       addTearDown(launcher.restore);
+      final dibuka = await pompaWidget(tester, pasang: (_) {});
 
-      await pompaWidget(tester);
       await tester.tap(find.text(LegalConsentText.privasiLabel));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 50));
+      await tester.pumpAndSettle();
 
-      final buka = launcher.last;
-      expect(buka, isNotNull);
-      expect(buka!.uri.path, '/privasi');
-      expect(buka.uri.scheme, 'https');
-      expect(buka.mode, PreferredLaunchMode.externalApplication);
+      expect(dibuka.single.$1, LegalConsentText.privasiJudul);
+      expect(dibuka.single.$2, AppConfig.privasiUrl);
+      expect(launcher.launched, isEmpty);
     });
 
-    testWidgets('jalur kedua tautan sama dengan halaman yang dijaga web',
+    testWidgets('jalur kedua tautan sama dengan halaman resmi di web',
         (tester) async {
       // Kesepakatan lintas-platform: footer web menautkan /syarat dan /privasi
-      // (scripts/verify-legal-links.mjs). Aplikasi harus menunjuk halaman yang
+      // (scripts/verify-legal-links.mjs). Aplikasi harus memuat halaman yang
       // sama, bukan menebak URL lain.
       expect(Uri.parse(AppConfig.syaratUrl).path, '/syarat');
       expect(Uri.parse(AppConfig.privasiUrl).path, '/privasi');
       expect(AppConfig.syaratUrl, startsWith('https://'));
       expect(AppConfig.privasiUrl, startsWith('https://'));
-      // Origin tanpa garis miring dobel walau WEB_BASE_URL diakhiri '/'.
       expect(AppConfig.webOrigin, isNot(endsWith('/')));
     });
 
-    testWidgets('tidak ada penangan URL: pengguna diberi tahu, bukan diam',
-        (tester) async {
-      final launcher = FakeUrlLauncher(hasHandler: false)..install();
-      addTearDown(launcher.restore);
+    test('tampilan dalam aplikasi meminta halaman tanpa navbar situs', () {
+      // Navbar situs (logo + tombol Masuk) di dalam WebView tampil sebagai
+      // header KEDUA di bawah AppBar, dan tombol Masuknya tidak berguna karena
+      // pengguna sudah masuk lewat aplikasi. Server menyembunyikannya bila
+      // menerima `?embed=1` (components/HideInApp.js).
+      final syarat = Uri.parse(urlSematanAplikasi(AppConfig.syaratUrl));
+      final privasi = Uri.parse(urlSematanAplikasi(AppConfig.privasiUrl));
+      expect(syarat.path, '/syarat');
+      expect(privasi.path, '/privasi');
+      expect(syarat.queryParameters['embed'], '1');
+      expect(privasi.queryParameters['embed'], '1');
 
-      await pompaWidget(tester);
-      await tester.tap(find.text(LegalConsentText.syaratLabel));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      // Parameter lain dipertahankan, dan penanda tidak bisa dimatikan dari
+      // URL yang datang: `embed` selalu ditimpa menjadi 1.
+      final lain = Uri.parse(
+          urlSematanAplikasi('https://contoh.test/syarat?embed=0&utm=app'));
+      expect(lain.queryParameters['embed'], '1');
+      expect(lain.queryParameters['utm'], 'app');
+    });
+  });
 
-      expect(
-        find.text('Gagal membuka ${LegalConsentText.syaratLabel}. '
-            'Periksa koneksi lalu coba lagi.'),
-        findsOneWidget,
-      );
+  group('halaman legal di dalam aplikasi', () {
+    testWidgets('judul di header + tombol kembali berfungsi', (tester) async {
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: LegalPageScreen(
+          title: LegalConsentText.syaratJudul,
+          url: AppConfig.syaratUrl,
+          viewBuilder: (_, url) => Center(child: Text('isi:$url')),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(LegalConsentText.syaratJudul), findsOneWidget);
+      expect(find.text('isi:${AppConfig.syaratUrl}'), findsOneWidget);
+      expect(find.byTooltip('Salin tautan'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('peluncur melempar error: tetap tidak ada layar merah',
+    testWidgets('URL bisa disalin dari header (jalan keluar bila gagal muat)',
         (tester) async {
-      final launcher = FakeUrlLauncher(error: Exception('intent tidak ada'))
-        ..install();
-      addTearDown(launcher.restore);
+      String? disalin;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            disalin = (call.arguments as Map)["text"] as String?;
+          }
+          return null;
+        },
+      );
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null));
 
-      await pompaWidget(tester);
-      await tester.tap(find.text(LegalConsentText.privasiLabel));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: LegalPageScreen(
+          title: LegalConsentText.privasiJudul,
+          url: AppConfig.privasiUrl,
+          viewBuilder: (_, __) => const SizedBox.shrink(),
+        ),
+      ));
+      await tester.pumpAndSettle();
 
-      expect(find.textContaining('Gagal membuka'), findsOneWidget);
+      await tester.tap(find.byTooltip('Salin tautan'));
+      await tester.pumpAndSettle();
+
+      expect(disalin, AppConfig.privasiUrl);
+      expect(find.textContaining('disalin'), findsOneWidget);
+    });
+
+    testWidgets('tanpa WebView (uji/web) halaman tetap menjelaskan, bukan layar merah',
+        (tester) async {
+      // Di lingkungan uji tidak ada implementasi WebView; layar harus jatuh ke
+      // penjelasan + tombol salin, bukan melempar exception.
+      await tester.pumpWidget(MaterialApp(
+        theme: AppTheme.light,
+        home: LegalPageScreen(
+          title: LegalConsentText.syaratJudul,
+          url: AppConfig.syaratUrl,
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.text(LegalConsentText.syaratJudul), findsOneWidget);
+      expect(find.byTooltip('Salin tautan'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
   });
@@ -149,7 +209,7 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    testWidgets('mengetuk kedua tautan di form pendaftaran membuka halaman web',
+    testWidgets('mengetuk kedua tautan membuka halaman legal di dalam aplikasi',
         (tester) async {
       final launcher = FakeUrlLauncher()..install();
       addTearDown(launcher.restore);
@@ -157,22 +217,27 @@ void main() {
       await pompaDaftar(tester);
 
       for (final halaman in [
-        (LegalConsentText.syaratLabel, '/syarat'),
-        (LegalConsentText.privasiLabel, '/privasi'),
+        (LegalConsentText.syaratLabel, LegalConsentText.syaratJudul),
+        (LegalConsentText.privasiLabel, LegalConsentText.privasiJudul),
       ]) {
         final tautan = find.text(halaman.$1);
         await tester.ensureVisible(tautan);
         await tester.pumpAndSettle();
         await tester.tap(tautan);
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pumpAndSettle();
 
-        expect(launcher.last?.uri.path, halaman.$2,
+        // Halaman legal terbuka DI DALAM aplikasi: header berisi judulnya.
+        expect(find.widgetWithText(AppBar, halaman.$2), findsOneWidget,
             reason: 'mengetuk "${halaman.$1}" harus membuka ${halaman.$2}');
+        expect(tester.takeException(), isNull);
+
+        // Kembali ke form daftar untuk tautan berikutnya.
+        await tester.pageBack();
+        await tester.pumpAndSettle();
       }
-      expect(launcher.launched.length, 2,
-          reason: 'dua ketukan = dua halaman dibuka, bukan satu yang diulang');
-      expect(tester.takeException(), isNull);
+
+      expect(launcher.launched, isEmpty,
+          reason: 'tidak satu pun tautan boleh meluncurkan browser');
     });
   });
 }

@@ -132,6 +132,70 @@ export function normalisasiAreaLayanan(nilai) {
   return { ok: true, value: hasil || null };
 }
 
+/** Awalan wilayah administratif yang dibuang saat menurunkan nama area. */
+const AWALAN_WILAYAH = /^(kecamatan|kelurahan|desa|kota|kabupaten|kec|kel|kab)\.?\s+/i;
+
+/** Awalan bagian ALAMAT (bukan wilayah) — tidak boleh menjadi nama area. */
+const BUKAN_WILAYAH = /^(jl|jalan|gg|gang|kp|kampung|perum|perumahan|blok|rt|rw|dusun|nomor|no)\b/i;
+
+/**
+ * Turunkan area layanan dari alamat pendaftar.
+ *
+ * Pendaftaran teknisi (`/gabung`) TIDAK pernah mengisi `profiles.service_area`,
+ * jadi teknisi yang baru disetujui selalu punya area kosong — dan area kosong
+ * berarti menerima SEMUA pekerjaan (lihat `areaMatchesBooking`). Admin lalu
+ * harus mengisinya manual sebelum filter area berguna. Fungsi ini mengisi titik
+ * awal itu dari alamat yang sudah dia tulis sendiri.
+ *
+ * Urutan (yang pertama menghasilkan, dipakai):
+ *   1. area yang SUDAH dipakai teknisi lain dan muncul di alamat — menghasilkan
+ *      nilai yang persis cocok dengan aturan pencocokan (teks area harus muncul
+ *      di alamat pesanan), jadi filter langsung berguna;
+ *   2. segmen "Kota/Kabupaten/Kecamatan X" — dibaca dari belakang karena kota
+ *      biasanya ditulis setelah kecamatan;
+ *   3. segmen terakhir alamat (biasanya kota/provinsi), kode pos dibuang.
+ *
+ * Hasilnya SARAN, bukan keputusan: admin tetap bisa mengubahnya di kartu skor,
+ * dan alamat yang tidak terbaca lebih baik dibiarkan kosong daripada diisi
+ * tebakan yang salah.
+ *
+ * @param {string|null} alamat alamat pendaftar (teks bebas)
+ * @param {string[]} areaDikenal area layanan teknisi lain (boleh berisi koma)
+ * @returns {string|null} nama area, atau null bila tidak ada yang bisa dibaca
+ */
+export function areaDariAlamat(alamat, areaDikenal = []) {
+  const teks = String(alamat ?? "").replace(/\s+/g, " ").trim();
+  if (!teks) return null;
+  const kecil = teks.toLowerCase();
+
+  // 1) Area yang sudah dipakai teknisi lain dan benar-benar tertulis di alamat.
+  const dikenal = [];
+  for (const a of Array.isArray(areaDikenal) ? areaDikenal : []) {
+    for (const bagian of String(a ?? "").split(",")) {
+      const t = bagian.trim();
+      if (t.length >= 3) dikenal.push(t);
+    }
+  }
+  const cocok = dikenal
+    .filter((a) => kecil.includes(a.toLowerCase()))
+    .sort((x, y) => y.length - x.length)[0];
+  if (cocok) return cocok;
+
+  // 2) Wilayah administratif yang ditulis eksplisit.
+  const segmen = teks.split(",").map((s) => s.trim()).filter(Boolean);
+  for (let i = segmen.length - 1; i >= 0; i -= 1) {
+    if (!AWALAN_WILAYAH.test(segmen[i])) continue;
+    const nama = segmen[i].replace(AWALAN_WILAYAH, "").trim();
+    if (nama.length >= 3) return nama;
+  }
+
+  // 3) Segmen terakhir apa adanya (kota/provinsi), tanpa kode pos — asal bukan
+  //    potongan alamat seperti "Jl. Melati No. 5" yang bukan nama wilayah.
+  const akhir = (segmen[segmen.length - 1] || "").replace(/\b\d{5}\b/g, "").trim();
+  if (akhir.length < 3 || BUKAN_WILAYAH.test(akhir)) return null;
+  return akhir;
+}
+
 /**
  * Validasi rentang cuti sebelum menyentuh database.
  *

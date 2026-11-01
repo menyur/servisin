@@ -10,6 +10,7 @@ import '../signup_handoff.dart';
 import '../theme.dart';
 import 'auth_widgets.dart';
 import 'common.dart';
+import 'legal_consent.dart';
 
 /// Halaman pendaftaran TEKNISI — paritas dengan /gabung di web:
 ///   nama, email, HP, alamat domisili, keahlian utama, foto KTP, kata sandi.
@@ -398,7 +399,15 @@ class _TechnicianRegisterScreenState extends State<TechnicianRegisterScreen> {
                             fontSize: 11.5, color: AppColors.inkSoft),
                       ),
                     ],
-                    const SizedBox(height: 22),
+                    const SizedBox(height: 18),
+                    // Persetujuan legal — widget yang SAMA dengan layar Daftar
+                    // pelanggan (`LegalConsentText`), jadi kedua tautannya
+                    // benar-benar membuka /syarat dan /privasi di browser.
+                    // Ditempatkan SEBELUM tombol kirim: pendaftaran teknisi
+                    // mengirim foto KTP dan data identitas, jadi persetujuan
+                    // harus terbaca sebelum berkasnya dikirim, bukan sesudah.
+                    const LegalConsentText(),
+                    const SizedBox(height: 16),
                     GradientButton(
                       label: 'Kirim Pendaftaran',
                       icon: Icons.handyman_rounded,

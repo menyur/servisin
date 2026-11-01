@@ -123,15 +123,16 @@ void main() {
     // Daftar ini cermin `PUSH_EVENTS` di src/lib/push.js. Bila server menambah
     // peristiwa baru, tambahkan juga di sini agar bisa dinyalakan dari HP.
     const serverKeys = {
-      'payment_confirmed', 'payment_rejected', 'technician_assigned',
+      'payment_confirmed', 'payment_rejected', 'payment_reminder', 'technician_assigned',
       'work_started', 'order_completed', 'order_cancelled', 'order_rescheduled',
-      'refund_update', 'booking_reminder', 'late_start', 'customer_no_show',
-      'extra_charge', 'subscription_due',
+      'refund_update', 'booking_reminder', 'review_reminder', 'late_start',
+      'customer_no_show', 'extra_charge', 'subscription_due',
       'technician_near', 'technician_approved', 'technician_rejected',
       'new_job_available', 'job_released', 'report_replied',
       'report_status', 'chat_message', 'balance_reminder', 'balance_credited',
       'deposit_approved', 'deposit_rejected', 'withdrawal_approved',
       'withdrawal_rejected', 'warranty_update', 'voucher_received',
+      'claim_permit',
     };
     for (final t in [true, false]) {
       for (final g in notificationGroupsFor(isTechnician: t)) {

@@ -280,7 +280,10 @@ check("penolakan server 'saldo_habis' ditawarkan jalan keluar", jobsSrc.includes
 const apiSrc = readFileSync(join(root, "flutter_app/lib/api.dart"), "utf8");
 check("api.dart meneruskan kode alasan dari server", /kode: m\['kode'\] as String\?/.test(apiSrc));
 const grantsSrc = readFileSync(join(root, "supabase/fix-rpc-grants-public.sql"), "utf8");
-check("claim_job tetap terdaftar di daftar izin RPC", grantsSrc.includes("('claim_job(uuid)'"));console.log("\nPENUTUPAN PIUTANG: setoran mencetak pelunasan yang bisa dilaporkan");
+// Tanda tangan claim_job kini 3 argumen (posisi teknisi ikut dikirim untuk
+// mencatat jarak klaim). Yang dijaga tetap sama: fungsi ini HARUS terdaftar di
+// daftar izin RPC — tanpa itu `authenticated` kehilangan hak eksekusi.
+check("claim_job tetap terdaftar di daftar izin RPC", grantsSrc.includes("('claim_job(uuid, double precision, double precision)'"));console.log("\nPENUTUPAN PIUTANG: setoran mencetak pelunasan yang bisa dilaporkan");
 const migrasiPiutang = readFileSync(join(root, "supabase/migrate-piutang-recovery.sql"), "utf8");
 check("migrasi membuat tabel pelunasan", migrasiPiutang.includes("create table if not exists public.balance_recoveries"));
 check("pelunasan menunjuk baris piutang ledger", migrasiPiutang.includes("earning_tx_id uuid not null references public.balance_transactions(id)"));

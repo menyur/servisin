@@ -152,6 +152,22 @@ jobs:
       - name: Verifikasi pengingat jadwal H-1
         run: npm run verify:jadwal
 
+      # Pengingat menilai teknisi H+1: yang mahal bukan error, melainkan
+      # mengingatkan pelanggan yang SUDAH menilai, atau mengingatkan pesanan
+      # yang masih dikerjakan. Yang diuji: ambang 24 jam dari completed_at,
+      # penyaringan tabel reviews, klaim penanda idempoten, sakelar pengguna,
+      # dan jadwal cron-nya. Statis, tanpa jaringan; mode --live manual.
+      - name: Verifikasi pengingat menilai teknisi H+1
+        run: npm run verify:nilai
+
+      # Batas bayar + pembatalan otomatis menyentuh DUA hal sekaligus: slot
+      # (pesanan `pending` menahan kuota) dan pesanan orang. Kesalahan termahal:
+      # membatalkan pesanan yang bukti transfernya sudah diunggah (uangnya
+      # sedang diperiksa admin) — itu diuji eksplisit di sini, bersama jam WIB
+      # yang menentukan batasnya. Statis + fungsi murni; mode --live manual.
+      - name: Verifikasi batas bayar & pembatalan otomatis
+        run: npm run verify:tempo
+
       # Deteksi "terlambat mulai" hanya berguna bila jamnya WIB (server UTC)
       # dan tindakannya benar-benar terpasang di papan harian. Statis.
       - name: Verifikasi deteksi terlambat mulai
@@ -175,6 +191,13 @@ jobs:
       # teknisi bisa dibaca pelanggan lain. Statis, tanpa jaringan.
       - name: Verifikasi gerbang privasi lacak teknisi
         run: npm run verify:trip-share
+
+      # Jarak teknisi → pesanan kini DICATAT saat klaim (dasar keputusan radius
+      # layanan). Kalau kabelnya lepas — aplikasi berhenti mengirim posisi, atau
+      # migrasi & daftar izin memakai tanda tangan berbeda — datanya kosong dan
+      # keputusan radius kembali jadi tebakan, tanpa satu pun error. Statis.
+      - name: Verifikasi jejak jarak saat klaim
+        run: npm run verify:claim-distance
 
       # Antrian panel admin diperiksa di sini karena kegagalannya paling sunyi
       # dari semuanya: pesanan baru TIDAK muncul sampai admin me-refresh, tetapi

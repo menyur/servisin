@@ -37,9 +37,11 @@ function pushClient() {
 export const PUSH_EVENTS = {
   payment_confirmed: "Pembayaran dikonfirmasi",
   payment_rejected: "Bukti pembayaran ditolak",
+  payment_reminder: "Pengingat menyelesaikan pembayaran",
   technician_assigned: "Teknisi ditugaskan / tugas baru",
   work_started: "Pengerjaan dimulai",
   order_completed: "Pesanan selesai",
+  review_reminder: "Pengingat menilai teknisi",
   order_cancelled: "Pesanan dibatalkan",
   refund_update: "Pengembalian dana pesanan",
   booking_reminder: "Pengingat jadwal H-1",
@@ -64,6 +66,7 @@ export const PUSH_EVENTS = {
   withdrawal_approved: "Penarikan saldo disetujui",
   withdrawal_rejected: "Penarikan saldo ditolak",
   warranty_update: "Keputusan klaim garansi",
+  claim_permit: "Keputusan izin jarak klaim (teknisi)",
   voucher_received: "Voucher baru diterima",
 };
 

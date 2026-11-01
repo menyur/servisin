@@ -738,6 +738,58 @@ void main() {
     expect(find.byTooltip('Kotak masuk notifikasi'), findsOneWidget);
   });
 
+  group('pekerjaan tersedia (pesanan sudah dibayar)', () {
+    AvailableJob tersedia({String id = 'j1', String code = 'SV-777'}) =>
+        AvailableJob(
+          id: id,
+          code: code,
+          serviceName: 'Cuci AC',
+          bookingDate: '2026-10-21',
+          bookingTime: '08:00-10:00',
+          address: 'Jl. Contoh 1',
+          totalPrice: 105000,
+          customerName: 'Budi',
+          createdAt: DateTime(2026, 10, 20, 6, 0),
+        );
+
+    test('teknisi mendapat kabar "Pekerjaan baru tersedia"', () {
+      final items = buildInboxItems(
+        technician: true,
+        availableJobs: [tersedia()],
+      );
+
+      expect(items.length, 1);
+      expect(items.single.kind, InboxKind.tersedia);
+      expect(items.single.title, 'Pekerjaan baru tersedia');
+      expect(items.single.body, contains('#SV-777'));
+      expect(items.single.body, contains('Cuci AC'));
+      expect(items.single.body, contains('08:00-10:00'));
+      expect(items.single.unread, isTrue);
+      expect(items.single.bookingId, 'j1');
+    });
+
+    test('pelanggan tidak pernah melihat kabar pekerjaan tersedia', () {
+      final items = buildInboxItems(
+        technician: false,
+        availableJobs: [tersedia()],
+      );
+      expect(items.where((i) => i.kind == InboxKind.tersedia), isEmpty);
+    });
+
+    test('kabar menjadi terbaca setelah versi yang sama ditandai', () {
+      final items = buildInboxItems(
+        technician: true,
+        availableJobs: [tersedia()],
+        seen: const {'tersedia:j1': '2026-10-21|08:00-10:00'},
+      );
+      expect(items.single.unread, isFalse);
+    });
+
+    test('judul filter memakai label "Tersedia"', () {
+      expect(inboxKindLabel(InboxKind.tersedia), 'Tersedia');
+    });
+  });
+
   group('lonceng kotak masuk', () {
     testWidgets('menampilkan angka kabar belum dibaca dan bisa diketuk',
         (tester) async {

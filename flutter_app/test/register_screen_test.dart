@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:fixify_app/register_http.dart';
 import 'package:fixify_app/signup_handoff.dart';
+import 'package:fixify_app/ui/legal_consent.dart';
 import 'package:fixify_app/ui/register_screen.dart';
 import 'package:fixify_app/ui/technician_register_screen.dart';
 
@@ -202,6 +203,43 @@ void main() {
       await tester.tap(find.text('Mengerti'));
       await tester.pumpAndSettle();
       expect(find.text('LOGIN'), findsOneWidget);
+    });
+
+    testWidgets('syarat layanan & kebijakan privasi tampil sebelum tombol kirim', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_wrap(TechnicianRegisterScreen(
+        ktpPathUji: 'pendaftaran/ktp-uji.jpg',
+        daftar: ({
+          required String email,
+          required String password,
+          required String name,
+          required String phone,
+          required String address,
+          required String skill,
+          required String ktpPath,
+          String? redirectTo,
+        }) async =>
+            const HasilDaftar(ok: true),
+      )));
+
+      // Pendaftaran teknisi mengirim data identitas (KTP), jadi persetujuan
+      // harus terbaca SEBELUM tombol kirim — bukan hanya ada di halaman.
+      // Formnya SingleChildScrollView (bukan list lazy), jadi widget di bawah
+      // lipatan tetap ada di pohon — cukup digulirkan ke layar.
+      final syarat = find.text(LegalConsentText.syaratLabel);
+      await tester.ensureVisible(syarat);
+      await tester.pumpAndSettle();
+
+      expect(syarat, findsOneWidget);
+      expect(find.text(LegalConsentText.privasiLabel), findsOneWidget);
+      expect(
+        tester.getTopLeft(syarat).dy,
+        lessThan(tester.getTopLeft(find.text('Kirim Pendaftaran')).dy),
+        reason: 'teks persetujuan harus di atas tombol kirim',
+      );
+      // Kalimat persetujuan tetap satu kesatuan dengan kedua tautannya.
+      expect(find.textContaining('Dengan mendaftar, kamu menyetujui'), findsOneWidget);
     });
 
     testWidgets('server menolak → tetap di form, tanpa dialog sukses', (

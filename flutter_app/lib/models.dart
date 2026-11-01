@@ -565,6 +565,15 @@ class Booking {
   bool get noShowMenungguJawaban =>
       noShowAt != null && customerPresentAt == null;
 
+  /// Jarak lurus (meter) dari posisi teknisi saat MENGAMBIL tugas ini ke pin
+  /// pesanan (bookings.claim_distance_m; supabase/migrate-job-claim-distance.sql).
+  ///
+  /// Beda dengan `AvailableJob.distanceM` yang hidup hanya selama daftar
+  /// terbuka: angka ini tersimpan permanen dan dipakai untuk menilai apakah
+  /// radius layanan perlu dibatasi. Null = GPS mati saat klaim, pesanan tanpa
+  /// pin, atau migrasi tersebut belum dijalankan.
+  final double? claimDistanceM;
+
   Booking({
     required this.id,
     required this.code,
@@ -604,6 +613,7 @@ class Booking {
     this.customerPresentAt,
     this.lat,
     this.lng,
+    this.claimDistanceM,
   });
 
   /// Salinan pesanan dengan total (dan porsi biaya tambahan) yang baru.
@@ -656,6 +666,7 @@ class Booking {
         customerPresentAt: customerPresentAt,
         lat: lat,
         lng: lng,
+        claimDistanceM: claimDistanceM,
       );
 
   /// Apakah pesanan memuat lebih dari satu varian (rincian per baris).
@@ -725,6 +736,8 @@ class Booking {
       paymentMethod: m['payment_method'] as String?,
       lat: (m['lat'] as num?)?.toDouble(),
       lng: (m['lng'] as num?)?.toDouble(),
+      // Jarak yang dicatat server saat klaim; null pada data lama / RPC lama.
+      claimDistanceM: (m['claim_distance_m'] as num?)?.toDouble(),
       paymentProofUrl: m['payment_proof_url'] as String?,
       beforePhotoPath: m['before_photo_path'] as String?,
       afterPhotoPath: m['after_photo_path'] as String?,

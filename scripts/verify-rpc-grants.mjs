@@ -330,7 +330,14 @@ const ARG = {
   "bookings_nearby(double precision, double precision, double precision, integer)": { p_lat: 0, p_lng: 0, p_radius_m: 1000, p_limit: 1 },
   "cancel_account_deletion()": {},
   "cancel_booking(uuid, text)": { p_booking: TIDAK_ADA, p_reason: "cek izin" },
-  "claim_job(uuid)": { p_booking: TIDAK_ADA },
+  // Klaim pekerjaan (migrate-job-claim-distance.sql): posisi opsional, dan
+  // uuid tidak ada → dijawab "tidak tersedia" tanpa menulis baris apa pun.
+  "claim_job(uuid, double precision, double precision)": { p_booking: TIDAK_ADA },
+  // Batas jarak (migrate-claim-distance-limit.sql): pembacaan aman; dua RPC
+  // tulis memakai uuid tidak ada sehingga hanya menjawab error penjagaan.
+  "claim_distance_limit_efektif()": {},
+  "request_claim_permit(uuid, double precision, double precision, text)": { p_booking: TIDAK_ADA },
+  "decide_claim_permit(uuid, text, text)": { p_id: TIDAK_ADA, p_status: "approved" },
   // Koreksi saldo admin (migrate-admin-balance-adjustment.sql). Argumen inert:
   // uuid tidak ada → fungsi menjawab ok=false TANPA menulis baris apa pun.
   // Yang diuji hanya IZIN: anon harus ditolak, pengguna masuk & server boleh.
