@@ -124,11 +124,34 @@ cek(
     /kirim = url\.searchParams\.get\("kirim"\) !== "0"/.test(route),
   "tanpa mode kering, uji selalu membatalkan pesanan nyata"
 );
+// Jadwal rapat pindah ke pg_cron: paket Vercel Hobby MENOLAK deployment bila
+// ada cron yang berjalan lebih dari sekali sehari. Dua-duanya diperiksa — bila
+// orang mengembalikan entri 2 jam ke vercel.json, deploy produksi akan gagal,
+// dan bila jadwal pg_cron hilang, pembatalan otomatis berhenti tanpa error.
 const vercel = baca("vercel.json");
 cek(
-  "jadwal tiap 2 jam terpasang",
-  /"\/api\/cron\/payment-deadline"[\s\S]{0,80}"0 \*\/2 \* \* \*"/.test(vercel),
+  "vercel.json tidak lagi menjadwalkan batas bayar (Hobby hanya harian)",
+  !/\/api\/cron\/payment-deadline/.test(vercel),
+  "entri non-harian di vercel.json menggagalkan deploy produksi"
+);
+const jadwalCron = baca("supabase/migrate-payment-deadline-cron.sql");
+cek(
+  "pg_cron menjadwalkan batas bayar tiap 30 menit",
+  /cron\.schedule\([\s\S]{0,160}'payment-deadline'[\s\S]{0,120}'\*\/30 \* \* \* \*'/.test(jadwalCron),
   "cron tanpa jadwal tidak pernah berjalan"
+);
+cek(
+  "pg_cron memanggil endpoint dengan rahasia dari Vault, bukan nilai di repo",
+  /vault\.decrypted_secrets/.test(jadwalCron) &&
+    /'x-cron-secret',\s*v_secret/.test(jadwalCron) &&
+    !/[0-9a-f]{32,}/i.test(jadwalCron),
+  "rahasia yang ditulis di SQL ikut masuk riwayat Git"
+);
+cek(
+  "url & nama rahasia disimpan di tabel, bukan di-hardcode di fungsi",
+  /create table if not exists public\.cron_http_targets/.test(jadwalCron) &&
+    /secret_name text not null default 'CRON_SECRET'/.test(jadwalCron),
+  "tanpa tabel target, ganti domain berarti menyunting badan fungsi"
 );
 const push = baca("src/lib/push.js");
 cek(

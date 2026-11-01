@@ -68,7 +68,7 @@ Diperiksa otomatis lewat `/api/health` (`verify:notif-env`). Status kolom terakh
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | ✅ terbaca | publik (aman dibundel di APK) |
 | `NEXT_PUBLIC_SITE_URL` | ✅ | ✅ terbaca | **ganti** bila pakai domain sendiri |
 | `SUPABASE_SERVICE_ROLE_KEY` | ✅ | ✅ terbaca | rahasia; worker antrean push/email mati tanpa ini |
-| `CRON_SECRET` | ✅ | ✅ terbaca | dipakai Vercel Cron + endpoint cron |
+| `CRON_SECRET` | ✅ | ✅ terbaca | dipakai Vercel Cron + endpoint cron + **pg_cron** (`supabase/migrate-payment-deadline-cron.sql`). Nilainya juga disimpan di Supabase Vault dengan nama `CRON_SECRET`; **setiap kali dirotasi, ubah di DUA tempat** (Vercel env + `select vault.create_secret(…, 'CRON_SECRET', …)`) lalu redeploy, kalau tidak jadwal tiap 30 menit dijawab 401 |
 | `VAPID_PRIVATE_KEY` | ✅ (web-push) | ✅ terbaca | |
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | ✅ (web-push) | ✅ terbaca | |
 | `FCM_SERVICE_ACCOUNT_BASE64` | ✅ (APK) | ✅ terbaca | `fcmReady:true` — push Android benar-benar jalan |
