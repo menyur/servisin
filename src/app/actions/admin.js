@@ -462,7 +462,7 @@ export async function updateBookingStatusAdmin(bookingId, status) {
     .from("bookings")
     .select(
       "id, code, status, user_id, technician_id, address, total_price, payment_amount, " +
-        "payment_proof_url, payment_rejected, payment_confirmed_at, services(name)"
+        "payment_proof_url, payment_rejected, payment_confirmed_at, service_id, services(name)"
     )
     .eq("id", bookingId)
     .single();
@@ -492,11 +492,34 @@ export async function updateBookingStatusAdmin(bookingId, status) {
   // push ke pelanggan sesuai status baru (fire-and-forget)
   if (cur) {
     if (status === "paid") {
-      // pekerjaan kembali tersedia (mis. dibatalkan teknisi/admin)
-      await sendNewJobPushToTechnicians(
-        { id: bookingId, code: cur.code, address: cur.address },
-        { serviceName: cur.services?.name }
-      );
+      // Pelanggan harus tahu pembayarannya diterima — juga saat admin memilih
+      // "Dibayar" di dropdown status, bukan hanya lewat tombol "Konfirmasi
+      // pembayaran" (tombol itu mengirim pesannya sendiri di
+      // confirmBookingPaymentAdmin). Sebelum ini dropdown hanya mengabari
+      // teknisi, sehingga pelanggan yang dibayarnya dikonfirmasi lewat jalur
+      // itu tidak pernah menerima notifikasi apa pun.
+      if (cur.status !== "paid") {
+        await sendPushToUser(cur.user_id, {
+          title: "Pembayaran dikonfirmasi ✅",
+          event: "payment_confirmed",
+          body: `Pesanan ${cur.code} sudah dikonfirmasi. Menunggu teknisi ditugaskan.`,
+          url: "/dashboard",
+          tag: `booking-${bookingId}`,
+        });
+      }
+
+      // Pekerjaan kembali tersedia (mis. dibatalkan teknisi/admin, atau baru
+      // dibayar). Sertakan serviceId: tanpa itu pencocokan keahlian hanya
+      // memakai nama kategori, sedangkan `profiles.skill` lazim berisi ID
+      // kategori — teknisi yang tepat bisa terlewat. Dan jangan siarkan bila
+      // pesanan sudah punya teknisi: statusnya bisa saja diubah ke "paid"
+      // untuk pembetulan data, bukan karena pekerjaannya terbuka.
+      if (!cur.technician_id) {
+        await sendNewJobPushToTechnicians(
+          { id: bookingId, code: cur.code, address: cur.address },
+          { serviceName: cur.services?.name, serviceId: cur.service_id }
+        );
+      }
     } else if (status === "in_progress") {
       const techName = cur.technician_id
         ? (await supabase.from("profiles").select("name").eq("id", cur.technician_id).single()).data?.name

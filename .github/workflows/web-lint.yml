@@ -75,6 +75,13 @@ jobs:
       - name: Verifikasi auth endpoint cron
         run: npm run verify:cron-auth
 
+      # "Pesanan sudah dibayar" punya DUA jalur admin (tombol konfirmasi dan
+      # dropdown status). Dulu jalur dropdown hanya mengabari teknisi, jadi
+      # pelanggan yang dibayarnya dikonfirmasi lewat sana tidak menerima apa
+      # pun — dan tidak ada error di mana pun. Statis, tanpa jaringan.
+      - name: Verifikasi notifikasi pembayaran dikonfirmasi
+        run: npm run verify:bayar
+
       # Pengingat langganan berjalan tanpa terlihat: kalau penanda idempotennya
       # hilang, cron harian mengirim push yang sama setiap hari; kalau route-nya
       # tidak terjadwal, tidak ada pengingat sama sekali. Statis, tanpa jaringan.

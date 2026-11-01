@@ -52,6 +52,7 @@
     "verify:reset-flow": "node scripts/verify-reset-flow.mjs",
     "verify:legal-links": "node scripts/verify-legal-links.mjs",
     "verify:cron-auth": "node scripts/verify-cron-auth.mjs",
+    "verify:bayar": "node scripts/verify-payment-confirmed-notify.mjs",
     "verify:booking-status": "node scripts/verify-booking-status-notify.mjs",
     "verify:app-fee": "node scripts/verify-app-fee-split.mjs",
     "verify:review-voucher": "node scripts/verify-review-voucher.mjs",
